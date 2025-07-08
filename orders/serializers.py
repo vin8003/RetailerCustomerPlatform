@@ -1,0 +1,352 @@
+from rest_framework import serializers
+from django.db import transaction
+from django.utils import timezone
+from .models import Order, OrderItem, OrderStatusLog, OrderDelivery, OrderFeedback, OrderReturn
+from customers.models import CustomerAddress
+from products.models import Product
+from cart.models import Cart, CartItem
+
+
+class OrderItemSerializer(serializers.ModelSerializer):
+    """
+    Serializer for order items
+    """
+    class Meta:
+        model = OrderItem
+        fields = [
+            'id', 'product', 'product_name', 'product_price', 'product_unit',
+            'quantity', 'unit_price', 'total_price', 'created_at'
+        ]
+        read_only_fields = ['id', 'total_price', 'created_at']
+
+
+class OrderListSerializer(serializers.ModelSerializer):
+    """
+    Serializer for order list view
+    """
+    retailer_name = serializers.CharField(source='retailer.shop_name', read_only=True)
+    items_count = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Order
+        fields = [
+            'id', 'order_number', 'retailer_name', 'delivery_mode', 'payment_mode',
+            'status', 'total_amount', 'items_count', 'created_at', 'updated_at'
+        ]
+    
+    def get_items_count(self, obj):
+        """Get number of items in order"""
+        return obj.items.count()
+
+
+class OrderDetailSerializer(serializers.ModelSerializer):
+    """
+    Serializer for order detail view
+    """
+    items = OrderItemSerializer(many=True, read_only=True)
+    retailer_name = serializers.CharField(source='retailer.shop_name', read_only=True)
+    retailer_phone = serializers.CharField(source='retailer.contact_phone', read_only=True)
+    retailer_address = serializers.CharField(source='retailer.full_address', read_only=True)
+    customer_name = serializers.CharField(source='customer.first_name', read_only=True)
+    delivery_address_text = serializers.CharField(source='delivery_address.full_address', read_only=True)
+    
+    class Meta:
+        model = Order
+        fields = [
+            'id', 'order_number', 'customer_name', 'retailer_name', 'retailer_phone',
+            'retailer_address', 'delivery_mode', 'payment_mode', 'status',
+            'subtotal', 'delivery_fee', 'discount_amount', 'total_amount',
+            'special_instructions', 'cancellation_reason', 'delivery_address_text',
+            'items', 'created_at', 'updated_at', 'confirmed_at', 'delivered_at',
+            'cancelled_at'
+        ]
+
+
+class OrderCreateSerializer(serializers.Serializer):
+    """
+    Serializer for creating orders
+    """
+    retailer_id = serializers.IntegerField()
+    address_id = serializers.IntegerField(required=False)
+    delivery_mode = serializers.ChoiceField(choices=Order.DELIVERY_MODE_CHOICES)
+    payment_mode = serializers.ChoiceField(choices=Order.PAYMENT_MODE_CHOICES)
+    special_instructions = serializers.CharField(required=False, allow_blank=True)
+    
+    def validate_retailer_id(self, value):
+        """Validate retailer exists"""
+        from retailers.models import RetailerProfile
+        try:
+            retailer = RetailerProfile.objects.get(id=value, is_active=True)
+            return value
+        except RetailerProfile.DoesNotExist:
+            raise serializers.ValidationError("Retailer not found")
+    
+    def validate_address_id(self, value):
+        """Validate address belongs to customer"""
+        if value:
+            customer = self.context['customer']
+            try:
+                address = CustomerAddress.objects.get(id=value, customer=customer, is_active=True)
+                return value
+            except CustomerAddress.DoesNotExist:
+                raise serializers.ValidationError("Address not found")
+        return value
+    
+    def validate(self, data):
+        """Validate order data"""
+        if data['delivery_mode'] == 'delivery' and not data.get('address_id'):
+            raise serializers.ValidationError("Address is required for delivery orders")
+        
+        if data['delivery_mode'] == 'delivery' and data['payment_mode'] not in ['cash']:
+            raise serializers.ValidationError("Invalid payment mode for delivery")
+        
+        if data['delivery_mode'] == 'pickup' and data['payment_mode'] not in ['cash_pickup']:
+            raise serializers.ValidationError("Invalid payment mode for pickup")
+        
+        return data
+    
+    def create(self, validated_data):
+        """Create order from cart"""
+        from retailers.models import RetailerProfile
+        
+        customer = self.context['customer']
+        retailer = RetailerProfile.objects.get(id=validated_data['retailer_id'])
+        
+        # Get customer's cart for this retailer
+        try:
+            cart = Cart.objects.get(customer=customer, retailer=retailer)
+        except Cart.DoesNotExist:
+            raise serializers.ValidationError("Cart is empty")
+        
+        cart_items = cart.items.all()
+        if not cart_items.exists():
+            raise serializers.ValidationError("Cart is empty")
+        
+        # Validate cart items availability
+        for cart_item in cart_items:
+            if not cart_item.product.can_order_quantity(cart_item.quantity):
+                raise serializers.ValidationError(
+                    f"Product '{cart_item.product.name}' is not available in requested quantity"
+                )
+        
+        # Calculate totals
+        subtotal = sum(item.total_price for item in cart_items)
+        delivery_fee = 0
+        if validated_data['delivery_mode'] == 'delivery':
+            delivery_fee = 50  # Fixed delivery fee, can be made configurable
+        
+        total_amount = subtotal + delivery_fee
+        
+        # Check minimum order amount
+        if total_amount < retailer.minimum_order_amount:
+            raise serializers.ValidationError(
+                f"Minimum order amount is ₹{retailer.minimum_order_amount}"
+            )
+        
+        # Create order
+        with transaction.atomic():
+            order_data = {
+                'customer': customer,
+                'retailer': retailer,
+                'delivery_mode': validated_data['delivery_mode'],
+                'payment_mode': validated_data['payment_mode'],
+                'subtotal': subtotal,
+                'delivery_fee': delivery_fee,
+                'total_amount': total_amount,
+                'special_instructions': validated_data.get('special_instructions', ''),
+            }
+            
+            if validated_data.get('address_id'):
+                order_data['delivery_address'] = CustomerAddress.objects.get(
+                    id=validated_data['address_id']
+                )
+            
+            order = Order.objects.create(**order_data)
+            
+            # Create order items
+            for cart_item in cart_items:
+                OrderItem.objects.create(
+                    order=order,
+                    product=cart_item.product,
+                    product_name=cart_item.product.name,
+                    product_price=cart_item.product.price,
+                    product_unit=cart_item.product.unit,
+                    quantity=cart_item.quantity,
+                    unit_price=cart_item.product.price,
+                    total_price=cart_item.total_price
+                )
+                
+                # Reduce product quantity
+                cart_item.product.reduce_quantity(cart_item.quantity)
+            
+            # Clear cart
+            cart.items.all().delete()
+            
+            # Create initial status log
+            OrderStatusLog.objects.create(
+                order=order,
+                old_status='',
+                new_status='pending',
+                changed_by=customer
+            )
+            
+            return order
+
+
+class OrderStatusUpdateSerializer(serializers.Serializer):
+    """
+    Serializer for updating order status
+    """
+    status = serializers.ChoiceField(choices=Order.ORDER_STATUS_CHOICES)
+    notes = serializers.CharField(required=False, allow_blank=True)
+    
+    def validate_status(self, value):
+        """Validate status transition"""
+        order = self.context['order']
+        current_status = order.status
+        
+        # Define valid status transitions
+        valid_transitions = {
+            'pending': ['confirmed', 'cancelled'],
+            'confirmed': ['processing', 'cancelled'],
+            'processing': ['packed', 'cancelled'],
+            'packed': ['out_for_delivery', 'delivered'],
+            'out_for_delivery': ['delivered', 'cancelled'],
+            'delivered': ['returned'],
+            'cancelled': [],
+            'returned': []
+        }
+        
+        if value not in valid_transitions.get(current_status, []):
+            raise serializers.ValidationError(
+                f"Cannot change status from '{current_status}' to '{value}'"
+            )
+        
+        return value
+    
+    def update(self, instance, validated_data):
+        """Update order status"""
+        new_status = validated_data['status']
+        notes = validated_data.get('notes', '')
+        user = self.context['user']
+        
+        # Update order status
+        instance.update_status(new_status, user)
+        
+        # Update status log with notes
+        if notes:
+            status_log = instance.status_logs.latest('created_at')
+            status_log.notes = notes
+            status_log.save()
+        
+        return instance
+
+
+class OrderFeedbackSerializer(serializers.ModelSerializer):
+    """
+    Serializer for order feedback
+    """
+    class Meta:
+        model = OrderFeedback
+        fields = [
+            'id', 'overall_rating', 'product_quality_rating', 'delivery_rating',
+            'service_rating', 'comment', 'created_at'
+        ]
+        read_only_fields = ['id', 'created_at']
+    
+    def validate_overall_rating(self, value):
+        """Validate rating range"""
+        if value < 1 or value > 5:
+            raise serializers.ValidationError("Rating must be between 1 and 5")
+        return value
+    
+    def validate_product_quality_rating(self, value):
+        """Validate rating range"""
+        if value < 1 or value > 5:
+            raise serializers.ValidationError("Rating must be between 1 and 5")
+        return value
+    
+    def validate_delivery_rating(self, value):
+        """Validate rating range"""
+        if value < 1 or value > 5:
+            raise serializers.ValidationError("Rating must be between 1 and 5")
+        return value
+    
+    def validate_service_rating(self, value):
+        """Validate rating range"""
+        if value < 1 or value > 5:
+            raise serializers.ValidationError("Rating must be between 1 and 5")
+        return value
+    
+    def create(self, validated_data):
+        """Create feedback with order and customer from context"""
+        order = self.context['order']
+        customer = self.context['customer']
+        
+        # Check if order is delivered
+        if order.status != 'delivered':
+            raise serializers.ValidationError("Can only provide feedback for delivered orders")
+        
+        # Check if feedback already exists
+        if hasattr(order, 'feedback'):
+            raise serializers.ValidationError("Feedback already provided for this order")
+        
+        return OrderFeedback.objects.create(
+            order=order,
+            customer=customer,
+            **validated_data
+        )
+
+
+class OrderReturnSerializer(serializers.ModelSerializer):
+    """
+    Serializer for order return requests
+    """
+    class Meta:
+        model = OrderReturn
+        fields = [
+            'id', 'reason', 'description', 'status', 'admin_notes',
+            'created_at', 'updated_at', 'processed_at'
+        ]
+        read_only_fields = ['id', 'status', 'admin_notes', 'created_at', 'updated_at', 'processed_at']
+    
+    def create(self, validated_data):
+        """Create return request with order and customer from context"""
+        order = self.context['order']
+        customer = self.context['customer']
+        
+        # Check if order is delivered
+        if order.status != 'delivered':
+            raise serializers.ValidationError("Can only return delivered orders")
+        
+        # Check if return request already exists
+        if hasattr(order, 'return_request'):
+            raise serializers.ValidationError("Return request already exists for this order")
+        
+        # Check if order is within return period (e.g., 7 days)
+        from datetime import timedelta
+        if order.delivered_at and (timezone.now() - order.delivered_at) > timedelta(days=7):
+            raise serializers.ValidationError("Return period has expired")
+        
+        return OrderReturn.objects.create(
+            order=order,
+            customer=customer,
+            **validated_data
+        )
+
+
+class OrderStatsSerializer(serializers.Serializer):
+    """
+    Serializer for order statistics
+    """
+    total_orders = serializers.IntegerField()
+    pending_orders = serializers.IntegerField()
+    confirmed_orders = serializers.IntegerField()
+    delivered_orders = serializers.IntegerField()
+    cancelled_orders = serializers.IntegerField()
+    total_revenue = serializers.DecimalField(max_digits=10, decimal_places=2)
+    today_orders = serializers.IntegerField()
+    today_revenue = serializers.DecimalField(max_digits=10, decimal_places=2)
+    average_order_value = serializers.DecimalField(max_digits=10, decimal_places=2)
+    top_customers = serializers.ListField()
+    recent_orders = serializers.ListField()

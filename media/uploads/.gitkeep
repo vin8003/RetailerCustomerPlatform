@@ -1,0 +1,2 @@
+# This file ensures the uploads directory is tracked by git
+# Media files will be uploaded to this directory
