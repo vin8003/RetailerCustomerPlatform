@@ -24,3 +24,7 @@ author = "agent"
 task = "shell.exec"
 args = "pip install django djangorestframework djangorestframework-simplejwt django-cors-headers django-filter psycopg2-binary pillow pyotp requests pandas openpyxl && python manage.py makemigrations && python manage.py migrate && python manage.py runserver 0.0.0.0:5000"
 waitForPort = 5000
+
+[[ports]]
+localPort = 5000
+externalPort = 80
