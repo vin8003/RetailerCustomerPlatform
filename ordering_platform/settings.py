@@ -25,14 +25,14 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    
+
     # Third party apps
     'rest_framework',
     'rest_framework_simplejwt',
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'django_filters',
-    
+
     # Local apps
     'authentication',
     'retailers',
@@ -75,14 +75,21 @@ TEMPLATES = [
 WSGI_APPLICATION = 'ordering_platform.wsgi.application'
 
 # Database
+# DATABASES = {
+#     'default': {
+#         'ENGINE': 'django.db.backends.postgresql',
+#         'NAME': os.getenv('PGDATABASE', 'ordering_platform'),
+#         'USER': os.getenv('PGUSER', 'postgres'),
+#         'PASSWORD': os.getenv('PGPASSWORD', ''),
+#         'HOST': os.getenv('PGHOST', 'localhost'),
+#         'PORT': os.getenv('PGPORT', '5432'),
+#     }
+# }
+
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.getenv('PGDATABASE', 'ordering_platform'),
-        'USER': os.getenv('PGUSER', 'postgres'),
-        'PASSWORD': os.getenv('PGPASSWORD', ''),
-        'HOST': os.getenv('PGHOST', 'localhost'),
-        'PORT': os.getenv('PGPORT', '5432'),
+        'ENGINE': 'django.db.backends.sqlite3',  # Use SQLite backend
+        'NAME': os.path.join(BASE_DIR, 'db.sqlite3'),  # Path to the SQLite database file
     }
 }
 
