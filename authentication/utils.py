@@ -17,11 +17,11 @@ def generate_otp():
     secret_key = pyotp.random_base32()
     totp = pyotp.TOTP(secret_key, interval=300, digits=6)  # 5 minutes validity
     otp_code = totp.now()
-    
+
     return otp_code, secret_key
 
 
-def verify_otp(secret_key, otp_code):
+def verify_otp_helper(secret_key, otp_code):
     """
     Verify the OTP code against the secret key
     """
@@ -40,10 +40,10 @@ def send_sms_otp(phone_number, otp_code):
     try:
         # For demo purposes, we'll use a generic SMS API structure
         # In production, replace with actual SMS provider (Twilio, AWS SNS, etc.)
-        
+
         api_key = settings.SMS_API_KEY
         api_url = settings.SMS_API_URL
-        
+
         # Example payload structure - adjust based on your SMS provider
         payload = {
             'apikey': api_key,
@@ -51,26 +51,26 @@ def send_sms_otp(phone_number, otp_code):
             'message': f'Your OTP code is: {otp_code}. Valid for 5 minutes. Do not share this code.',
             'sender': 'OrderApp'
         }
-        
+
         headers = {
             'Content-Type': 'application/json',
             'Authorization': f'Bearer {api_key}'
         }
-        
+
         # For development/testing, just log the OTP
         if settings.DEBUG:
             logger.info(f"SMS OTP (DEBUG MODE): {otp_code} for {phone_number}")
             return True
-        
+
         response = requests.post(api_url, json=payload, headers=headers, timeout=10)
-        
+
         if response.status_code == 200:
             logger.info(f"SMS sent successfully to {phone_number}")
             return True
         else:
             logger.error(f"Failed to send SMS: {response.status_code} - {response.text}")
             return False
-            
+
     except requests.exceptions.RequestException as e:
         logger.error(f"SMS API request failed: {str(e)}")
         return False
@@ -85,11 +85,11 @@ def clean_phone_number(phone_number):
     """
     # Remove all non-digit characters except +
     cleaned = ''.join(char for char in phone_number if char.isdigit() or char == '+')
-    
+
     # Ensure it starts with +
     if not cleaned.startswith('+'):
         cleaned = '+' + cleaned
-    
+
     return cleaned
 
 
@@ -120,10 +120,10 @@ def rate_limit_user(identifier, max_attempts=5, window_minutes=60):
     """
     cache_key = f"rate_limit_{identifier}"
     attempts = cache.get(cache_key, 0)
-    
+
     if attempts >= max_attempts:
         return False
-    
+
     cache.set(cache_key, attempts + 1, window_minutes * 60)
     return True
 
@@ -139,7 +139,7 @@ def log_security_event(event_type, user_id=None, ip_address=None, details=None):
         'details': details,
         'timestamp': datetime.now().isoformat()
     }
-    
+
     logger.info(f"Security Event: {log_data}")
 
 
