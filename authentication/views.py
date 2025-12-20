@@ -444,3 +444,77 @@ def logout(request):
             {'error': 'Internal server error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+@throttle_classes([OTPThrottle])
+def resend_otp(request):
+    """
+    Resend OTP for both Signup and Login scenarios
+    """
+    try:
+        serializer = OTPRequestSerializer(data=request.data)
+        if serializer.is_valid():
+            phone_number = serializer.validated_data['phone_number']
+
+            # 1. Verify user exists
+            try:
+                user = User.objects.get(phone_number=phone_number, user_type='customer')
+            except User.DoesNotExist:
+                return Response(
+                    {'error': 'No account found with this phone number.'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            # 2. Rate limiting for Resend specifically (Separate from Request OTP)
+            cache_key = f"resend_otp_limit_{phone_number}"
+            resend_count = cache.get(cache_key, 0)
+
+            if resend_count >= 3: # Limit to 3 resends per hour
+                return Response(
+                    {'error': 'Too many resend attempts. Please wait 15 mins.'},
+                    status=status.HTTP_429_TOO_MANY_REQUESTS
+                )
+
+            # 3. Generate new OTP
+            otp_code, secret_key = generate_otp()
+
+            # 4. Update or Create OTP Verification record
+            # We delete the old ones so only the latest OTP is valid
+            OTPVerification.objects.filter(user=user).delete()
+
+            OTPVerification.objects.create(
+                user=user,
+                phone_number=phone_number,
+                otp_code=otp_code,
+                secret_key=secret_key,
+                expires_at=timezone.now() + timezone.timedelta(seconds=settings.OTP_EXPIRY_TIME)
+            )
+
+            # 5. Send SMS
+            sms_sent = send_sms_otp(phone_number, otp_code)
+
+            if sms_sent:
+                # Update resend count in cache
+                cache.set(cache_key, resend_count + 1, 900)
+
+                logger.info(f"OTP Resent to {phone_number}")
+                return Response({
+                    'message': 'OTP resent successfully',
+                    'phone_number': phone_number,
+                    'expires_in': settings.OTP_EXPIRY_TIME
+                }, status=status.HTTP_200_OK)
+            else:
+                return Response(
+                    {'error': 'Failed to send SMS. Please try again later.'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    except Exception as e:
+        logger.error(f"Error in resend_otp: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )

@@ -1,0 +1,35 @@
+# ======================
+# Python
+# ======================
+__pycache__/
+*.py[cod]
+*.pyo
+
+# ======================
+# Django
+# ======================
+db.sqlite3
+*.log
+
+# Migrations cache only (keep migrations themselves)
+**/migrations/__pycache__/
+
+# ======================
+# Virtual environments
+# ======================
+.venv/
+venv/
+env/
+
+# ======================
+# Jupyter
+# ======================
+*.ipynb
+.ipynb_checkpoints/
+
+# ======================
+# OS / Editor
+# ======================
+.DS_Store
+.idea/
+.vscode/
