@@ -39,6 +39,12 @@ def place_order(request):
                 status=status.HTTP_403_FORBIDDEN
             )
         
+        if not request.user.is_phone_verified:
+            return Response(
+                {'error': 'Please verify your phone number to place orders.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
         serializer = OrderCreateSerializer(
             data=request.data,
             context={'customer': request.user}
@@ -132,15 +138,13 @@ def get_order_history(request):
         
         if user.user_type == 'customer':
             orders = Order.objects.filter(
-                customer=user,
-                status__in=['delivered', 'cancelled', 'returned']
+                customer=user
             ).order_by('-created_at')
         elif user.user_type == 'retailer':
             try:
                 retailer = RetailerProfile.objects.get(user=user)
                 orders = Order.objects.filter(
-                    retailer=retailer,
-                    status__in=['delivered', 'cancelled', 'returned']
+                    retailer=retailer
                 ).order_by('-created_at')
             except RetailerProfile.DoesNotExist:
                 return Response(

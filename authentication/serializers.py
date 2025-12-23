@@ -12,13 +12,20 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, validators=[validate_password])
     password_confirm = serializers.CharField(write_only=True)
     
+    phone_number = serializers.CharField(max_length=15, required=False)
+
     class Meta:
         model = User
-        fields = ['username', 'email', 'password', 'password_confirm', 'user_type']
+        fields = ['username', 'email', 'password', 'password_confirm', 'user_type', 'phone_number']
     
     def validate(self, attrs):
         if attrs['password'] != attrs['password_confirm']:
-            raise serializers.ValidationError("Passwords don't match")
+            raise serializers.ValidationError({"password": "Passwords don't match"})
+        
+        phone_number = attrs.get('phone_number')
+        if phone_number and User.objects.filter(phone_number=phone_number).exists():
+            raise serializers.ValidationError({"phone_number": "Phone number already registered"})
+            
         return attrs
     
     def create(self, validated_data):
@@ -48,7 +55,12 @@ class UserLoginSerializer(serializers.Serializer):
                     user_obj = User.objects.get(email=username)
                     user = authenticate(username=user_obj.username, password=password)
                 except User.DoesNotExist:
-                    pass
+                    # Try to authenticate with phone_number
+                    try:
+                        user_obj = User.objects.get(phone_number=username)
+                        user = authenticate(username=user_obj.username, password=password)
+                    except User.DoesNotExist:
+                        pass
             
             if not user:
                 raise serializers.ValidationError('Invalid credentials')
@@ -93,6 +105,13 @@ class OTPVerificationSerializer(serializers.Serializer):
         if not value.isdigit() or len(value) != 6:
             raise serializers.ValidationError("OTP must be 6 digits")
         return value
+
+
+class RequestPhoneVerificationSerializer(serializers.Serializer):
+    """
+    Serializer for authenticated user requesting phone verification
+    """
+    pass  # No args needed as we use request.user.phone_number
 
 
 class UserProfileSerializer(serializers.ModelSerializer):

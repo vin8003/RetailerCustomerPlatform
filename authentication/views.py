@@ -14,7 +14,7 @@ from .models import User, OTPVerification
 from .serializers import (
     UserRegistrationSerializer, UserLoginSerializer, OTPRequestSerializer,
     OTPVerificationSerializer, UserProfileSerializer, TokenSerializer,
-    PasswordChangeSerializer
+    PasswordChangeSerializer, RequestPhoneVerificationSerializer
 )
 from .utils import generate_otp, send_sms_otp, verify_otp_helper
 
@@ -115,64 +115,37 @@ def retailer_login(request):
 
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
-@throttle_classes([OTPThrottle])
 def customer_signup(request):
     """
-    Register a new customer user with phone number
+    Register a new customer user with password
     """
     try:
-        serializer = OTPRequestSerializer(data=request.data)
+        data = request.data.copy()
+        data['user_type'] = 'customer'
+
+        serializer = UserRegistrationSerializer(data=data)
         if serializer.is_valid():
-            phone_number = serializer.validated_data['phone_number']
-            name = request.data.get('name', '')
-            email = request.data.get('email', '')
+            user = serializer.save()
+            
+            # Customer is active but phone not verified
+            user.is_active = True
+            user.is_phone_verified = False
+            user.save()
 
-            # Check if phone number already exists
-            if User.objects.filter(phone_number=phone_number).exists():
-                return Response(
-                    {'error': 'Phone number already registered'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+            # Generate JWT tokens
+            refresh = RefreshToken.for_user(user)
 
-            # Generate OTP
-            otp_code, secret_key = generate_otp()
+            response_data = {
+                'message': 'Customer registered successfully. Please verify your phone number.',
+                'user': UserProfileSerializer(user).data,
+                'tokens': {
+                    'access': str(refresh.access_token),
+                    'refresh': str(refresh),
+                }
+            }
 
-            # Create user (inactive until phone verification)
-            user = User.objects.create_user(
-                username=phone_number,
-                phone_number=phone_number,
-                email=email,
-                first_name=name,
-                user_type='customer',
-                is_active=False
-            )
-
-            # Create OTP verification record
-            otp_verification = OTPVerification.objects.create(
-                user=user,
-                phone_number=phone_number,
-                otp_code=otp_code,
-                secret_key=secret_key,
-                expires_at=timezone.now() + timezone.timedelta(seconds=settings.OTP_EXPIRY_TIME)
-            )
-
-            # Send OTP via SMS
-            sms_sent = send_sms_otp(phone_number, otp_code)
-
-            if sms_sent:
-                logger.info(f"OTP sent to {phone_number} for customer signup")
-                return Response({
-                    'message': 'OTP sent successfully',
-                    'phone_number': phone_number,
-                    'expires_in': settings.OTP_EXPIRY_TIME
-                }, status=status.HTTP_200_OK)
-            else:
-                # Clean up if SMS failed
-                user.delete()
-                return Response(
-                    {'error': 'Failed to send OTP'},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                )
+            logger.info(f"New customer registered: {user.username}")
+            return Response(response_data, status=status.HTTP_201_CREATED)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -186,73 +159,113 @@ def customer_signup(request):
 
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
-@throttle_classes([OTPThrottle])
+@throttle_classes([LoginThrottle])
 def customer_login(request):
     """
-    Send OTP to customer's phone for login
+    Login customer user with password
     """
     try:
-        serializer = OTPRequestSerializer(data=request.data)
+        serializer = UserLoginSerializer(data=request.data)
         if serializer.is_valid():
-            phone_number = serializer.validated_data['phone_number']
+            user = serializer.validated_data['user']
 
-            # Check if user exists
-            try:
-                user = User.objects.get(phone_number=phone_number, user_type='customer')
-            except User.DoesNotExist:
+            # Check if user is a customer
+            if user.user_type != 'customer':
                 return Response(
-                    {'error': 'Phone number not registered'},
-                    status=status.HTTP_404_NOT_FOUND
+                    {'error': 'Invalid user type for customer login'},
+                    status=status.HTTP_400_BAD_REQUEST
                 )
 
-            # Check rate limiting
-            cache_key = f"otp_requests_{phone_number}"
-            requests = cache.get(cache_key, 0)
+            # Generate JWT tokens
+            refresh = RefreshToken.for_user(user)
 
-            if requests >= 3:  # Max 3 requests per hour
-                return Response(
-                    {'error': 'Too many OTP requests. Please try again later.'},
-                    status=status.HTTP_429_TOO_MANY_REQUESTS
-                )
+            response_data = {
+                'message': 'Login successful',
+                'user': UserProfileSerializer(user).data,
+                'tokens': {
+                    'access': str(refresh.access_token),
+                    'refresh': str(refresh),
+                }
+            }
 
-            # Generate OTP
-            otp_code, secret_key = generate_otp()
-
-            # Delete any existing OTP verification for this user
-            OTPVerification.objects.filter(user=user).delete()
-
-            # Create new OTP verification record
-            otp_verification = OTPVerification.objects.create(
-                user=user,
-                phone_number=phone_number,
-                otp_code=otp_code,
-                secret_key=secret_key,
-                expires_at=timezone.now() + timezone.timedelta(seconds=settings.OTP_EXPIRY_TIME)
-            )
-
-            # Send OTP via SMS
-            sms_sent = send_sms_otp(phone_number, otp_code)
-
-            if sms_sent:
-                # Update rate limiting
-                cache.set(cache_key, requests + 1, 3600)  # 1 hour
-
-                logger.info(f"OTP sent to {phone_number} for customer login")
-                return Response({
-                    'message': 'OTP sent successfully',
-                    'phone_number': phone_number,
-                    'expires_in': settings.OTP_EXPIRY_TIME
-                }, status=status.HTTP_200_OK)
-            else:
-                return Response(
-                    {'error': 'Failed to send OTP'},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                )
+            logger.info(f"Customer logged in: {user.username}")
+            return Response(response_data, status=status.HTTP_200_OK)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     except Exception as e:
         logger.error(f"Error in customer login: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+@throttle_classes([OTPThrottle])
+def request_phone_verification(request):
+    """
+    Request OTP for phone verification (for authenticated users)
+    """
+    try:
+        user = request.user
+        phone_number = user.phone_number
+
+        if not phone_number:
+            return Response(
+                {'error': 'User has no phone number set'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if user.is_phone_verified:
+            return Response(
+                {'message': 'Phone number already verified'},
+                status=status.HTTP_200_OK
+            )
+        
+        # Rate limiting check
+        cache_key = f"otp_requests_{phone_number}"
+        requests = cache.get(cache_key, 0)
+        if requests >= 3:
+            return Response(
+                {'error': 'Too many OTP requests. Please try again later.'},
+                status=status.HTTP_429_TOO_MANY_REQUESTS
+            )
+
+        # Generate OTP
+        otp_code, secret_key = generate_otp()
+
+        # Update/Create verification record
+        OTPVerification.objects.filter(user=user).delete() # Remove old OTPs
+        
+        otp_verification = OTPVerification.objects.create(
+            user=user,
+            phone_number=phone_number,
+            otp_code=otp_code,
+            secret_key=secret_key,
+            expires_at=timezone.now() + timezone.timedelta(seconds=settings.OTP_EXPIRY_TIME)
+        )
+
+        # Send OTP
+        sms_sent = send_sms_otp(phone_number, otp_code)
+
+        if sms_sent:
+            cache.set(cache_key, requests + 1, 3600)
+            logger.info(f"OTP sent to {phone_number} for verification")
+            return Response({
+                'message': 'OTP sent successfully',
+                'phone_number': phone_number,
+                'expires_in': settings.OTP_EXPIRY_TIME
+            }, status=status.HTTP_200_OK)
+        else:
+            return Response(
+                {'error': 'Failed to send OTP'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    except Exception as e:
+        logger.error(f"Error in request_phone_verification: {str(e)}")
         return Response(
             {'error': 'Internal server error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
