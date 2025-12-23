@@ -11,10 +11,12 @@ class OrderItemSerializer(serializers.ModelSerializer):
     """
     Serializer for order items
     """
+    product_image = serializers.CharField(source='product.image_display_url', read_only=True)
+
     class Meta:
         model = OrderItem
         fields = [
-            'id', 'product', 'product_name', 'product_price', 'product_unit',
+            'id', 'product', 'product_name', 'product_image', 'product_price', 'product_unit',
             'quantity', 'unit_price', 'total_price', 'created_at'
         ]
         read_only_fields = ['id', 'total_price', 'created_at']

@@ -123,6 +123,7 @@ class Product(models.Model):
     
     # Product details
     image = models.ImageField(upload_to=generate_upload_path, blank=True, null=True)
+    image_url = models.URLField(max_length=500, blank=True, null=True)
     images = models.JSONField(default=list, blank=True)  # Additional images
     specifications = models.JSONField(default=dict, blank=True)
     tags = models.JSONField(default=list, blank=True)
@@ -162,6 +163,13 @@ class Product(models.Model):
         """Check if product is in stock"""
         return self.quantity > 0
     
+    @property
+    def image_display_url(self):
+        """Get product image URL or fallback to image_url"""
+        if self.image:
+            return self.image.url
+        return self.image_url
+
     @property
     def discounted_price(self):
         """Calculate discounted price"""

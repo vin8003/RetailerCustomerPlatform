@@ -10,7 +10,7 @@ class CartItemSerializer(serializers.ModelSerializer):
     Serializer for cart items
     """
     product_name = serializers.CharField(source='product.name', read_only=True)
-    product_image = serializers.CharField(source='product.image', read_only=True)
+    product_image = serializers.CharField(source='product.image_display_url', read_only=True)
     product_price = serializers.DecimalField(source='product.price', max_digits=10, decimal_places=2, read_only=True)
     product_unit = serializers.CharField(source='product.unit', read_only=True)
     is_available = serializers.BooleanField(read_only=True)

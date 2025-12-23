@@ -67,16 +67,23 @@ class ProductListSerializer(serializers.ModelSerializer):
     is_in_stock = serializers.BooleanField(read_only=True)
     average_rating = serializers.SerializerMethodField()
     review_count = serializers.SerializerMethodField()
+    image = serializers.SerializerMethodField()
     
     class Meta:
         model = Product
         fields = [
             'id', 'name', 'description', 'price', 'discounted_price',
             'original_price', 'discount_percentage', 'quantity', 'unit',
-            'image', 'category_name', 'brand_name', 'retailer_name',
+            'image', 'image_url', 'category_name', 'brand_name', 'retailer_name',
             'is_in_stock', 'is_featured', 'average_rating', 'review_count',
             'created_at'
         ]
+    
+    def get_image(self, obj):
+        """Get product image URL or fallback to image_url"""
+        if obj.image:
+            return obj.image.url
+        return obj.image_url
     
     def get_average_rating(self, obj):
         """Calculate average rating"""
@@ -102,6 +109,7 @@ class ProductDetailSerializer(serializers.ModelSerializer):
     savings = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
     average_rating = serializers.SerializerMethodField()
     review_count = serializers.SerializerMethodField()
+    image = serializers.SerializerMethodField()
     
     class Meta:
         model = Product
@@ -109,11 +117,17 @@ class ProductDetailSerializer(serializers.ModelSerializer):
             'id', 'name', 'description', 'price', 'discounted_price',
             'original_price', 'discount_percentage', 'savings', 'quantity',
             'unit', 'minimum_order_quantity', 'maximum_order_quantity',
-            'image', 'images', 'additional_images', 'category', 'brand',
+            'image', 'image_url', 'images', 'additional_images', 'category', 'brand',
             'retailer_name', 'retailer_id', 'specifications', 'tags',
             'is_in_stock', 'is_featured', 'is_available', 'average_rating',
             'review_count', 'created_at', 'updated_at'
         ]
+    
+    def get_image(self, obj):
+        """Get product image URL or fallback to image_url"""
+        if obj.image:
+            return obj.image.url
+        return obj.image_url
     
     def get_average_rating(self, obj):
         """Calculate average rating"""
