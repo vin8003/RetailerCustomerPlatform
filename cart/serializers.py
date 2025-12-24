@@ -13,6 +13,9 @@ class CartItemSerializer(serializers.ModelSerializer):
     product_image = serializers.CharField(source='product.image_display_url', read_only=True)
     product_price = serializers.DecimalField(source='product.price', max_digits=10, decimal_places=2, read_only=True)
     product_unit = serializers.CharField(source='product.unit', read_only=True)
+    stock_quantity = serializers.IntegerField(source='product.quantity', read_only=True)
+    minimum_order_quantity = serializers.IntegerField(source='product.minimum_order_quantity', read_only=True)
+    maximum_order_quantity = serializers.IntegerField(source='product.maximum_order_quantity', read_only=True)
     is_available = serializers.BooleanField(read_only=True)
     total_price = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
     
@@ -21,6 +24,7 @@ class CartItemSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'product', 'product_name', 'product_image', 'product_price',
             'product_unit', 'quantity', 'unit_price', 'total_price', 'is_available',
+            'stock_quantity', 'minimum_order_quantity', 'maximum_order_quantity',
             'added_at', 'updated_at'
         ]
         read_only_fields = ['id', 'unit_price', 'total_price', 'added_at', 'updated_at']

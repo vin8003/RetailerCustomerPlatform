@@ -11,6 +11,7 @@ class Order(models.Model):
     """
     ORDER_STATUS_CHOICES = [
         ('pending', 'Pending'),
+        ('waiting_for_customer_approval', 'Waiting for Customer Approval'),
         ('confirmed', 'Confirmed'),
         ('processing', 'Processing'),
         ('packed', 'Packed'),
@@ -54,7 +55,7 @@ class Order(models.Model):
     # Order details
     delivery_mode = models.CharField(max_length=20, choices=DELIVERY_MODE_CHOICES)
     payment_mode = models.CharField(max_length=20, choices=PAYMENT_MODE_CHOICES)
-    status = models.CharField(max_length=20, choices=ORDER_STATUS_CHOICES, default='pending')
+    status = models.CharField(max_length=50, choices=ORDER_STATUS_CHOICES, default='pending')
     
     # Pricing
     subtotal = models.DecimalField(
@@ -236,8 +237,8 @@ class OrderStatusLog(models.Model):
         on_delete=models.CASCADE, 
         related_name='status_logs'
     )
-    old_status = models.CharField(max_length=20)
-    new_status = models.CharField(max_length=20)
+    old_status = models.CharField(max_length=50)
+    new_status = models.CharField(max_length=50)
     changed_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, 
         on_delete=models.SET_NULL, 

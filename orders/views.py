@@ -12,7 +12,7 @@ from .models import Order, OrderItem, OrderStatusLog, OrderFeedback, OrderReturn
 from .serializers import (
     OrderListSerializer, OrderDetailSerializer, OrderCreateSerializer,
     OrderStatusUpdateSerializer, OrderFeedbackSerializer, OrderReturnSerializer,
-    OrderStatsSerializer
+    OrderStatsSerializer, OrderModificationSerializer
 )
 from retailers.models import RetailerProfile
 from customers.models import CustomerAddress
@@ -229,6 +229,19 @@ def get_order_detail(request, order_id):
                 {'error': 'Invalid user type'}, 
                 status=status.HTTP_403_FORBIDDEN
             )
+            
+        # Optimization: Check if data has changed
+        last_updated = request.query_params.get('last_updated')
+        if last_updated:
+            # Convert order.updated_at to string format used by serializer
+            # or simply compare timestamps if client sends iso format
+            current_updated = order.updated_at.isoformat().replace('+00:00', 'Z')
+            
+            # Simple check - if the passed timestamp matches current, return 304
+            # Note: exact string matching depends on client carrying over the exact string
+            # We'll try to match broadly or use Parse
+            if last_updated == current_updated or last_updated == order.updated_at.isoformat():
+                return Response(status=status.HTTP_304_NOT_MODIFIED)
         
         serializer = OrderDetailSerializer(order)
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -435,6 +448,8 @@ def get_order_stats(request):
             )
         
         orders = Order.objects.filter(retailer=retailer)
+        from products.models import Product
+        total_products = Product.objects.filter(retailer=retailer).count()
         today = timezone.now().date()
         
         # Calculate statistics
@@ -492,14 +507,125 @@ def get_order_stats(request):
             'today_revenue': today_revenue,
             'average_order_value': avg_order_value,
             'top_customers': list(top_customers),
-            'recent_orders': recent_orders_data
+            'recent_orders': recent_orders_data,
+            'total_products': total_products,
+            'average_rating': float(retailer.average_rating)
         }
         
         serializer = OrderStatsSerializer(stats_data)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     except Exception as e:
-        logger.error(f"Error getting order stats: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def modify_order(request, order_id):
+    """
+    Modify order - only for retailers
+    """
+    try:
+        if request.user.user_type != 'retailer':
+            return Response(
+                {'error': 'Only retailers can modify orders'}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        try:
+            retailer = RetailerProfile.objects.get(user=request.user)
+            order = get_object_or_404(Order, id=order_id, retailer=retailer)
+        except RetailerProfile.DoesNotExist:
+            return Response(
+                {'error': 'Retailer profile not found'}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        if order.status != 'pending':
+            return Response(
+                {'error': 'Only pending orders can be modified'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        serializer = OrderModificationSerializer(
+            order,
+            data=request.data,
+            context={'user': request.user}
+        )
+        
+        if serializer.is_valid():
+            order = serializer.save()
+            
+            # Send notification to customer
+            from customers.models import CustomerNotification
+            CustomerNotification.objects.create(
+                customer=order.customer,
+                notification_type='order_update',
+                title=f'Order #{order.order_number} Modified',
+                message='Your order has been modified by the retailer. Please review and approve the changes.'
+            )
+            
+            response_serializer = OrderDetailSerializer(order)
+            logger.info(f"Order modified: {order.order_number} by retailer")
+            return Response(response_serializer.data, status=status.HTTP_200_OK)
+        
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    except Exception as e:
+        logger.error(f"Error modifying order: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def confirm_modification(request, order_id):
+    """
+    Confirm or reject order modification - only for customers
+    """
+    try:
+        if request.user.user_type != 'customer':
+            return Response(
+                {'error': 'Only customers can confirm modifications'}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        order = get_object_or_404(Order, id=order_id, customer=request.user)
+        
+        if order.status != 'waiting_for_customer_approval':
+            return Response(
+                {'error': 'Order is not waiting for approval'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        action = request.data.get('action')
+        if action not in ['accept', 'reject']:
+            return Response(
+                {'error': 'Invalid action. Must be accept or reject'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if action == 'accept':
+            order.update_status('confirmed', request.user)
+            message = 'Order modification accepted'
+        else:
+            order.update_status('cancelled', request.user)
+            order.cancellation_reason = 'Customer rejected retailer modifications'
+            order.save()
+            message = 'Order modification rejected'
+        
+        logger.info(f"{message}: {order.order_number}")
+        
+        serializer = OrderDetailSerializer(order)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    except Exception as e:
+        logger.error(f"Error confirming modification: {str(e)}")
         return Response(
             {'error': 'Internal server error'}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR

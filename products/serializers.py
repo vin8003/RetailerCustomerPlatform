@@ -74,9 +74,10 @@ class ProductListSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'name', 'description', 'price', 'discounted_price',
             'original_price', 'discount_percentage', 'quantity', 'unit',
+            'minimum_order_quantity', 'maximum_order_quantity',
             'image', 'image_url', 'category_name', 'brand_name', 'retailer_name',
-            'is_in_stock', 'is_featured', 'average_rating', 'review_count',
-            'created_at'
+            'is_in_stock', 'is_featured', 'is_active', 'is_available',
+            'average_rating', 'review_count', 'created_at'
         ]
     
     def get_image(self, obj):
@@ -100,7 +101,9 @@ class ProductDetailSerializer(serializers.ModelSerializer):
     Serializer for product detail view
     """
     category = ProductCategorySerializer(read_only=True)
+    category_name = serializers.CharField(source='category.name', read_only=True)
     brand = ProductBrandSerializer(read_only=True)
+    brand_name = serializers.CharField(source='brand.name', read_only=True)
     retailer_name = serializers.CharField(source='retailer.shop_name', read_only=True)
     retailer_id = serializers.IntegerField(source='retailer.id', read_only=True)
     additional_images = ProductImageSerializer(many=True, read_only=True)
@@ -117,10 +120,11 @@ class ProductDetailSerializer(serializers.ModelSerializer):
             'id', 'name', 'description', 'price', 'discounted_price',
             'original_price', 'discount_percentage', 'savings', 'quantity',
             'unit', 'minimum_order_quantity', 'maximum_order_quantity',
-            'image', 'image_url', 'images', 'additional_images', 'category', 'brand',
+            'image', 'image_url', 'images', 'additional_images', 'category', 
+            'category_name', 'brand', 'brand_name',
             'retailer_name', 'retailer_id', 'specifications', 'tags',
-            'is_in_stock', 'is_featured', 'is_available', 'average_rating',
-            'review_count', 'created_at', 'updated_at'
+            'is_in_stock', 'is_featured', 'is_active', 'is_available', 
+            'average_rating', 'review_count', 'created_at', 'updated_at'
         ]
     
     def get_image(self, obj):

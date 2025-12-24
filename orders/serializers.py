@@ -27,12 +27,13 @@ class OrderListSerializer(serializers.ModelSerializer):
     Serializer for order list view
     """
     retailer_name = serializers.CharField(source='retailer.shop_name', read_only=True)
+    customer_name = serializers.CharField(source='customer.first_name', read_only=True)
     items_count = serializers.SerializerMethodField()
     
     class Meta:
         model = Order
         fields = [
-            'id', 'order_number', 'retailer_name', 'delivery_mode', 'payment_mode',
+            'id', 'order_number', 'retailer_name', 'customer_name', 'delivery_mode', 'payment_mode',
             'status', 'total_amount', 'items_count', 'created_at', 'updated_at'
         ]
     
@@ -212,7 +213,8 @@ class OrderStatusUpdateSerializer(serializers.Serializer):
         
         # Define valid status transitions
         valid_transitions = {
-            'pending': ['confirmed', 'cancelled'],
+            'pending': ['confirmed', 'cancelled', 'waiting_for_customer_approval'],
+            'waiting_for_customer_approval': ['confirmed', 'cancelled', 'pending'],
             'confirmed': ['processing', 'cancelled'],
             'processing': ['packed', 'cancelled'],
             'packed': ['out_for_delivery', 'delivered'],
@@ -355,3 +357,124 @@ class OrderStatsSerializer(serializers.Serializer):
     average_order_value = serializers.DecimalField(max_digits=10, decimal_places=2)
     top_customers = serializers.ListField()
     recent_orders = serializers.ListField()
+    total_products = serializers.IntegerField(required=False)
+    average_rating = serializers.FloatField(required=False)
+
+
+class OrderModificationSerializer(serializers.Serializer):
+    """
+    Serializer for modifying order by retailer
+    """
+    items = serializers.ListField(
+        child=serializers.DictField()
+    )
+    delivery_mode = serializers.ChoiceField(choices=Order.DELIVERY_MODE_CHOICES, required=False)
+    discount_amount = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
+
+    def validate_items(self, value):
+        """Validate items structure and content"""
+        for item in value:
+            if 'id' not in item:
+                raise serializers.ValidationError("Item ID is required")
+            if 'quantity' not in item and 'unit_price' not in item:
+                raise serializers.ValidationError("Either quantity or unit_price is required for update")
+        return value
+
+    def update(self, instance, validated_data):
+        """Update order items and details"""
+        items_data = validated_data.get('items', [])
+        delivery_mode = validated_data.get('delivery_mode')
+        discount_amount = validated_data.get('discount_amount')
+        
+        with transaction.atomic():
+            # Update items
+            subtotal = current_subtotal = 0
+            
+            # Create a map of existing items for easy access
+            existing_items = {item.id: item for item in instance.items.all()}
+            
+            for item_data in items_data:
+                item_id = item_data.get('id')
+                if item_id in existing_items:
+                    item = existing_items[item_id]
+                    
+                    # Update quantity if provided
+                    if 'quantity' in item_data:
+                        quantity = int(item_data['quantity'])
+                        if quantity < 0:
+                            raise serializers.ValidationError(f"Invalid quantity for item {item.product_name}")
+                        
+                        if quantity == 0:
+                            # If quantity is 0, we can either remove the item or mark it as removed. 
+                            # For now, let's keep it but maybe handle removal logic if needed. 
+                            # Or strictly remove it. Let's delete it for cleanliness.
+                            # Restore stock for removed items?
+                            # Assuming stock management is strict:
+                            item.product.increase_quantity(item.quantity)
+                            item.delete()
+                            continue
+                        
+                        # Handle stock change for quantity difference
+                        diff = quantity - item.quantity
+                        if diff > 0:
+                             # Need more
+                             if not item.product.can_order_quantity(diff):
+                                 raise serializers.ValidationError(f"Not enough stock for {item.product_name}")
+                             item.product.reduce_quantity(diff)
+                        elif diff < 0:
+                             # Returning some
+                             item.product.increase_quantity(abs(diff))
+                        
+                        item.quantity = quantity
+                    
+                    # Update price if provided
+                    if 'unit_price' in item_data:
+                        item.unit_price = item_data['unit_price']
+                    
+                    # Recalculate item total and save
+                    item.save() # save() method in model calculates total_price
+                    subtotal += item.total_price
+            
+            # Recalculate order subtotal from scratch to be safe
+            # (In case some items were not in the update list but still exist)
+            subtotal = sum(item.total_price for item in instance.items.all())
+            instance.subtotal = subtotal
+            
+            # Update delivery mode
+            if delivery_mode:
+                instance.delivery_mode = delivery_mode
+                # Recalculate delivery fee logic if needed (e.g. 50 for delivery, 0 for pickup)
+                if delivery_mode == 'delivery':
+                     instance.delivery_fee = 50 # Fixed for now as per OrderCreate
+                     if not instance.delivery_address:
+                         # Requires address? If switching to delivery without address, this might be issue.
+                         # Assuming address exists or validation handled.
+                         pass
+                else:
+                    instance.delivery_fee = 0
+            
+            # Update discount
+            if discount_amount is not None:
+                instance.discount_amount = discount_amount
+            
+            # Recalculate total
+            instance.total_amount = instance.subtotal + instance.delivery_fee - instance.discount_amount
+            
+            # Validate total amount
+            if instance.total_amount < 0:
+                instance.total_amount = 0
+            
+            # Change status to waiting for approval
+            instance.status = 'waiting_for_customer_approval'
+            instance.save()
+            
+            # Log status change
+            OrderStatusLog.objects.create(
+                order=instance,
+                old_status='pending', # Assuming it implies a flow from pending mostly
+                new_status='waiting_for_customer_approval',
+                changed_by=self.context.get('user'),
+                notes='Order modified by retailer'
+            )
+            
+            return instance

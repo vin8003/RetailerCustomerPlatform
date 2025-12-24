@@ -157,6 +157,14 @@ class Product(models.Model):
     
     def __str__(self):
         return f"{self.name} - {self.retailer.shop_name}"
+
+    def save(self, *args, **kwargs):
+        # Calculate discount percentage if original_price is set
+        if self.original_price and self.original_price > self.price:
+            self.discount_percentage = ((self.original_price - self.price) / self.original_price) * 100
+        else:
+            self.discount_percentage = Decimal('0.00')
+        super().save(*args, **kwargs)
     
     @property
     def is_in_stock(self):
@@ -172,10 +180,7 @@ class Product(models.Model):
 
     @property
     def discounted_price(self):
-        """Calculate discounted price"""
-        if self.discount_percentage > 0:
-            discount_amount = (self.price * self.discount_percentage) / 100
-            return self.price - discount_amount
+        """Final selling price (price field already contains the discounted value)"""
         return self.price
     
     @property
