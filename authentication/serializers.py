@@ -118,11 +118,25 @@ class UserProfileSerializer(serializers.ModelSerializer):
     """
     Serializer for user profile
     """
+    shop_name = serializers.SerializerMethodField()
+    shop_image = serializers.SerializerMethodField()
+
     class Meta:
         model = User
         fields = ['id', 'username', 'email', 'first_name', 'last_name', 
-                 'phone_number', 'user_type', 'is_phone_verified', 'created_at']
+                 'phone_number', 'user_type', 'is_phone_verified', 'created_at',
+                 'shop_name', 'shop_image']
         read_only_fields = ['id', 'username', 'user_type', 'is_phone_verified', 'created_at']
+
+    def get_shop_name(self, obj):
+        if obj.user_type == 'retailer' and hasattr(obj, 'retailer_profile'):
+            return obj.retailer_profile.shop_name
+        return None
+
+    def get_shop_image(self, obj):
+        if obj.user_type == 'retailer' and hasattr(obj, 'retailer_profile') and obj.retailer_profile.shop_image:
+            return obj.retailer_profile.shop_image.url
+        return None
 
 
 class TokenSerializer(serializers.Serializer):

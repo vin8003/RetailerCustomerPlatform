@@ -50,12 +50,15 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     retailer_phone = serializers.CharField(source='retailer.contact_phone', read_only=True)
     retailer_address = serializers.CharField(source='retailer.full_address', read_only=True)
     customer_name = serializers.CharField(source='customer.first_name', read_only=True)
+    customer_phone = serializers.CharField(source='customer.phone_number', read_only=True)
+    customer_email = serializers.CharField(source='customer.email', read_only=True)
     delivery_address_text = serializers.CharField(source='delivery_address.full_address', read_only=True)
     
     class Meta:
         model = Order
         fields = [
-            'id', 'order_number', 'customer_name', 'retailer_name', 'retailer_phone',
+            'id', 'order_number', 'customer_name', 'customer_phone', 'customer_email',
+            'retailer_name', 'retailer_phone',
             'retailer_address', 'delivery_mode', 'payment_mode', 'status',
             'subtotal', 'delivery_fee', 'discount_amount', 'total_amount',
             'special_instructions', 'cancellation_reason', 'delivery_address_text',
