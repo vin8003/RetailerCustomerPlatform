@@ -173,16 +173,60 @@ class Order(models.Model):
             'out_for_delivery': 'Your order is out for delivery',
             'delivered': 'Your order has been delivered',
             'cancelled': 'Your order has been cancelled',
-            'returned': 'Your order has been returned'
+            'returned': 'Your order has been returned',
+            'waiting_for_customer_approval': 'Order modifications require your approval'
         }
         
         if new_status in status_messages:
+            msg = status_messages[new_status]
             CustomerNotification.objects.create(
                 customer=self.customer,
                 notification_type='order_update',
                 title=f'Order #{self.order_number} Update',
-                message=status_messages[new_status]
+                message=msg
             )
+            
+            # Send Push Notification
+            from common.notifications import send_push_notification, send_silent_update
+            send_push_notification(
+                user=self.customer,
+                title=f"Order Update: #{self.order_number}",
+                message=msg,
+                data={
+                    'type': 'order_status_update',
+                    'order_id': str(self.id),
+                    'status': new_status
+                }
+            )
+            
+            # Send silent update to refresh UI
+            send_silent_update(
+                user=self.customer,
+                event_type='order_refresh',
+                data={'order_id': str(self.id)}
+            )
+            
+            # Also notify and refresh Retailer UI
+            send_silent_update(
+                user=self.retailer.user,
+                event_type='order_refresh',
+                data={'order_id': str(self.id)}
+            )
+            
+            # If customer updated the status (accepted/rejected), 
+            # send a visible push to the retailer
+            if user == self.customer:
+                action_text = "accepted" if new_status == 'confirmed' else "rejected"
+                send_push_notification(
+                    user=self.retailer.user,
+                    title=f"Order Update: #{self.order_number}",
+                    message=f"Customer has {action_text} the order modifications.",
+                    data={
+                        'type': 'order_status_update',
+                        'order_id': str(self.id),
+                        'status': new_status
+                    }
+                )
 
 
 class OrderItem(models.Model):

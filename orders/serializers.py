@@ -464,17 +464,7 @@ class OrderModificationSerializer(serializers.Serializer):
             if instance.total_amount < 0:
                 instance.total_amount = 0
             
-            # Change status to waiting for approval
-            instance.status = 'waiting_for_customer_approval'
-            instance.save()
-            
-            # Log status change
-            OrderStatusLog.objects.create(
-                order=instance,
-                old_status='pending', # Assuming it implies a flow from pending mostly
-                new_status='waiting_for_customer_approval',
-                changed_by=self.context.get('user'),
-                notes='Order modified by retailer'
-            )
+            # Change status to waiting for approval using update_status to trigger notifications
+            instance.update_status('waiting_for_customer_approval', self.context.get('user'))
             
             return instance

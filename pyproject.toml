@@ -15,4 +15,7 @@ dependencies = [
     "psycopg2-binary>=2.9.10",
     "pyotp>=2.9.0",
     "requests>=2.32.4",
+    "fcm-django>=1.1.0",
+    "firebase-admin>=6.5.0",
+    "python-dotenv>=1.0.1",
 ]

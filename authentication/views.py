@@ -11,6 +11,7 @@ from django.conf import settings
 import logging
 
 from .models import User, OTPVerification
+from fcm_django.models import FCMDevice
 from .serializers import (
     UserRegistrationSerializer, UserLoginSerializer, OTPRequestSerializer,
     OTPVerificationSerializer, UserProfileSerializer, TokenSerializer,
@@ -527,6 +528,53 @@ def resend_otp(request):
 
     except Exception as e:
         logger.error(f"Error in resend_otp: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def register_device(request):
+    """
+    Register or update an FCM device token for the authenticated user.
+    """
+    try:
+        token = request.data.get('registration_id')
+        device_type = request.data.get('type', 'android')
+        name = request.data.get('name', 'unnamed')
+
+        if not token:
+            return Response(
+                {'error': 'registration_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Register or update device
+        device, created = FCMDevice.objects.get_or_create(
+            registration_id=token,
+            defaults={
+                'user': request.user,
+                'type': device_type,
+                'name': name,
+                'active': True
+            }
+        )
+
+        if not created:
+            device.user = request.user
+            device.type = device_type
+            device.name = name
+            device.active = True
+            device.save()
+
+        logger.info(f"FCM Device registered for user {request.user.username}: {token}")
+        return Response(
+            {'message': 'Device registered successfully'},
+            status=status.HTTP_200_OK
+        )
+
+    except Exception as e:
+        logger.error(f"Error registering FCM device: {str(e)}")
         return Response(
             {'error': 'Internal server error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR

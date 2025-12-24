@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     'orders',
     'cart',
     'common',
+    'fcm_django',
 ]
 
 MIDDLEWARE = [
@@ -243,3 +244,29 @@ EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', 'True').lower() == 'true'
 EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER)
+
+# FCM Django Settings
+FCM_DJANGO_SETTINGS = {
+    "APP_VERBOSE_NAME": "Firebase Cloud Messaging",
+    "FCM_SERVER_KEY": os.getenv('FCM_SERVER_KEY', ''),
+    "ONE_DEVICE_PER_USER": False,
+    "DELETE_INACTIVE_DEVICES": True,
+}
+
+# Firebase Admin SDK Initialization
+import firebase_admin
+from firebase_admin import credentials
+
+if not firebase_admin._apps:
+    try:
+        # Check for service account JSON
+        cred_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+        if cred_path and os.path.exists(cred_path):
+            cred = credentials.Certificate(cred_path)
+            firebase_admin.initialize_app(cred)
+        else:
+            # Default initialization (uses GOOGLE_APPLICATION_CREDENTIALS if set,
+            # but won't crash if it's not and we are just testing)
+            firebase_admin.initialize_app()
+    except Exception as e:
+        print(f"Warning: Firebase Admin SDK could not be initialized: {e}")

@@ -16,6 +16,7 @@ from .serializers import (
 )
 from retailers.models import RetailerProfile
 from customers.models import CustomerAddress
+from common.notifications import send_push_notification
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,27 @@ def place_order(request):
         
         if serializer.is_valid():
             order = serializer.save()
+            
+            # Notify Retailer
+            if order.retailer and order.retailer.user:
+                send_push_notification(
+                    user=order.retailer.user,
+                    title="New Order Received!",
+                    message=f"Order #{order.order_number} has been placed by {request.user.get_full_name() or request.user.username}.",
+                    data={
+                        'type': 'new_order',
+                        'order_id': str(order.id)
+                    }
+                )
+                
+                # Silent refresh for Retailer Dashboard
+                from common.notifications import send_silent_update
+                send_silent_update(
+                    user=order.retailer.user,
+                    event_type='order_refresh',
+                    data={'order_id': str(order.id)}
+                )
+
             response_serializer = OrderDetailSerializer(order)
             logger.info(f"Order placed: {order.order_number} by {request.user.username}")
             return Response(response_serializer.data, status=status.HTTP_201_CREATED)
@@ -558,15 +580,6 @@ def modify_order(request, order_id):
         
         if serializer.is_valid():
             order = serializer.save()
-            
-            # Send notification to customer
-            from customers.models import CustomerNotification
-            CustomerNotification.objects.create(
-                customer=order.customer,
-                notification_type='order_update',
-                title=f'Order #{order.order_number} Modified',
-                message='Your order has been modified by the retailer. Please review and approve the changes.'
-            )
             
             response_serializer = OrderDetailSerializer(order)
             logger.info(f"Order modified: {order.order_number} by retailer")

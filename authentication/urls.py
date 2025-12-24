@@ -23,4 +23,5 @@ urlpatterns = [
     # JWT token management
     path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('token/verify/', TokenVerifyView.as_view(), name='token_verify'),
+    path('device/register/', views.register_device, name='register_device'),
 ]
