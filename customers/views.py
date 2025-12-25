@@ -528,8 +528,6 @@ def get_customer_dashboard(request):
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
-@api_view(['GET'])
-@permission_classes([permissions.IsAuthenticated])
 def get_reward_configuration(request):
     """
     Get reward configuration for a specific retailer
@@ -552,6 +550,110 @@ def get_reward_configuration(request):
     
     except Exception as e:
         logger.error(f"Error getting reward configuration: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def get_customer_loyalty(request):
+    """
+    Get loyalty points for a specific retailer
+    """
+    try:
+        retailer_id = request.query_params.get('retailer_id')
+        if not retailer_id:
+            return Response(
+                {'error': 'Retailer ID is required'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        retailer = get_object_or_404(RetailerProfile, id=retailer_id)
+        
+        # Get or create loyalty entry
+        loyalty, created = CustomerLoyalty.objects.get_or_create(
+            customer=request.user,
+            retailer=retailer
+        )
+            
+        return Response({
+            'points': loyalty.points,
+            'retailer_id': retailer.id,
+            'retailer_name': retailer.shop_name
+        }, status=status.HTTP_200_OK)
+    
+    except Exception as e:
+        logger.error(f"Error getting customer loyalty: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def get_all_customer_loyalty(request):
+    """
+    Get all loyalty points for the authenticated customer across all retailers
+    """
+    try:
+        loyalty_records = CustomerLoyalty.objects.filter(
+            customer=request.user
+        ).select_related('retailer')
+        
+        data = []
+        for record in loyalty_records:
+            data.append({
+                'retailer_id': record.retailer.id,
+                'retailer_name': record.retailer.shop_name,
+                'points': record.points,
+                'updated_at': record.updated_at
+            })
+            
+        return Response(data, status=status.HTTP_200_OK)
+    
+    except Exception as e:
+        logger.error(f"Error getting all customer loyalty: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def get_retailer_customers_loyalty(request):
+    """
+    Get all customers with loyalty points for the authenticated retailer
+    """
+    try:
+        if request.user.user_type != 'retailer':
+            return Response(
+                {'error': 'Only retailers can access this endpoint'}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+            
+        retailer = get_object_or_404(RetailerProfile, user=request.user)
+        
+        loyalty_records = CustomerLoyalty.objects.filter(
+            retailer=retailer
+        ).select_related('customer', 'customer__user')
+        
+        data = []
+        for record in loyalty_records:
+            data.append({
+                'customer_id': record.customer.id,
+                'customer_name': record.customer.user.get_full_name() or record.customer.user.username,
+                'points': record.points,
+                'updated_at': record.updated_at
+            })
+            
+        return Response(data, status=status.HTTP_200_OK)
+    
+    except Exception as e:
+        logger.error(f"Error getting retailer customers loyalty: {str(e)}")
         return Response(
             {'error': 'Internal server error'}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR

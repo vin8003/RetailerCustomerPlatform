@@ -7,6 +7,7 @@ urlpatterns = [
     path('profile/create/', views.create_retailer_profile, name='create_retailer_profile'),
     path('profile/update/', views.update_retailer_profile, name='update_retailer_profile'),
     path('operating-hours/', views.update_operating_hours, name='update_operating_hours'),
+    path('reward-config/', views.manage_reward_configuration, name='manage_reward_configuration'),
     
     # Public retailer endpoints
     path('', views.list_retailers, name='list_retailers'),

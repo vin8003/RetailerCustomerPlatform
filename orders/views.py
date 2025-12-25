@@ -581,6 +581,63 @@ def modify_order(request, order_id):
         if serializer.is_valid():
             order = serializer.save()
             
+            # Recalculate points discount if points were used
+            if order.points_redeemed > 0:
+                from retailers.models import RetailerRewardConfig
+                from customers.models import CustomerLoyalty
+                
+                try:
+                    config = RetailerRewardConfig.objects.filter(retailer=retailer).first()
+                    loyalty = CustomerLoyalty.objects.get(customer=order.customer, retailer=retailer)
+                    
+                    if config and config.is_active:
+                        # Calculate max allowed discount for new total
+                        # 1. Percentage limit
+                        max_by_percent = (order.total_amount * config.max_reward_usage_percent) / 100
+                        
+                        # 2. Flat limit
+                        max_by_flat = config.max_reward_usage_flat
+                        
+                        # 3. Current redeemed points value (the user "paid" this much in points initially)
+                        # We don't want to use MORE points than initially redeemed, only LESS if the total dropped
+                        current_points_value = order.points_redeemed * config.conversion_rate
+                        
+                        # New max redeemable amount
+                        redeemable_amount = min(order.total_amount, max_by_percent, max_by_flat, current_points_value)
+                        
+                        if redeemable_amount < current_points_value:
+                            # Discount needs to be reduced
+                            diff_value = current_points_value - redeemable_amount
+                            points_to_refund = diff_value / config.conversion_rate
+                            
+                            # Update order
+                            order.discount_from_points = redeemable_amount
+                            order.points_redeemed -= points_to_refund
+                            order.total_amount += diff_value # Add back the difference to total since discount reduced
+                            # Wait, modify_order serializer likely sets total_amount based on items - discount
+                            # Logic: Total = ItemTotal - Discount. If Discount drops, Total increases.
+                            # But here total_amount IS (ItemTotal - OldDiscount).
+                            # We need to set it to (ItemTotal - NewDiscount).
+                            # So we add the difference back.
+                            # OR: recalculate total from scratch? Safer to add difference.
+                            # Let's verify: 
+                            # OldTotal = Items - OldDiscount
+                            # NewTotal = Items - NewDiscount
+                            # NewTotal = (OldTotal + OldDiscount) - NewDiscount
+                            # NewTotal = OldTotal + (OldDiscount - NewDiscount)
+                            # NewTotal = OldTotal + Diff
+                            order.total_amount = order.total_amount + diff_value
+                            order.save()
+                            
+                            # Refund points to customer
+                            loyalty.points += points_to_refund
+                            loyalty.save()
+                            
+                            logger.info(f"Points adjusted for order {order.order_number}: Refunded {points_to_refund} points")
+
+                except Exception as e:
+                    logger.error(f"Error adjusting points for modified order: {str(e)}")
+            
             response_serializer = OrderDetailSerializer(order)
             logger.info(f"Order modified: {order.order_number} by retailer")
             return Response(response_serializer.data, status=status.HTTP_200_OK)

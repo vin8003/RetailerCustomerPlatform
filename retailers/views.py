@@ -10,13 +10,13 @@ import logging
 
 from .models import (
     RetailerProfile, RetailerOperatingHours, RetailerCategory,
-    RetailerCategoryMapping, RetailerReview
+    RetailerCategoryMapping, RetailerReview, RetailerRewardConfig
 )
 from .serializers import (
     RetailerProfileSerializer, RetailerProfileUpdateSerializer,
     RetailerListSerializer, RetailerReviewSerializer,
     RetailerCreateReviewSerializer, RetailerOperatingHoursUpdateSerializer,
-    RetailerCategorySerializer
+    RetailerCategorySerializer, RetailerRewardConfigSerializer
 )
 from common.permissions import IsRetailerOwner, IsCustomerUser
 
@@ -479,6 +479,42 @@ def search_retailers(request):
     
     except Exception as e:
         logger.error(f"Error searching retailers: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['GET', 'PUT'])
+@permission_classes([permissions.IsAuthenticated])
+def manage_reward_configuration(request):
+    """
+    Get or update retailer reward configuration
+    """
+    try:
+        if request.user.user_type != 'retailer':
+            return Response(
+                {'error': 'Only retailers can access this endpoint'}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+            
+        profile = get_object_or_404(RetailerProfile, user=request.user)
+        
+        # Get or create config
+        config, created = RetailerRewardConfig.objects.get_or_create(retailer=profile)
+        
+        if request.method == 'GET':
+            serializer = RetailerRewardConfigSerializer(config)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+            
+        elif request.method == 'PUT':
+            serializer = RetailerRewardConfigSerializer(config, data=request.data, partial=True)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data, status=status.HTTP_200_OK)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    except Exception as e:
+        logger.error(f"Error managing reward config: {str(e)}")
         return Response(
             {'error': 'Internal server error'}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
