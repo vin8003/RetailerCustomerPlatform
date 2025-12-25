@@ -639,13 +639,13 @@ def get_retailer_customers_loyalty(request):
         
         loyalty_records = CustomerLoyalty.objects.filter(
             retailer=retailer
-        ).select_related('customer', 'customer__user')
+        ).select_related('customer')
         
         data = []
         for record in loyalty_records:
             data.append({
                 'customer_id': record.customer.id,
-                'customer_name': record.customer.user.get_full_name() or record.customer.user.username,
+                'customer_name': record.customer.get_full_name() or record.customer.username,
                 'points': record.points,
                 'updated_at': record.updated_at
             })

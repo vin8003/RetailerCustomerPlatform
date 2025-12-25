@@ -63,7 +63,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'id', 'order_number', 'customer_name', 'customer_phone', 'customer_email',
             'retailer_name', 'retailer_phone',
             'retailer_address', 'delivery_mode', 'payment_mode', 'status',
-            'subtotal', 'delivery_fee', 'discount_amount', 'total_amount',
+            'subtotal', 'delivery_fee', 'discount_amount', 'discount_from_points', 'points_redeemed', 'total_amount',
             'special_instructions', 'cancellation_reason', 'delivery_address_text',
             'delivery_latitude', 'delivery_longitude',
             'items', 'created_at', 'updated_at', 'confirmed_at', 'delivered_at',
@@ -513,7 +513,7 @@ class OrderModificationSerializer(serializers.Serializer):
                 instance.discount_amount = discount_amount
             
             # Recalculate total
-            instance.total_amount = instance.subtotal + instance.delivery_fee - instance.discount_amount
+            instance.total_amount = instance.subtotal + instance.delivery_fee - instance.discount_amount - instance.discount_from_points
             
             # Validate total amount
             if instance.total_amount < 0:

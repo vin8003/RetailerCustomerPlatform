@@ -364,6 +364,11 @@ def cancel_order(request, order_id):
         # Restore product quantities
         for item in order.items.all():
             item.product.increase_quantity(item.quantity)
+            
+        # Refund loyalty points if used (Handled in update_status but ensured here logic is consistent)
+        # Actually update_status('cancelled') already calls refund logic in models.py.
+        # So we don't need to duplicate it here, BUT we should verify that update_status IS called correctly.
+        # It is called above.
         
         logger.info(f"Order cancelled: {order.order_number} by {user.username}")
         
@@ -591,9 +596,13 @@ def modify_order(request, order_id):
                     loyalty = CustomerLoyalty.objects.get(customer=order.customer, retailer=retailer)
                     
                     if config and config.is_active:
+                        # Calculate total BEFORE points discount is applied
+                        # We calculate from components because total_amount might be capped at 0
+                        total_before_points = max(0, order.subtotal + order.delivery_fee - (order.discount_amount or 0))
+
                         # Calculate max allowed discount for new total
-                        # 1. Percentage limit
-                        max_by_percent = (order.total_amount * config.max_reward_usage_percent) / 100
+                        # 1. Percentage limit on total_before_points
+                        max_by_percent = (total_before_points * config.max_reward_usage_percent) / 100
                         
                         # 2. Flat limit
                         max_by_flat = config.max_reward_usage_flat
@@ -603,7 +612,7 @@ def modify_order(request, order_id):
                         current_points_value = order.points_redeemed * config.conversion_rate
                         
                         # New max redeemable amount
-                        redeemable_amount = min(order.total_amount, max_by_percent, max_by_flat, current_points_value)
+                        redeemable_amount = min(total_before_points, max_by_percent, max_by_flat, current_points_value)
                         
                         if redeemable_amount < current_points_value:
                             # Discount needs to be reduced
@@ -611,22 +620,12 @@ def modify_order(request, order_id):
                             points_to_refund = diff_value / config.conversion_rate
                             
                             # Update order
+                            # New discount is redeemable_amount.
+                            # We need to set total_amount = total_before_points - new_discount.
+                            
                             order.discount_from_points = redeemable_amount
                             order.points_redeemed -= points_to_refund
-                            order.total_amount += diff_value # Add back the difference to total since discount reduced
-                            # Wait, modify_order serializer likely sets total_amount based on items - discount
-                            # Logic: Total = ItemTotal - Discount. If Discount drops, Total increases.
-                            # But here total_amount IS (ItemTotal - OldDiscount).
-                            # We need to set it to (ItemTotal - NewDiscount).
-                            # So we add the difference back.
-                            # OR: recalculate total from scratch? Safer to add difference.
-                            # Let's verify: 
-                            # OldTotal = Items - OldDiscount
-                            # NewTotal = Items - NewDiscount
-                            # NewTotal = (OldTotal + OldDiscount) - NewDiscount
-                            # NewTotal = OldTotal + (OldDiscount - NewDiscount)
-                            # NewTotal = OldTotal + Diff
-                            order.total_amount = order.total_amount + diff_value
+                            order.total_amount = total_before_points - redeemable_amount
                             order.save()
                             
                             # Refund points to customer
@@ -684,9 +683,20 @@ def confirm_modification(request, order_id):
             order.update_status('confirmed', request.user)
             message = 'Order modification accepted'
         else:
-            order.update_status('cancelled', request.user)
             order.cancellation_reason = 'Customer rejected retailer modifications'
+            order.update_status('cancelled', request.user)
             order.save()
+
+            # Note: update_status handles point refunds if points were redeemed.
+            # But confirm_modification rejection also implies cancelling the mod proposal.
+            # However, since we updated the order IN PLACE in modify_order, the order is effectively
+            # "Cancelled" with the NEW values. This is fine. The refund will be based on 
+            # the current order.points_redeemed.
+            
+            # Restore stock for items
+            for item in order.items.all():
+                item.product.increase_quantity(item.quantity)
+            
             message = 'Order modification rejected'
         
         logger.info(f"{message}: {order.order_number}")
