@@ -17,7 +17,7 @@ from .serializers import (
     OTPVerificationSerializer, UserProfileSerializer, TokenSerializer,
     PasswordChangeSerializer, RequestPhoneVerificationSerializer
 )
-from .utils import generate_otp, send_sms_otp, verify_otp_helper
+from .utils import generate_otp, send_sms_otp, verify_otp_helper, verify_firebase_id_token
 
 logger = logging.getLogger(__name__)
 
@@ -252,7 +252,7 @@ def request_phone_verification(request):
         sms_sent = send_sms_otp(phone_number, otp_code)
 
         if sms_sent:
-            cache.set(cache_key, requests + 1, 3600)
+            cache.set(cache_key, requests + 1, 900)
             logger.info(f"OTP sent to {phone_number} for verification")
             return Response({
                 'message': 'OTP sent successfully',
@@ -284,8 +284,45 @@ def verify_otp(request):
         serializer = OTPVerificationSerializer(data=request.data)
         if serializer.is_valid():
             phone_number = serializer.validated_data['phone_number']
-            otp_code = serializer.validated_data['otp_code']
+            otp_code = serializer.validated_data.get('otp_code')
+            firebase_token = serializer.validated_data.get('firebase_token')
 
+            # Firebase Token Verification Flow
+            if firebase_token:
+                decoded_token = verify_firebase_id_token(firebase_token)
+                if decoded_token:
+                    # User phone verification successful
+                    try:
+                        user = User.objects.get(phone_number=phone_number)
+                        user.is_active = True
+                        user.is_phone_verified = True
+                        user.save()
+                        
+                        # Generate JWT tokens
+                        refresh = RefreshToken.for_user(user)
+
+                        response_data = {
+                            'message': 'Phone verification successful',
+                            'user': UserProfileSerializer(user).data,
+                            'tokens': {
+                                'access': str(refresh.access_token),
+                                'refresh': str(refresh),
+                            }
+                        }
+                        return Response(response_data, status=status.HTTP_200_OK)
+                    except User.DoesNotExist:
+                         return Response(
+                            {'error': 'User not found with this phone number'},
+                            status=status.HTTP_404_NOT_FOUND
+                        )
+                else:
+                    logger.warning(f"Invalid Firebase Token received for {phone_number}")
+                    return Response(
+                        {'error': 'Invalid Firebase Token'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+            # Legacy OTP Flow
             try:
                 otp_verification = OTPVerification.objects.get(
                     phone_number=phone_number,

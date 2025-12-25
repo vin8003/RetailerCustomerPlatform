@@ -98,11 +98,21 @@ class OTPVerificationSerializer(serializers.Serializer):
     Serializer for OTP verification
     """
     phone_number = serializers.CharField(max_length=15)
-    otp_code = serializers.CharField(max_length=6)
+    otp_code = serializers.CharField(max_length=6, required=False)
+    firebase_token = serializers.CharField(required=False)
     name = serializers.CharField(max_length=150, required=False)
     
+    def validate(self, attrs):
+        otp_code = attrs.get('otp_code')
+        firebase_token = attrs.get('firebase_token')
+
+        if not otp_code and not firebase_token:
+            raise serializers.ValidationError("Either otp_code or firebase_token must be provided.")
+            
+        return attrs
+
     def validate_otp_code(self, value):
-        if not value.isdigit() or len(value) != 6:
+        if value and (not value.isdigit() or len(value) != 6):
             raise serializers.ValidationError("OTP must be 6 digits")
         return value
 

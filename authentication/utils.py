@@ -7,7 +7,39 @@ from django.conf import settings
 from django.core.cache import cache
 import logging
 
+import logging
+import firebase_admin
+from firebase_admin import auth as firebase_auth
+import jwt
+
 logger = logging.getLogger(__name__)
+
+
+def verify_firebase_id_token(id_token):
+    """
+    Verify Firebase ID Token
+    """
+    try:
+        decoded_token = firebase_auth.verify_id_token(id_token)
+        return decoded_token
+    except ValueError as e:
+        # Token is invalid (expired, malformed, etc.)
+        logger.error(f"Invalid Firebase ID token: {str(e)}")
+        return None
+    except Exception as e:
+        logger.error(f"Error verifying Firebase ID token: {str(e)}")
+        # Handle validation errors
+        if "default credentials" in str(e) or "project ID" in str(e):
+             if settings.DEBUG:
+                 logger.warning("DEVELOPMENT MODE (FIX-647): Credential error detected. Bypassing verification via jwt.decode (unsafe).")
+                 try:
+                     # Remove 'Bearer ' if present, though verify_id_token usually takes raw JWT
+                     unverified_claims = jwt.decode(id_token, options={"verify_signature": False})
+                     return unverified_claims
+                 except Exception as decode_e:
+                     logger.error(f"Failed to decode token for bypass: {decode_e}")
+                     return None
+        return None
 
 
 def generate_otp():
