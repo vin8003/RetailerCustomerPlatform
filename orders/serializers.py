@@ -80,6 +80,7 @@ class OrderCreateSerializer(serializers.Serializer):
     delivery_mode = serializers.ChoiceField(choices=Order.DELIVERY_MODE_CHOICES)
     payment_mode = serializers.ChoiceField(choices=Order.PAYMENT_MODE_CHOICES)
     special_instructions = serializers.CharField(required=False, allow_blank=True)
+    use_reward_points = serializers.BooleanField(required=False, default=False)
     
     def validate_retailer_id(self, value):
         """Validate retailer exists"""
@@ -146,6 +147,44 @@ class OrderCreateSerializer(serializers.Serializer):
         
         total_amount = subtotal + delivery_fee
         
+        # Calculate discount from points
+        discount_from_points = 0
+        points_to_redeem = 0
+        
+        if validated_data.get('use_reward_points', False):
+            from retailers.models import RetailerRewardConfig
+            from customers.models import CustomerLoyalty
+            
+            # Get retailer config
+            config = RetailerRewardConfig.objects.filter(retailer=retailer).first()
+            
+            # Get user points for this retailer
+            try:
+                loyalty = CustomerLoyalty.objects.get(customer=customer, retailer=retailer)
+                user_points = loyalty.points
+            except CustomerLoyalty.DoesNotExist:
+                user_points = 0
+            
+            if config and config.is_active and user_points > 0:
+                # Calculate max redeemable amount
+                # 1. Percentage limit
+                max_by_percent = (total_amount * config.max_reward_usage_percent) / 100
+                
+                # 2. Flat limit
+                max_by_flat = config.max_reward_usage_flat
+                
+                # 3. User balance limit (converted to currency)
+                # Assuming 1 point = conversion_rate currency
+                max_by_balance = user_points * config.conversion_rate
+                
+                # Actual allowed amount is min of all constraints
+                redeemable_amount = min(total_amount, max_by_percent, max_by_flat, max_by_balance)
+                
+                if redeemable_amount > 0:
+                    discount_from_points = redeemable_amount
+                    points_to_redeem = redeemable_amount / config.conversion_rate
+                    total_amount -= discount_from_points
+        
         # Check minimum order amount
         if total_amount < retailer.minimum_order_amount:
             raise serializers.ValidationError(
@@ -161,6 +200,8 @@ class OrderCreateSerializer(serializers.Serializer):
                 'payment_mode': validated_data['payment_mode'],
                 'subtotal': subtotal,
                 'delivery_fee': delivery_fee,
+                'discount_from_points': discount_from_points,
+                'points_redeemed': points_to_redeem,
                 'total_amount': total_amount,
                 'special_instructions': validated_data.get('special_instructions', ''),
             }
@@ -187,6 +228,17 @@ class OrderCreateSerializer(serializers.Serializer):
                 
                 # Reduce product quantity
                 cart_item.product.reduce_quantity(cart_item.quantity)
+            
+            # Deduct points from customer profile if used
+            if points_to_redeem > 0:
+                from customers.models import CustomerLoyalty
+                try:
+                    loyalty = CustomerLoyalty.objects.get(customer=customer, retailer=retailer)
+                    loyalty.points -= points_to_redeem
+                    loyalty.save()
+                except CustomerLoyalty.DoesNotExist:
+                    # Should not happen given validation above, but safe handle
+                    pass
             
             # Clear cart
             cart.items.all().delete()

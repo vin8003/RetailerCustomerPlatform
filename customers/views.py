@@ -8,11 +8,13 @@ from django.utils import timezone
 from datetime import timedelta
 import logging
 
-from .models import CustomerProfile, CustomerAddress, CustomerWishlist, CustomerNotification
+from .models import CustomerProfile, CustomerAddress, CustomerWishlist, CustomerNotification, CustomerLoyalty
 from .serializers import (
     CustomerProfileSerializer, CustomerAddressSerializer, CustomerAddressUpdateSerializer,
-    CustomerWishlistSerializer, CustomerNotificationSerializer, CustomerDashboardSerializer
+    CustomerWishlistSerializer, CustomerNotificationSerializer, CustomerDashboardSerializer,
 )
+from retailers.models import RetailerProfile, RetailerRewardConfig
+from retailers.serializers import RetailerRewardConfigSerializer
 from orders.models import Order
 from products.models import Product
 from retailers.models import RetailerProfile
@@ -518,6 +520,38 @@ def get_customer_dashboard(request):
     
     except Exception as e:
         logger.error(f"Error getting customer dashboard: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def get_reward_configuration(request):
+    """
+    Get reward configuration for a specific retailer
+    """
+    try:
+        retailer_id = request.query_params.get('retailer_id')
+        if not retailer_id:
+            return Response(
+                {'error': 'Retailer ID is required'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        retailer = get_object_or_404(RetailerProfile, id=retailer_id)
+        
+        # Get or create config for this retailer
+        config, created = RetailerRewardConfig.objects.get_or_create(retailer=retailer)
+            
+        serializer = RetailerRewardConfigSerializer(config)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    except Exception as e:
+        logger.error(f"Error getting reward configuration: {str(e)}")
         return Response(
             {'error': 'Internal server error'}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR

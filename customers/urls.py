@@ -22,4 +22,7 @@ urlpatterns = [
     # Notifications
     path('notifications/', views.get_customer_notifications, name='get_customer_notifications'),
     path('notifications/<int:notification_id>/read/', views.mark_notification_read, name='mark_notification_read'),
+    
+    # Rewards
+    path('reward-configuration/', views.get_reward_configuration, name='get_reward_configuration'),
 ]

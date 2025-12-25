@@ -201,3 +201,37 @@ class CustomerNotification(models.Model):
     
     def __str__(self):
         return f"{self.customer.username} - {self.title}"
+
+
+    def __str__(self):
+        return f"{self.customer.username} - {self.title}"
+
+
+class CustomerLoyalty(models.Model):
+    """
+    Tracks loyalty points for a customer at a specific retailer
+    """
+    customer = models.ForeignKey(
+        settings.AUTH_USER_MODEL, 
+        on_delete=models.CASCADE, 
+        related_name='loyalty_points'
+    )
+    retailer = models.ForeignKey(
+        'retailers.RetailerProfile', 
+        on_delete=models.CASCADE, 
+        related_name='customer_loyalty'
+    )
+    points = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'customer_loyalty'
+        unique_together = ['customer', 'retailer']
+        indexes = [
+            models.Index(fields=['customer', 'retailer']),
+        ]
+        
+    def __str__(self):
+        return f"{self.customer.username} - {self.retailer.shop_name}: {self.points}"

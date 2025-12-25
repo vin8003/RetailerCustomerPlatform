@@ -2,7 +2,7 @@ from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from .models import (
     RetailerProfile, RetailerOperatingHours, RetailerCategory,
-    RetailerCategoryMapping, RetailerReview
+    RetailerCategoryMapping, RetailerReview, RetailerRewardConfig
 )
 
 User = get_user_model()
@@ -182,3 +182,15 @@ class RetailerOperatingHoursUpdateSerializer(serializers.ModelSerializer):
             if data['opening_time'] >= data['closing_time']:
                 raise serializers.ValidationError("Opening time must be before closing time")
         return data
+
+
+class RetailerRewardConfigSerializer(serializers.ModelSerializer):
+    """
+    Serializer for retailer reward configuration
+    """
+    class Meta:
+        model = RetailerRewardConfig
+        fields = [
+            'cashback_percentage', 'max_reward_usage_percent',
+            'max_reward_usage_flat', 'conversion_rate', 'is_active'
+        ]

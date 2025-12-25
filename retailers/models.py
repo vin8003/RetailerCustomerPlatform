@@ -212,3 +212,30 @@ class RetailerReview(models.Model):
     
     def __str__(self):
         return f"{self.retailer.shop_name} - {self.rating} stars"
+
+
+class RetailerRewardConfig(models.Model):
+    """
+    Configuration for retailer-specific reward functionality
+    """
+    retailer = models.OneToOneField(
+        RetailerProfile, 
+        on_delete=models.CASCADE, 
+        related_name='reward_config'
+    )
+    cashback_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=1.0)
+    max_reward_usage_percent = models.DecimalField(max_digits=5, decimal_places=2, default=50.0)
+    max_reward_usage_flat = models.DecimalField(max_digits=10, decimal_places=2, default=500.0)
+    conversion_rate = models.DecimalField(max_digits=10, decimal_places=2, default=1.0)
+    is_active = models.BooleanField(default=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'retailer_reward_config'
+        verbose_name = 'Retailer Reward Configuration'
+        verbose_name_plural = 'Retailer Reward Configurations'
+        
+    def __str__(self):
+        return f"Reward Config for {self.retailer.shop_name}"

@@ -142,3 +142,5 @@ class CustomerSearchHistorySerializer(serializers.Serializer):
     query = serializers.CharField()
     results_count = serializers.IntegerField()
     created_at = serializers.DateTimeField()
+
+

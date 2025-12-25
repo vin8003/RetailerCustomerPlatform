@@ -75,6 +75,22 @@ class Order(models.Model):
         default=0,
         validators=[MinValueValidator(Decimal('0.00'))]
     )
+    discount_from_points = models.DecimalField(
+        max_digits=10, 
+        decimal_places=2, 
+        default=0,
+        validators=[MinValueValidator(Decimal('0.00'))]
+    )
+    points_earned = models.DecimalField(
+        max_digits=10, 
+        decimal_places=2, 
+        default=0
+    )
+    points_redeemed = models.DecimalField(
+        max_digits=10, 
+        decimal_places=2, 
+        default=0
+    )
     total_amount = models.DecimalField(
         max_digits=10, 
         decimal_places=2,
@@ -150,8 +166,66 @@ class Order(models.Model):
             self.confirmed_at = timezone.now()
         elif new_status == 'delivered':
             self.delivered_at = timezone.now()
+            
+            # Award cashback points
+            # Award cashback points
+            if old_status != 'delivered':
+                from decimal import Decimal
+                from retailers.models import RetailerRewardConfig
+                from customers.models import CustomerLoyalty
+                
+                try:
+                    config = RetailerRewardConfig.objects.filter(retailer=self.retailer).first()
+                    if config and config.is_active:
+                        # Calculate points
+                        points_to_earn = (self.total_amount * config.cashback_percentage) / Decimal('100.0')
+                        points_to_earn = round(points_to_earn, 2)
+                        
+                        if points_to_earn > 0:
+                            self.points_earned = points_to_earn
+                            
+                            # Update Customer Loyalty for this retailer
+                            loyalty, _ = CustomerLoyalty.objects.get_or_create(
+                                customer=self.customer,
+                                retailer=self.retailer
+                            )
+                            loyalty.points += points_to_earn
+                            loyalty.save()
+                        
+                except Exception as e:
+                    print(f"Error awarding points: {e}")
+                    
         elif new_status == 'cancelled':
             self.cancelled_at = timezone.now()
+            
+            # Refund points if order used any
+            if old_status != 'cancelled' and self.points_redeemed > 0:
+                from customers.models import CustomerLoyalty
+                try:
+                    loyalty, _ = CustomerLoyalty.objects.get_or_create(
+                        customer=self.customer,
+                        retailer=self.retailer
+                    )
+                    loyalty.points += self.points_redeemed
+                    loyalty.save()
+                except Exception as e:
+                    print(f"Error refunding points: {e}")
+                
+            # Revert earned points if accidentally marked delivered then cancelled
+            if self.points_earned > 0:
+                from customers.models import CustomerLoyalty
+                try:
+                    loyalty, _ = CustomerLoyalty.objects.get_or_create(
+                        customer=self.customer,
+                        retailer=self.retailer
+                    )
+                    loyalty.points -= self.points_earned
+                    if loyalty.points < 0:
+                        loyalty.points = 0
+                    loyalty.save()
+                    self.points_earned = 0
+                except Exception as e:
+                     print(f"Error reverting points: {e}")
         
         self.save()
         
