@@ -54,6 +54,8 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     customer_phone = serializers.CharField(source='customer.phone_number', read_only=True)
     customer_email = serializers.CharField(source='customer.email', read_only=True)
     delivery_address_text = serializers.CharField(source='delivery_address.full_address', read_only=True)
+    delivery_latitude = serializers.DecimalField(source='delivery_address.latitude', max_digits=10, decimal_places=8, read_only=True)
+    delivery_longitude = serializers.DecimalField(source='delivery_address.longitude', max_digits=11, decimal_places=8, read_only=True)
     
     class Meta:
         model = Order
@@ -63,6 +65,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'retailer_address', 'delivery_mode', 'payment_mode', 'status',
             'subtotal', 'delivery_fee', 'discount_amount', 'total_amount',
             'special_instructions', 'cancellation_reason', 'delivery_address_text',
+            'delivery_latitude', 'delivery_longitude',
             'items', 'created_at', 'updated_at', 'confirmed_at', 'delivered_at',
             'cancelled_at'
         ]
