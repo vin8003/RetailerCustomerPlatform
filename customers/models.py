@@ -33,6 +33,7 @@ class CustomerProfile(models.Model):
     
     # Status
     is_active = models.BooleanField(default=True)
+    referral_code = models.CharField(max_length=20, unique=True, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -41,6 +42,16 @@ class CustomerProfile(models.Model):
     
     def __str__(self):
         return f"{self.user.username} - Customer Profile"
+
+    def save(self, *args, **kwargs):
+        if not self.referral_code:
+            import random
+            import string
+            # Generate a unique referral code: USER_ID + 5 random chars
+            uid = str(self.user.id)
+            chars = ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
+            self.referral_code = f"REF{uid}{chars}"
+        super().save(*args, **kwargs)
 
 
 class CustomerAddress(models.Model):
@@ -235,3 +246,38 @@ class CustomerLoyalty(models.Model):
         
     def __str__(self):
         return f"{self.customer.username} - {self.retailer.shop_name}: {self.points}"
+
+
+class CustomerReferral(models.Model):
+    """
+    Tracks referrals made by customers for specific retailers
+    """
+    referrer = models.ForeignKey(
+        settings.AUTH_USER_MODEL, 
+        on_delete=models.CASCADE, 
+        related_name='referrals_made'
+    )
+    retailer = models.ForeignKey(
+        'retailers.RetailerProfile', 
+        on_delete=models.CASCADE, 
+        related_name='referrals'
+    )
+    referee = models.ForeignKey(
+        settings.AUTH_USER_MODEL, 
+        on_delete=models.CASCADE, 
+        related_name='referrals_received'
+    )
+    is_rewarded = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'customer_referral'
+        unique_together = ['retailer', 'referee'] # One referral per retailer per customer
+        indexes = [
+            models.Index(fields=['retailer', 'referee']),
+            models.Index(fields=['referrer', 'retailer']),
+        ]
+
+    def __str__(self):
+        return f"{self.referrer.username} referred {self.referee.username} to {self.retailer.shop_name}"

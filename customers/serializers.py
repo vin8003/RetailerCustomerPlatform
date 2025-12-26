@@ -21,9 +21,9 @@ class CustomerProfileSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'username', 'email', 'phone_number', 'first_name', 'last_name',
             'date_of_birth', 'gender', 'profile_image', 'preferred_language',
-            'notification_preferences', 'created_at', 'updated_at'
+            'notification_preferences', 'referral_code', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'username', 'email', 'phone_number', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'username', 'email', 'phone_number', 'referral_code', 'created_at', 'updated_at']
     
     def update(self, instance, validated_data):
         """Update customer profile and user fields"""

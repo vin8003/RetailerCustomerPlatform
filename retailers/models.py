@@ -227,6 +227,13 @@ class RetailerRewardConfig(models.Model):
     max_reward_usage_percent = models.DecimalField(max_digits=5, decimal_places=2, default=50.0)
     max_reward_usage_flat = models.DecimalField(max_digits=10, decimal_places=2, default=500.0)
     conversion_rate = models.DecimalField(max_digits=10, decimal_places=2, default=1.0)
+    
+    # Referral settings
+    is_referral_enabled = models.BooleanField(default=False)
+    referral_reward_points = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    referee_reward_points = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    min_referral_order_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    
     is_active = models.BooleanField(default=True)
     
     created_at = models.DateTimeField(auto_now_add=True)

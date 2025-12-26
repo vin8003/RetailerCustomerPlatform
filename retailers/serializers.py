@@ -192,5 +192,7 @@ class RetailerRewardConfigSerializer(serializers.ModelSerializer):
         model = RetailerRewardConfig
         fields = [
             'cashback_percentage', 'max_reward_usage_percent',
-            'max_reward_usage_flat', 'conversion_rate', 'is_active'
+            'max_reward_usage_flat', 'conversion_rate', 'is_active',
+            'is_referral_enabled', 'referral_reward_points',
+            'referee_reward_points', 'min_referral_order_amount'
         ]

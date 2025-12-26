@@ -177,7 +177,7 @@ class Order(models.Model):
                 try:
                     config = RetailerRewardConfig.objects.filter(retailer=self.retailer).first()
                     if config and config.is_active:
-                        # Calculate points
+                        # 1. Award standard cashback points
                         points_to_earn = (self.total_amount * config.cashback_percentage) / Decimal('100.0')
                         points_to_earn = round(points_to_earn, 2)
                         
@@ -191,6 +191,36 @@ class Order(models.Model):
                             )
                             loyalty.points += points_to_earn
                             loyalty.save()
+
+                        # 2. Process Referral Reward
+                        if config.is_referral_enabled:
+                            from customers.models import CustomerReferral
+                            referral = CustomerReferral.objects.filter(
+                                retailer=self.retailer,
+                                referee=self.customer,
+                                is_rewarded=False
+                            ).first()
+
+                            if referral and self.total_amount >= config.min_referral_order_amount:
+                                # Reward Referrer
+                                referrer_loyalty, _ = CustomerLoyalty.objects.get_or_create(
+                                    customer=referral.referrer,
+                                    retailer=self.retailer
+                                )
+                                referrer_loyalty.points += config.referral_reward_points
+                                referrer_loyalty.save()
+
+                                # Reward Referee
+                                referee_loyalty, _ = CustomerLoyalty.objects.get_or_create(
+                                    customer=self.customer,
+                                    retailer=self.retailer
+                                )
+                                referee_loyalty.points += config.referee_reward_points
+                                referee_loyalty.save()
+
+                                # Mark referral as rewarded
+                                referral.is_rewarded = True
+                                referral.save()
                         
                 except Exception as e:
                     print(f"Error awarding points: {e}")

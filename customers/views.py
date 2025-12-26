@@ -8,7 +8,7 @@ from django.utils import timezone
 from datetime import timedelta
 import logging
 
-from .models import CustomerProfile, CustomerAddress, CustomerWishlist, CustomerNotification, CustomerLoyalty
+from .models import CustomerProfile, CustomerAddress, CustomerWishlist, CustomerNotification, CustomerLoyalty, CustomerReferral
 from .serializers import (
     CustomerProfileSerializer, CustomerAddressSerializer, CustomerAddressUpdateSerializer,
     CustomerWishlistSerializer, CustomerNotificationSerializer, CustomerDashboardSerializer,
@@ -44,6 +44,10 @@ def get_customer_profile(request):
         # Get or create customer profile
         profile, created = CustomerProfile.objects.get_or_create(user=request.user)
         
+        # Ensure referral code exists (for existing profiles created before the field was added)
+        if not profile.referral_code:
+            profile.save()
+            
         serializer = CustomerProfileSerializer(profile)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
@@ -658,3 +662,109 @@ def get_retailer_customers_loyalty(request):
             {'error': 'Internal server error'}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def apply_referral_code(request):
+    """
+    Link a customer to a referrer for a specific retailer using a referral code
+    """
+    try:
+        if request.user.user_type != 'customer':
+            return Response(
+                {'error': 'Only customers can apply referral codes'}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+            
+        referral_code = request.data.get('referral_code')
+        retailer_id = request.data.get('retailer_id')
+        
+        if not referral_code or not retailer_id:
+            return Response(
+                {'error': 'Referral code and Retailer ID are required'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        retailer = get_object_or_404(RetailerProfile, id=retailer_id)
+        
+        # Find the referrer
+        referrer_profile = get_object_or_404(CustomerProfile, referral_code=referral_code)
+        referrer = referrer_profile.user
+        
+        if referrer == request.user:
+            return Response(
+                {'error': 'You cannot refer yourself'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        # Check if referral already exists for this retailer
+        if CustomerReferral.objects.filter(retailer=retailer, referee=request.user).exists():
+            return Response(
+                {'error': 'You have already been referred to this retailer'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        # Create the referral
+        CustomerReferral.objects.create(
+            referrer=referrer,
+            retailer=retailer,
+            referee=request.user
+        )
+        
+        logger.info(f"Referral applied: {referrer.username} referred {request.user.username} to {retailer.shop_name}")
+        return Response(
+            {'message': 'Referral code applied successfully. Points will be awarded after your first successful purchase at this shop.'}, 
+            status=status.HTTP_201_CREATED
+        )
+        
+    except Exception as e:
+        logger.error(f"Error applying referral code: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def get_referral_stats(request):
+    """
+    Get referral statistics for the authenticated customer
+    """
+    try:
+        if request.user.user_type != 'customer':
+            return Response(
+                {'error': 'Only customers can access referral stats'}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+            
+        profile, created = CustomerProfile.objects.get_or_create(user=request.user)
+        
+        # Referrals made by this user
+        referrals_made = CustomerReferral.objects.filter(referrer=request.user).select_related('retailer', 'referee')
+        
+        data = {
+            'referral_code': profile.referral_code,
+            'total_referrals': referrals_made.count(),
+            'successful_referrals': referrals_made.filter(is_rewarded=True).count(),
+            'referrals_detail': []
+        }
+        
+        for ref in referrals_made:
+            data['referrals_detail'].append({
+                'referee_name': ref.referee.get_full_name() or ref.referee.username,
+                'retailer_name': ref.retailer.shop_name,
+                'is_rewarded': ref.is_rewarded,
+                'created_at': ref.created_at
+            })
+            
+        return Response(data, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        logger.error(f"Error getting referral stats: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
