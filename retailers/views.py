@@ -159,7 +159,7 @@ def list_retailers(request):
     List retailers with filtering and search
     """
     try:
-        queryset = RetailerProfile.objects.filter(is_active=True)
+        queryset = RetailerProfile.objects.filter(is_active=True).prefetch_related('categories__category')
         
         # Apply filters
         city = request.query_params.get('city')
@@ -297,7 +297,7 @@ def get_retailer_reviews(request, retailer_id):
     """
     try:
         retailer = get_object_or_404(RetailerProfile, id=retailer_id)
-        reviews = RetailerReview.objects.filter(retailer=retailer).order_by('-created_at')
+        reviews = RetailerReview.objects.filter(retailer=retailer).select_related('customer').order_by('-created_at')
         
         # Pagination
         paginator = RetailerPagination()
@@ -456,7 +456,7 @@ def search_retailers(request):
             Q(state__icontains=query) |
             Q(categories__category__name__icontains=query),
             is_active=True
-        ).distinct()
+        ).prefetch_related('categories__category').distinct()
         
         # Apply additional filters
         city = request.query_params.get('city')

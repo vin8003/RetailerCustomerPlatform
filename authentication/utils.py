@@ -65,17 +65,11 @@ def verify_otp_helper(secret_key, otp_code):
         return False
 
 
-def send_sms_otp(phone_number, otp_code):
+def _send_sms_otp_thread(phone_number, otp_code, api_key, api_url):
     """
-    Send OTP via SMS using external SMS API
+    Internal function to send SMS in a background thread
     """
     try:
-        # For demo purposes, we'll use a generic SMS API structure
-        # In production, replace with actual SMS provider (Twilio, AWS SNS, etc.)
-
-        api_key = settings.SMS_API_KEY
-        api_url = settings.SMS_API_URL
-
         # Example payload structure - adjust based on your SMS provider
         payload = {
             'apikey': api_key,
@@ -88,26 +82,41 @@ def send_sms_otp(phone_number, otp_code):
             'Content-Type': 'application/json',
             'Authorization': f'Bearer {api_key}'
         }
+        
+        response = requests.post(api_url, json=payload, headers=headers, timeout=10)
 
+        if response.status_code == 200:
+            logger.info(f"SMS sent successfully to {phone_number}")
+        else:
+            logger.error(f"Failed to send SMS: {response.status_code} - {response.text}")
+    except Exception as e:
+        logger.error(f"Error sending SMS in thread: {str(e)}")
+
+def send_sms_otp(phone_number, otp_code):
+    """
+    Send OTP via SMS using external SMS API
+    Runs in a separate thread.
+    """
+    try:
         # For development/testing, just log the OTP
         if settings.DEBUG:
             logger.info(f"SMS OTP (DEBUG MODE): {otp_code} for {phone_number}")
             return True
 
-        response = requests.post(api_url, json=payload, headers=headers, timeout=10)
+        api_key = settings.SMS_API_KEY
+        api_url = settings.SMS_API_URL
 
-        if response.status_code == 200:
-            logger.info(f"SMS sent successfully to {phone_number}")
-            return True
-        else:
-            logger.error(f"Failed to send SMS: {response.status_code} - {response.text}")
-            return False
+        import threading
+        thread = threading.Thread(
+            target=_send_sms_otp_thread,
+            args=(phone_number, otp_code, api_key, api_url)
+        )
+        thread.start()
+        
+        return True
 
-    except requests.exceptions.RequestException as e:
-        logger.error(f"SMS API request failed: {str(e)}")
-        return False
     except Exception as e:
-        logger.error(f"Error sending SMS: {str(e)}")
+        logger.error(f"Error initiating SMS thread: {str(e)}")
         return False
 
 

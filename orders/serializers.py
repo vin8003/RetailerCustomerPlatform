@@ -39,7 +39,7 @@ class OrderListSerializer(serializers.ModelSerializer):
     
     def get_items_count(self, obj):
         """Get number of items in order"""
-        return obj.items.count()
+        return getattr(obj, 'items_count_annotated', obj.items.count())
 
 
 class OrderDetailSerializer(serializers.ModelSerializer):
@@ -128,7 +128,7 @@ class OrderCreateSerializer(serializers.Serializer):
         except Cart.DoesNotExist:
             raise serializers.ValidationError("Cart is empty")
         
-        cart_items = cart.items.all()
+        cart_items = cart.items.select_related('product').all()
         if not cart_items.exists():
             raise serializers.ValidationError("Cart is empty")
         
@@ -213,9 +213,13 @@ class OrderCreateSerializer(serializers.Serializer):
             
             order = Order.objects.create(**order_data)
             
-            # Create order items
+            # Prepare for bulk operations
+            order_items = []
+            products_to_update = []
+            from products.models import Product  # Ensure Product is imported
+
             for cart_item in cart_items:
-                OrderItem.objects.create(
+                order_items.append(OrderItem(
                     order=order,
                     product=cart_item.product,
                     product_name=cart_item.product.name,
@@ -224,10 +228,17 @@ class OrderCreateSerializer(serializers.Serializer):
                     quantity=cart_item.quantity,
                     unit_price=cart_item.product.price,
                     total_price=cart_item.total_price
-                )
+                ))
                 
-                # Reduce product quantity
-                cart_item.product.reduce_quantity(cart_item.quantity)
+                # Reduce product quantity in memory
+                cart_item.product.quantity -= cart_item.quantity
+                products_to_update.append(cart_item.product)
+            
+            # Bulk create items
+            OrderItem.objects.bulk_create(order_items)
+            
+            # Bulk update product quantities
+            Product.objects.bulk_update(products_to_update, ['quantity'])
             
             # Deduct points from customer profile if used
             if points_to_redeem > 0:

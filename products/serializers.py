@@ -88,12 +88,14 @@ class ProductListSerializer(serializers.ModelSerializer):
     
     def get_average_rating(self, obj):
         """Calculate average rating"""
+        if hasattr(obj, 'average_rating_annotated'):
+             return round(obj.average_rating_annotated, 2) if obj.average_rating_annotated else 0
         avg_rating = obj.reviews.aggregate(avg_rating=Avg('rating'))['avg_rating']
         return round(avg_rating, 2) if avg_rating else 0
     
     def get_review_count(self, obj):
         """Get review count"""
-        return obj.reviews.count()
+        return getattr(obj, 'review_count_annotated', obj.reviews.count())
 
 
 class ProductDetailSerializer(serializers.ModelSerializer):

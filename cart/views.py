@@ -3,6 +3,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from django.db import transaction
+from django.db.models import prefetch_related_objects
 import logging
 
 from .models import Cart, CartItem, CartHistory
@@ -39,6 +40,7 @@ def get_cart(request):
                     customer=request.user,
                     retailer=retailer
                 )
+                prefetch_related_objects([cart], 'items__product', 'retailer')
                 serializer = CartSerializer(cart)
                 return Response(serializer.data, status=status.HTTP_200_OK)
             except RetailerProfile.DoesNotExist:
@@ -48,7 +50,7 @@ def get_cart(request):
                 )
         else:
             # Get all carts for customer
-            carts = Cart.objects.filter(customer=request.user)
+            carts = Cart.objects.filter(customer=request.user).select_related('retailer').prefetch_related('items__product')
             serializer = CartSerializer(carts, many=True)
             return Response(serializer.data, status=status.HTTP_200_OK)
     
@@ -272,7 +274,7 @@ def get_cart_summary(request):
         
         try:
             retailer = RetailerProfile.objects.get(id=retailer_id, is_active=True)
-            cart = Cart.objects.get(customer=request.user, retailer=retailer)
+            cart = Cart.objects.prefetch_related('items__product').get(customer=request.user, retailer=retailer)
             
             # Calculate summary
             total_items = cart.total_items
@@ -354,7 +356,7 @@ def validate_cart(request):
         
         try:
             retailer = RetailerProfile.objects.get(id=retailer_id, is_active=True)
-            cart = Cart.objects.get(customer=request.user, retailer=retailer)
+            cart = Cart.objects.prefetch_related('items__product').get(customer=request.user, retailer=retailer)
             
             if cart.is_empty:
                 return Response(

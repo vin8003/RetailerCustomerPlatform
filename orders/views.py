@@ -97,15 +97,19 @@ def get_current_orders(request):
     try:
         user = request.user
         
+        # Base queryset with optimizations
+        # We annotate items_count to avoid N+1 count queries
+        base_qs = Order.objects.select_related('retailer', 'customer').annotate(items_count_annotated=Count('items'))
+
         if user.user_type == 'customer':
-            orders = Order.objects.filter(
+            orders = base_qs.filter(
                 customer=user,
                 status__in=['pending', 'confirmed', 'processing', 'packed', 'out_for_delivery']
             ).order_by('-created_at')
         elif user.user_type == 'retailer':
             try:
                 retailer = RetailerProfile.objects.get(user=user)
-                orders = Order.objects.filter(
+                orders = base_qs.filter(
                     retailer=retailer,
                     status__in=['pending', 'confirmed', 'processing', 'packed', 'out_for_delivery']
                 ).order_by('-created_at')
@@ -158,14 +162,17 @@ def get_order_history(request):
     try:
         user = request.user
         
+        # Base queryset with optimizations
+        base_qs = Order.objects.select_related('retailer', 'customer').annotate(items_count_annotated=Count('items'))
+
         if user.user_type == 'customer':
-            orders = Order.objects.filter(
+            orders = base_qs.filter(
                 customer=user
             ).order_by('-created_at')
         elif user.user_type == 'retailer':
             try:
                 retailer = RetailerProfile.objects.get(user=user)
-                orders = Order.objects.filter(
+                orders = base_qs.filter(
                     retailer=retailer
                 ).order_by('-created_at')
             except RetailerProfile.DoesNotExist:
@@ -235,12 +242,22 @@ def get_order_detail(request, order_id):
     try:
         user = request.user
         
+        # Optimize queryset for detail view
+        qs = Order.objects.select_related(
+            'retailer', 
+            'customer', 
+            'delivery_address'
+        ).prefetch_related(
+            'items',
+            'items__product'
+        )
+
         if user.user_type == 'customer':
-            order = get_object_or_404(Order, id=order_id, customer=user)
+            order = get_object_or_404(qs, id=order_id, customer=user)
         elif user.user_type == 'retailer':
             try:
                 retailer = RetailerProfile.objects.get(user=user)
-                order = get_object_or_404(Order, id=order_id, retailer=retailer)
+                order = get_object_or_404(qs, id=order_id, retailer=retailer)
             except RetailerProfile.DoesNotExist:
                 return Response(
                     {'error': 'Retailer profile not found'}, 
@@ -479,28 +496,21 @@ def get_order_stats(request):
         total_products = Product.objects.filter(retailer=retailer).count()
         today = timezone.now().date()
         
-        # Calculate statistics
-        total_orders = orders.count()
-        pending_orders = orders.filter(status='pending').count()
-        confirmed_orders = orders.filter(status='confirmed').count()
-        delivered_orders = orders.filter(status='delivered').count()
-        cancelled_orders = orders.filter(status='cancelled').count()
+        # Calculate statistics with optimized aggregation
+        stats = orders.aggregate(
+            total_orders=Count('id'),
+            pending_orders=Count('id', filter=Q(status='pending')),
+            confirmed_orders=Count('id', filter=Q(status='confirmed')),
+            delivered_orders=Count('id', filter=Q(status='delivered')),
+            cancelled_orders=Count('id', filter=Q(status='cancelled')),
+            total_revenue=Sum('total_amount', filter=Q(status='delivered')),
+            avg_order_value=Avg('total_amount', filter=Q(status='delivered'))
+        )
         
-        # Revenue calculations
-        total_revenue = orders.filter(status='delivered').aggregate(
-            total=Sum('total_amount')
-        )['total'] or 0
-        
-        today_orders = orders.filter(created_at__date=today).count()
-        today_revenue = orders.filter(
-            created_at__date=today,
-            status='delivered'
-        ).aggregate(total=Sum('total_amount'))['total'] or 0
-        
-        # Average order value
-        avg_order_value = orders.filter(status='delivered').aggregate(
-            avg=Avg('total_amount')
-        )['avg'] or 0
+        today_stats = orders.filter(created_at__date=today).aggregate(
+            today_orders=Count('id'),
+            today_revenue=Sum('total_amount', filter=Q(status='delivered'))
+        )
         
         # Top customers
         top_customers = orders.filter(status='delivered').values(
@@ -511,7 +521,7 @@ def get_order_stats(request):
         ).order_by('-total_spent')[:5]
         
         # Recent orders
-        recent_orders = orders.order_by('-created_at')[:5]
+        recent_orders = orders.select_related('customer').order_by('-created_at')[:5]
         recent_orders_data = []
         for order in recent_orders:
             recent_orders_data.append({
@@ -524,15 +534,15 @@ def get_order_stats(request):
             })
         
         stats_data = {
-            'total_orders': total_orders,
-            'pending_orders': pending_orders,
-            'confirmed_orders': confirmed_orders,
-            'delivered_orders': delivered_orders,
-            'cancelled_orders': cancelled_orders,
-            'total_revenue': total_revenue,
-            'today_orders': today_orders,
-            'today_revenue': today_revenue,
-            'average_order_value': avg_order_value,
+            'total_orders': stats['total_orders'] or 0,
+            'pending_orders': stats['pending_orders'] or 0,
+            'confirmed_orders': stats['confirmed_orders'] or 0,
+            'delivered_orders': stats['delivered_orders'] or 0,
+            'cancelled_orders': stats['cancelled_orders'] or 0,
+            'total_revenue': stats['total_revenue'] or 0,
+            'today_orders': today_stats['today_orders'] or 0,
+            'today_revenue': today_stats['today_revenue'] or 0,
+            'average_order_value': stats['avg_order_value'] or 0,
             'top_customers': list(top_customers),
             'recent_orders': recent_orders_data,
             'total_products': total_products,

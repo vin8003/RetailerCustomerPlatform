@@ -54,7 +54,12 @@ def get_retailer_products(request):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        products = Product.objects.filter(retailer=retailer).order_by('-created_at')
+        products = Product.objects.select_related(
+            'retailer', 'category', 'brand'
+        ).annotate(
+            average_rating_annotated=Avg('reviews__rating'),
+            review_count_annotated=Count('reviews')
+        ).filter(retailer=retailer).order_by('-created_at')
 
         # Apply filters
         category = request.query_params.get('category')
@@ -314,7 +319,12 @@ def get_retailer_products_public(request, retailer_id):
     try:
         retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
 
-        products = Product.objects.filter(
+        products = Product.objects.select_related(
+            'retailer', 'category', 'brand'
+        ).annotate(
+            average_rating_annotated=Avg('reviews__rating'),
+            review_count_annotated=Count('reviews')
+        ).filter(
             retailer=retailer,
             is_active=True,
             is_available=True
