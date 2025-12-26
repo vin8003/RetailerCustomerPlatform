@@ -33,7 +33,7 @@ class OrderListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Order
         fields = [
-            'id', 'order_number', 'retailer_name', 'customer_name', 'delivery_mode', 'payment_mode',
+            'id', 'order_number', 'retailer', 'retailer_name', 'customer_name', 'delivery_mode', 'payment_mode',
             'status', 'total_amount', 'items_count', 'created_at', 'updated_at'
         ]
     
@@ -61,7 +61,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
         model = Order
         fields = [
             'id', 'order_number', 'customer_name', 'customer_phone', 'customer_email',
-            'retailer_name', 'retailer_phone',
+            'retailer', 'retailer_name', 'retailer_phone',
             'retailer_address', 'delivery_mode', 'payment_mode', 'status',
             'subtotal', 'delivery_fee', 'discount_amount', 'discount_from_points', 'points_redeemed', 'total_amount',
             'special_instructions', 'cancellation_reason', 'delivery_address_text',
@@ -425,6 +425,7 @@ class OrderStatsSerializer(serializers.Serializer):
     recent_orders = serializers.ListField()
     total_products = serializers.IntegerField(required=False)
     average_rating = serializers.FloatField(required=False)
+    recent_reviews = serializers.ListField(required=False)
 
 
 class OrderModificationSerializer(serializers.Serializer):

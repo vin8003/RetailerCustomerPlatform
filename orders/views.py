@@ -14,7 +14,8 @@ from .serializers import (
     OrderStatusUpdateSerializer, OrderFeedbackSerializer, OrderReturnSerializer,
     OrderStatsSerializer, OrderModificationSerializer
 )
-from retailers.models import RetailerProfile
+from retailers.models import RetailerProfile, RetailerReview
+from retailers.serializers import RetailerReviewSerializer
 from customers.models import CustomerAddress
 from common.notifications import send_push_notification
 
@@ -546,7 +547,11 @@ def get_order_stats(request):
             'top_customers': list(top_customers),
             'recent_orders': recent_orders_data,
             'total_products': total_products,
-            'average_rating': float(retailer.average_rating)
+            'average_rating': float(retailer.average_rating),
+            'recent_reviews': RetailerReviewSerializer(
+                RetailerReview.objects.filter(retailer=retailer).order_by('-created_at')[:5],
+                many=True
+            ).data
         }
         
         serializer = OrderStatsSerializer(stats_data)
