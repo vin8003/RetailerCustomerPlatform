@@ -15,7 +15,9 @@ SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-change-this-in-production'
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'True').lower() == 'true'
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+if '*' in ALLOWED_HOSTS:
+    ALLOWED_HOSTS = ['*']
 
 # Application definition
 INSTALLED_APPS = [
@@ -25,6 +27,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'whitenoise.runserver_nostatic',
 
     # Third party apps
     'rest_framework',
@@ -47,6 +50,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -76,22 +80,14 @@ TEMPLATES = [
 WSGI_APPLICATION = 'ordering_platform.wsgi.application'
 
 # Database
-# DATABASES = {
-#     'default': {
-#         'ENGINE': 'django.db.backends.postgresql',
-#         'NAME': os.getenv('PGDATABASE', 'ordering_platform'),
-#         'USER': os.getenv('PGUSER', 'postgres'),
-#         'PASSWORD': os.getenv('PGPASSWORD', ''),
-#         'HOST': os.getenv('PGHOST', 'localhost'),
-#         'PORT': os.getenv('PGPORT', '5432'),
-#     }
-# }
+import dj_database_url
 
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',  # Use SQLite backend
-        'NAME': os.path.join(BASE_DIR, 'db.sqlite3'),  # Path to the SQLite database file
-    }
+    'default': dj_database_url.config(
+        default=f"sqlite:///{os.path.join(BASE_DIR, 'db.sqlite3')}",
+        conn_max_age=600,
+        conn_health_checks=True,
+    )
 }
 
 # Custom user model
@@ -125,6 +121,9 @@ STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 STATICFILES_DIRS = [
     os.path.join(BASE_DIR, 'static'),
 ]
+
+# Whitenoise storage for compressed and hashed files
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 # Media files
 MEDIA_URL = '/media/'
@@ -182,6 +181,13 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
 
 CORS_ALLOW_CREDENTIALS = True
 
+# CSRF settings for production
+CSRF_TRUSTED_ORIGINS = [
+    f"https://{host}" for host in os.getenv('ALLOWED_HOSTS', '').split(',') if host
+]
+if os.getenv('RENDER_EXTERNAL_URL'):
+    CSRF_TRUSTED_ORIGINS.append(os.getenv('RENDER_EXTERNAL_URL'))
+
 # SMS Configuration (using a generic SMS API)
 SMS_API_KEY = os.getenv('SMS_API_KEY', 'your-sms-api-key')
 SMS_API_URL = os.getenv('SMS_API_URL', 'https://api.example.com/sms/send')
@@ -199,27 +205,28 @@ DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10MB
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
-    'handlers': {
-        'file': {
-            'level': 'INFO',
-            'class': 'logging.FileHandler',
-            'filename': 'django.log',
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}',
+            'style': '{',
         },
+    },
+    'handlers': {
         'console': {
             'level': 'INFO',
             'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
         },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'INFO',
     },
     'loggers': {
         'django': {
-            'handlers': ['file', 'console'],
-            'level': 'INFO',
-            'propagate': True,
-        },
-        'ordering_platform': {
-            'handlers': ['file', 'console'],
-            'level': 'INFO',
-            'propagate': True,
+            'handlers': ['console'],
+            'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO'),
+            'propagate': False,
         },
     },
 }
