@@ -10,6 +10,7 @@ urlpatterns = [
     path('<int:product_id>/delete/', views.delete_product, name='delete_product'),
     path('upload/', views.upload_products_excel, name='upload_products_excel'),
     path('stats/', views.get_product_stats, name='get_product_stats'),
+    path('master/search/', views.search_master_product, name='search_master_product'), # NEW
 
     # Public product endpoints
     path('retailer/<int:retailer_id>/', views.get_retailer_products_public, name='get_retailer_products_public'),

@@ -13,13 +13,13 @@ import logging
 
 from .models import (
     Product, ProductCategory, ProductBrand, ProductReview,
-    ProductUpload, ProductInventoryLog
+    ProductUpload, ProductInventoryLog, MasterProduct
 )
 from .serializers import (
     ProductListSerializer, ProductDetailSerializer, ProductCreateSerializer,
     ProductUpdateSerializer, ProductCategorySerializer, ProductBrandSerializer,
     ProductReviewSerializer, ProductUploadSerializer, ProductBulkUploadSerializer,
-    ProductStatsSerializer
+    ProductStatsSerializer, MasterProductSerializer
 )
 from retailers.models import RetailerProfile
 from common.permissions import IsRetailerOwner
@@ -791,6 +791,46 @@ def create_product_category(request):
 
     except Exception as e:
         logger.error(f"Error creating category: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def search_master_product(request):
+    """
+    Search for a product in the Master Product Catalog by barcode
+    """
+    try:
+        # Permission check: Only Retailers
+        if request.user.user_type != 'retailer':
+            return Response(
+                {'error': 'Only retailers can search master products'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+            
+        barcode = request.query_params.get('barcode')
+        if not barcode:
+            return Response(
+                {'error': 'Barcode parameter is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        try:
+            # Case insensitive exact match for barcode
+            master_product = MasterProduct.objects.get(barcode__iexact=barcode.strip())
+            serializer = MasterProductSerializer(master_product)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+            
+        except MasterProduct.DoesNotExist:
+             return Response(
+                {'message': 'Product not found in master catalog'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+            
+    except Exception as e:
+        logger.error(f"Error searching master product: {str(e)}")
         return Response(
             {'error': 'Internal server error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR

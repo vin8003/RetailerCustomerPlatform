@@ -698,10 +698,17 @@ def apply_referral_code(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
             
-        # Check if referral already exists for this retailer
-        if CustomerReferral.objects.filter(retailer=retailer, referee=request.user).exists():
+        # 1. Global Check: Has this user already been referred anywhere?
+        if CustomerReferral.objects.filter(referee=request.user).exists():
             return Response(
-                {'error': 'You have already been referred to this retailer'}, 
+                {'error': 'You have already applied a referral code.'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 2. Existing Order Check: Has this user already placed any orders?
+        if Order.objects.filter(customer=request.user).exists():
+            return Response(
+                {'error': 'Referral codes can only be applied by new users before their first order.'}, 
                 status=status.HTTP_400_BAD_REQUEST
             )
             

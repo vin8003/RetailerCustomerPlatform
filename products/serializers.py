@@ -2,7 +2,7 @@ from rest_framework import serializers
 from django.db.models import Avg
 from .models import (
     Product, ProductCategory, ProductBrand, ProductImage, 
-    ProductReview, ProductUpload
+    ProductReview, ProductUpload, MasterProduct
 )
 
 
@@ -145,6 +145,23 @@ class ProductDetailSerializer(serializers.ModelSerializer):
         return obj.reviews.count()
 
 
+
+class MasterProductSerializer(serializers.ModelSerializer):
+    """
+    Serializer for Master Product
+    """
+    category_name = serializers.CharField(source='category.name', read_only=True)
+    brand_name = serializers.CharField(source='brand.name', read_only=True)
+    
+    class Meta:
+        model = MasterProduct
+        fields = [
+            'id', 'barcode', 'name', 'description', 
+            'category', 'category_name', 'brand', 'brand_name',
+            'image_url', 'mrp', 'attributes', 'created_at'
+        ]
+
+
 class ProductCreateSerializer(serializers.ModelSerializer):
     """
     Serializer for creating products
@@ -155,7 +172,8 @@ class ProductCreateSerializer(serializers.ModelSerializer):
             'name', 'description', 'category', 'brand', 'price',
             'original_price', 'discount_percentage', 'quantity', 'unit',
             'minimum_order_quantity', 'maximum_order_quantity', 'image',
-            'images', 'specifications', 'tags', 'is_featured', 'is_available'
+            'images', 'specifications', 'tags', 'is_featured', 'is_available',
+            'barcode', 'master_product'
         ]
     
     def validate(self, data):
@@ -189,7 +207,8 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
             'name', 'description', 'category', 'brand', 'price',
             'original_price', 'discount_percentage', 'quantity', 'unit',
             'minimum_order_quantity', 'maximum_order_quantity', 'image',
-            'images', 'specifications', 'tags', 'is_featured', 'is_available'
+            'images', 'specifications', 'tags', 'is_featured', 'is_available',
+            'barcode', 'master_product'
         ]
     
     def validate(self, data):

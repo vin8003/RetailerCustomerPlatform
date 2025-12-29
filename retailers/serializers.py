@@ -44,7 +44,7 @@ class RetailerProfileSerializer(serializers.ModelSerializer):
             'whatsapp_number', 'address_line1', 'address_line2', 'city', 
             'state', 'pincode', 'country', 'latitude', 'longitude',
             'business_type', 'gst_number', 'pan_number', 'offers_delivery',
-            'offers_pickup', 'delivery_radius', 'minimum_order_amount',
+            'offers_pickup', 'delivery_radius', 'serviceable_pincodes', 'minimum_order_amount',
             'is_verified', 'is_active', 'average_rating', 'total_ratings',
             'operating_hours', 'categories', 'created_at', 'updated_at'
         ]
@@ -62,7 +62,7 @@ class RetailerProfileUpdateSerializer(serializers.ModelSerializer):
             'contact_phone', 'whatsapp_number', 'address_line1', 'address_line2',
             'city', 'state', 'pincode', 'country', 'latitude', 'longitude',
             'business_type', 'gst_number', 'pan_number', 'offers_delivery',
-            'offers_pickup', 'delivery_radius', 'minimum_order_amount'
+            'offers_pickup', 'delivery_radius', 'serviceable_pincodes', 'minimum_order_amount'
         ]
     
     def validate_pincode(self, value):

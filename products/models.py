@@ -34,6 +34,8 @@ class ProductCategory(models.Model):
         return self.name
 
 
+
+
 class ProductBrand(models.Model):
     """
     Brands for products
@@ -52,6 +54,45 @@ class ProductBrand(models.Model):
     
     def __str__(self):
         return self.name
+
+
+class MasterProduct(models.Model):
+    """
+    Master catalog of products (e.g. from OpenFoodFacts)
+    """
+    barcode = models.CharField(max_length=50, unique=True, db_index=True)
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    category = models.ForeignKey(
+        ProductCategory, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True,
+        related_name='master_products'
+    )
+    brand = models.ForeignKey(
+        ProductBrand, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True,
+        related_name='master_products'
+    )
+    image_url = models.URLField(max_length=500, blank=True, null=True)
+    mrp = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text="Maximum Retail Price")
+    attributes = models.JSONField(default=dict, blank=True)  # Ingredients, nutrition, etc.
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'master_product'
+        indexes = [
+            models.Index(fields=['name']),
+            models.Index(fields=['barcode']),
+        ]
+    
+    def __str__(self):
+        return f"{self.name} ({self.barcode})"
 
 
 class Product(models.Model):
@@ -94,6 +135,16 @@ class Product(models.Model):
         blank=True,
         related_name='products'
     )
+    
+    # Master Catalog Link
+    master_product = models.ForeignKey(
+        MasterProduct,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='retailer_products'
+    )
+    barcode = models.CharField(max_length=50, blank=True, null=True, db_index=True)
     
     # Pricing
     price = models.DecimalField(

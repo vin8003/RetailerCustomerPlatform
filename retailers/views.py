@@ -212,25 +212,50 @@ def list_retailers(request):
         # Location-based filtering (if coordinates provided)
         lat = request.query_params.get('lat')
         lng = request.query_params.get('lng')
-        max_distance = request.query_params.get('max_distance')
+        user_pincode = request.query_params.get('user_pincode')
         
+        # City-wise filtering (Compulsory if city provided)
+        if city:
+            queryset = queryset.filter(city__iexact=city)
+
         if lat and lng:
             try:
                 lat = float(lat)
                 lng = float(lng)
                 request.user_location = (lat, lng)
                 
-                if max_distance:
-                    max_distance = float(max_distance)
-                    # Filter by distance (simplified - in production, use PostGIS)
-                    filtered_retailers = []
-                    for retailer in queryset:
-                        distance = retailer.get_distance_from(lat, lng)
-                        if distance and distance <= max_distance:
-                            filtered_retailers.append(retailer.id)
-                    queryset = queryset.filter(id__in=filtered_retailers)
+                # Filter by distance and serviceable pincodes
+                filtered_retailer_ids = []
+                for retailer in queryset:
+                    # 1. Check Pincode Specific Restriction
+                    if user_pincode and retailer.serviceable_pincodes:
+                        if user_pincode in retailer.serviceable_pincodes:
+                            filtered_retailer_ids.append(retailer.id)
+                            continue
+                        elif retailer.pincode != user_pincode and retailer.serviceable_pincodes:
+                             # If pincodes are restricted and user's pincode is not in it, skip
+                             # unless it's their own pincode (which is always serviceable?)
+                             # Actually if they specify serviceable_pincodes, it overrides?
+                             # Let's say: if serviceable_pincodes is set, it MUST be in it.
+                             pass
+                    
+                    # 2. Check Distance Restriction
+                    distance = retailer.get_distance_from(lat, lng)
+                    if distance is not None:
+                         # Use retailer's specific radius or default to 5km
+                         radius = retailer.delivery_radius or 5
+                         if distance <= radius:
+                             filtered_retailer_ids.append(retailer.id)
+                
+                queryset = queryset.filter(id__in=filtered_retailer_ids)
             except ValueError:
                 pass
+        elif user_pincode:
+            # If coordinates not provided but pincode is, filter by pincode
+            queryset = queryset.filter(
+                Q(pincode=user_pincode) | 
+                Q(serviceable_pincodes__contains=user_pincode)
+            )
         
         # Pagination
         paginator = RetailerPagination()
