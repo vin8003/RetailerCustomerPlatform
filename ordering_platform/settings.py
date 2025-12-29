@@ -9,6 +9,11 @@ from datetime import timedelta
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Load environment variables
+from dotenv import load_dotenv
+env_path = os.path.join(BASE_DIR, '.env')
+load_dotenv(env_path)
+
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-change-this-in-production')
 
@@ -80,15 +85,28 @@ TEMPLATES = [
 WSGI_APPLICATION = 'ordering_platform.wsgi.application'
 
 # Database
+# https://docs.djangoproject.com/en/stable/ref/settings/#databases
 import dj_database_url
 
 DATABASES = {
     'default': dj_database_url.config(
-        default=f"sqlite:///{os.path.join(BASE_DIR, 'db.sqlite3')}",
+        default=os.getenv('DATABASE_URL') or (
+            f"postgres://{os.getenv('DB_USER', 'vin8003')}:{os.getenv('DB_PASSWORD', 'your_password')}@"
+            f"{os.getenv('DB_HOST', 'dpg-d595ftn5r7bs7392fk10-a.singapore-postgres.render.com')}:"
+            f"{os.getenv('DB_PORT', '5432')}/{os.getenv('DB_NAME', 'db_name_xihp')}"
+        ),
         conn_max_age=600,
         conn_health_checks=True,
     )
 }
+
+# Production adjustments for PostgreSQL
+if 'postgresql' in DATABASES['default'].get('ENGINE', ''):
+    DATABASES['default'].setdefault('OPTIONS', {})
+    # Render and many production environments require SSL
+    if not DEBUG:
+        DATABASES['default']['OPTIONS']['sslmode'] = 'require'
+
 
 # Custom user model
 AUTH_USER_MODEL = 'authentication.User'
@@ -174,10 +192,13 @@ SIMPLE_JWT = {
 }
 
 # CORS settings
-CORS_ALLOWED_ORIGIN_REGEXES = [
-    r"^https?://localhost:\d+$",
-    r"^https?://127.0.0.1:\d+$",
-]
+if DEBUG:
+    CORS_ALLOWED_ORIGIN_REGEXES = [
+        r"^https?://localhost:\d+$",
+        r"^https?://127.0.0.1:\d+$",
+    ]
+else:
+    CORS_ALLOWED_ORIGIN_REGEXES = []
 
 CORS_ALLOW_CREDENTIALS = True
 
@@ -263,10 +284,6 @@ FCM_DJANGO_SETTINGS = {
 # Firebase Admin SDK Initialization
 import firebase_admin
 from firebase_admin import credentials
-from dotenv import load_dotenv
-
-env_path = os.path.join(BASE_DIR, '.env')
-load_dotenv(env_path) # Force load .env from project root
 
 if not firebase_admin._apps:
     try:
