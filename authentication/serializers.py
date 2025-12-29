@@ -190,3 +190,39 @@ class PasswordChangeSerializer(serializers.Serializer):
         if not user.check_password(value):
             raise serializers.ValidationError("Old password is incorrect")
         return value
+
+
+class ForgotPasswordSerializer(serializers.Serializer):
+    """
+    Serializer for password reset request (OTP generation)
+    """
+    phone_number = serializers.CharField(max_length=15)
+
+    def validate_phone_number(self, value):
+        # reuse logic or just simple check
+        from .utils import clean_phone_number
+        cleaned = clean_phone_number(value)
+        if not User.objects.filter(phone_number=cleaned).exists():
+            raise serializers.ValidationError("No account found with this phone number.")
+        return cleaned
+
+
+class ResetPasswordConfirmSerializer(serializers.Serializer):
+    """
+    Serializer for password reset confirmation (OTP verification + new password)
+    """
+    phone_number = serializers.CharField(max_length=15)
+    otp_code = serializers.CharField(max_length=6, required=False)
+    firebase_token = serializers.CharField(required=False)
+    new_password = serializers.CharField(write_only=True, validators=[validate_password])
+    confirm_password = serializers.CharField(write_only=True)
+
+    def validate(self, attrs):
+        if attrs['new_password'] != attrs['confirm_password']:
+            raise serializers.ValidationError({"new_password": "Passwords don't match"})
+            
+        if not attrs.get('otp_code') and not attrs.get('firebase_token'):
+            raise serializers.ValidationError("Either otp_code or firebase_token must be provided.")
+            
+        return attrs
+

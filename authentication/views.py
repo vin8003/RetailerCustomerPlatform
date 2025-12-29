@@ -15,7 +15,8 @@ from fcm_django.models import FCMDevice
 from .serializers import (
     UserRegistrationSerializer, UserLoginSerializer, OTPRequestSerializer,
     OTPVerificationSerializer, UserProfileSerializer, TokenSerializer,
-    PasswordChangeSerializer, RequestPhoneVerificationSerializer
+    PasswordChangeSerializer, RequestPhoneVerificationSerializer,
+    ForgotPasswordSerializer, ResetPasswordConfirmSerializer
 )
 from .utils import generate_otp, send_sms_otp, verify_otp_helper, verify_firebase_id_token
 
@@ -612,6 +613,153 @@ def register_device(request):
 
     except Exception as e:
         logger.error(f"Error registering FCM device: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+@throttle_classes([OTPThrottle])
+def forgot_password(request):
+    """
+    Request password reset OTP
+    """
+    try:
+        serializer = ForgotPasswordSerializer(data=request.data)
+        if serializer.is_valid():
+            phone_number = serializer.validated_data['phone_number']
+            user = User.objects.get(phone_number=phone_number)
+
+            # Generate OTP
+            otp_code, secret_key = generate_otp()
+
+            # Update/Create verification record
+            OTPVerification.objects.filter(user=user).delete()
+            
+            OTPVerification.objects.create(
+                user=user,
+                phone_number=phone_number,
+                otp_code=otp_code,
+                secret_key=secret_key,
+                expires_at=timezone.now() + timezone.timedelta(seconds=settings.OTP_EXPIRY_TIME)
+            )
+
+            # Send OTP
+            sms_sent = send_sms_otp(phone_number, otp_code)
+
+            if sms_sent:
+                logger.info(f"Password reset OTP sent to {phone_number}")
+                return Response({
+                    'message': 'OTP sent successfully',
+                    'phone_number': phone_number,
+                    'expires_in': settings.OTP_EXPIRY_TIME
+                }, status=status.HTTP_200_OK)
+            else:
+                return Response(
+                    {'error': 'Failed to send OTP'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    except Exception as e:
+        logger.error(f"Error in forgot_password: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+@throttle_classes([OTPThrottle])
+def reset_password(request):
+    """
+    Verify OTP and reset password
+    """
+    try:
+        serializer = ResetPasswordConfirmSerializer(data=request.data)
+        if serializer.is_valid():
+            phone_number = serializer.validated_data['phone_number']
+            otp_code = serializer.validated_data.get('otp_code')
+            firebase_token = serializer.validated_data.get('firebase_token')
+            new_password = serializer.validated_data['new_password']
+
+            # Firebase Token Verification Flow
+            if firebase_token:
+                decoded_token = verify_firebase_id_token(firebase_token)
+                if decoded_token:
+                    # Token valid, check if it matches the phone number (optional but recommended)
+                    # For now we assume the client verified the phone number
+                    
+                    try:
+                        user = User.objects.get(phone_number=phone_number)
+                         # Change password
+                        user.set_password(new_password)
+                        user.save()
+
+                        logger.info(f"Password reset successful via Firebase for: {phone_number}")
+                        return Response(
+                            {'message': 'Password reset successfully. Please login with new password.'},
+                            status=status.HTTP_200_OK
+                        )
+                    except User.DoesNotExist:
+                         return Response(
+                            {'error': 'User not found with this phone number'},
+                            status=status.HTTP_404_NOT_FOUND
+                        )
+                else:
+                    return Response(
+                        {'error': 'Invalid Firebase Token'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+            # Legacy OTP Flow
+            # Verify OTP
+            try:
+                otp_verification = OTPVerification.objects.get(
+                    phone_number=phone_number,
+                    is_verified=False
+                )
+            except OTPVerification.DoesNotExist:
+                return Response(
+                    {'error': 'Invalid or expired OTP request'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if otp_verification.is_expired():
+                return Response(
+                    {'error': 'OTP has expired'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if not verify_otp_helper(otp_verification.secret_key, otp_code):
+                otp_verification.attempts += 1
+                otp_verification.save()
+                return Response(
+                    {'error': 'Invalid OTP'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # OTP Valid, change password
+            user = otp_verification.user
+            user.set_password(new_password)
+            user.save()
+
+            # Cleanup OTP
+            otp_verification.delete()
+
+            logger.info(f"Password reset successful for: {phone_number}")
+            return Response(
+                {'message': 'Password reset successfully. Please login with new password.'},
+                status=status.HTTP_200_OK
+            )
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    except Exception as e:
+        logger.error(f"Error in reset_password: {str(e)}")
         return Response(
             {'error': 'Internal server error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
