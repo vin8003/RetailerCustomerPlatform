@@ -89,23 +89,16 @@ WSGI_APPLICATION = 'ordering_platform.wsgi.application'
 import dj_database_url
 
 DATABASES = {
-    'default': dj_database_url.config(
-        default=os.getenv('DATABASE_URL') or (
-            f"postgres://{os.getenv('DB_USER', 'vin8003')}:{os.getenv('DB_PASSWORD', 'your_password')}@"
-            f"{os.getenv('DB_HOST', 'dpg-d595ftn5r7bs7392fk10-a.singapore-postgres.render.com')}:"
-            f"{os.getenv('DB_PORT', '5432')}/{os.getenv('DB_NAME', 'db_name_xihp')}"
-        ),
-        conn_max_age=600,
-        conn_health_checks=True,
-    )
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'buyez_db',
+        'USER': 'buyez_user',
+        'PASSWORD': 'strongpassword',
+        'HOST': 'localhost',
+        'PORT': '5432',
+        'CONN_MAX_AGE': 600,
+    }
 }
-
-# Production adjustments for PostgreSQL
-if 'postgresql' in DATABASES['default'].get('ENGINE', ''):
-    DATABASES['default'].setdefault('OPTIONS', {})
-    # Render and many production environments require SSL
-    if not DEBUG:
-        DATABASES['default']['OPTIONS']['sslmode'] = 'require'
 
 
 # Custom user model
@@ -134,11 +127,9 @@ USE_I18N = True
 USE_TZ = True
 
 # Static files (CSS, JavaScript, Images)
-STATIC_URL = '/static/'
+STATIC_URL = "/static/"
+
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
-STATICFILES_DIRS = [
-    os.path.join(BASE_DIR, 'static'),
-]
 
 # Whitenoise storage for compressed and hashed files
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
@@ -206,8 +197,6 @@ CORS_ALLOW_CREDENTIALS = True
 CSRF_TRUSTED_ORIGINS = [
     f"https://{host}" for host in os.getenv('ALLOWED_HOSTS', '').split(',') if host
 ]
-if os.getenv('RENDER_EXTERNAL_URL'):
-    CSRF_TRUSTED_ORIGINS.append(os.getenv('RENDER_EXTERNAL_URL'))
 
 # SMS Configuration (using a generic SMS API)
 SMS_API_KEY = os.getenv('SMS_API_KEY', 'your-sms-api-key')
@@ -303,3 +292,11 @@ if not firebase_admin._apps:
             firebase_admin.initialize_app(options={'projectId': 'buyeasy-4003f'})
     except Exception as e:
         print(f"Warning: Firebase Admin SDK could not be initialized: {e}")
+
+
+CSRF_TRUSTED_ORIGINS = [
+    "http://80.225.240.187",
+]
+
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+CONN_MAX_AGE = 600
