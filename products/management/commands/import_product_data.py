@@ -101,13 +101,49 @@ class Command(BaseCommand):
                 pass
             
         # 1. Handle Brand
-        brand_name = "Unknown Brand"
         if item.get('brands'):
             # Take the first brand
             brand_name = item.get('brands').split(',')[0].strip()
+        
+        # Normalize Brand
+        # Copy of logic from consolidate_brands.py
+        BRAND_MAPPINGS = {
+            'nestlé': 'Nestle',
+            'nestle': 'Nestle',
+            'haldiram': "Haldiram's",
+            "haldiram's": "Haldiram's",
+            "haldirams": "Haldiram's",
+            'hul': 'Hindustan Unilever',
+            'hindustan unilever': 'Hindustan Unilever',
+            'itc': 'ITC',
+            'amul': 'Amul',
+            'britania': 'Britannia',
+            'britannia': 'Britannia',
+            'parle': 'Parle',
+            'parle agro': 'Parle',
+            'cadbury': 'Cadbury',
+            'mondelez': 'Cadbury',
+            'pepsi': 'PepsiCo',
+            'pepsico': 'PepsiCo',
+            'coca cola': 'Coca-Cola',
+            'coca-cola': 'Coca-Cola',
+            'coke': 'Coca-Cola',
+            'unknown brand': None,
+        }
+        
+        normalized_brand = "Unknown Brand"
+        if brand_name:
+            lower = brand_name.lower()
+            if lower in BRAND_MAPPINGS:
+                normalized_brand = BRAND_MAPPINGS[lower]
+            else:
+                normalized_brand = brand_name.title()
+                
+        if not normalized_brand:
+            normalized_brand = "Unknown Brand"
             
         brand, _ = ProductBrand.objects.get_or_create(
-            name=brand_name[:100], # Trucate to max length
+            name=normalized_brand[:100], 
             defaults={'is_active': True}
         )
         
@@ -133,20 +169,50 @@ class Command(BaseCommand):
             def clean_cat(c):
                 return c.split(':')[-1].replace('-', ' ').title()[:100]
 
-            # Let's try to build a chain of max 3 levels to avoid deep recursion if the list is huge
-            # Or just process the last 3 items
+            # Simplified: Map OFF tags to Core Categories directly matching logic in consolidate_categories.py
+            CORE_CATEGORIES = {
+                'Dairy & Bakery': ['milk', 'curd', 'yogurt', 'yoghurt', 'cheese', 'butter', 'paneer', 'cream', 'bread', 'cake', 'bakery', 'dessert', 'bun', 'rusk', 'paratha', 'roti', 'chapati', 'naan', 'kulcha', 'pav', 'muffin', 'pastry', 'croissant', 'bagel', 'dough', 'batter'],
+                'Beverages': ['tea', 'coffee', 'juice', 'soda', 'drink', 'water', 'beverage', 'sharbat', 'syrup', 'coke', 'pepsi', 'sprite', 'fanta', 'limca', 'thums up', 'maaza', 'frooti', 'slice', 'real', 'tropicana', 'sting', 'red bull', 'monster', 'gatorade', 'powerade', 'glucon-d', 'tang', 'rasna', 'bournvita', 'horlicks', 'boost', 'complan', 'malt', 'cocoa', 'squash', 'crush', 'mocktail', 'cocktail', 'wine', 'beer', 'whisky', 'vodka', 'rum', 'gin', 'brandy', 'tequila', 'liquor', 'alcohol'],
+                'Snacks & Munchies': ['biscuit', 'cookie', 'chip', 'crisp', 'namkeen', 'snack', 'chocolate', 'candy', 'sweet', 'popcorn', 'cracker', 'wafer', 'nacho', 'bhujia', 'sev', 'mixture', 'nut', 'dry fruit', 'seed', 'trail mix', 'bar', 'granola', 'energy bar', 'protein bar', 'gummy', 'jelly', 'marshmallow', 'lollipop', 'toffee', 'gum', 'mint', 'lozenge'],
+                'Staples & Spices': ['rice', 'flour', 'atta', 'dal', 'pulse', 'oil', 'ghee', 'salt', 'sugar', 'spice', 'masala', 'condiment', 'sauce', 'paste', 'pickle', 'papad', 'grain', 'cereal', 'wheat', 'maida', 'suji', 'rawa', 'besan', 'corn', 'millet', 'oat', 'quinoa', 'barley', 'sugar', 'jaggery', 'honey', 'molasses', 'syrup', 'vinegar', 'ketchup', 'mayonnaise', 'mustard', 'chilli', 'chili', 'pepper', 'turmeric', 'coriander', 'cumin', 'fenugreek', 'cardamom', 'clove', 'cinnamon', 'nutmeg', 'saffron', 'vanilla', 'yeast', 'baking', 'powder', 'soda', 'essence', 'color', 'flavour', 'flavor'],
+                'Instant Food & Noodles': ['noodle', 'pasta', 'soup', 'instant', 'ready to eat', 'frozen', 'maggi', 'yippee', 'top ramen', 'ching', 'knorr', 'soup', 'cup', 'meal', 'mix', 'packet', 'sachet', 'bowl', 'macaroni', 'spaghetti', 'vermicelli', 'fusilli', 'penne', 'lasagna', 'ravioli', 'pizza', 'burger', 'fries', 'nugget', 'sausage', 'bacon', 'ham', 'salami'],
+                'Personal Care': ['soap', 'shampoo', 'wash', 'tooth', 'paste', 'brush', 'hair', 'skin', 'face', 'cream', 'lotion', 'gel', 'powder', 'deo', 'perfume', 'scent', 'fragrance', 'makeup', 'lipstick', 'liner', 'mascara', 'shadow', 'foundation', 'concealer', 'blush', 'bronzer', 'highlighter', 'primer', 'remover', 'cleanser', 'toner', 'moisturizer', 'serum', 'mask', 'scrub', 'balm', 'oil', 'shave', 'razor', 'blade', 'foam', 'aftershave', 'beared', 'trimmer', 'grooming', 'sanitary', 'pad', 'napkin', 'tampon', 'cup', 'hygiene', 'condom', 'contraceptive', 'lubricant', 'pregnancy', 'test'],
+                'Household Needs': ['detergent', 'cleaner', 'wash', 'dish', 'floor', 'toilet', 'repel', 'freshener', 'mosquito', 'insect', 'mat', 'coil', 'liquid', 'spray', 'refill', 'bulb', 'light', 'battery', 'cell', 'torch', 'candle', 'match', 'box', 'lighter', 'incense', 'stick', 'agarbatti', 'dhoop', 'camphor', 'puja', 'worship', 'god', 'idol', 'tissue', 'paper', 'napkin', 'towel', 'foil', 'wrap', 'bag', 'bin', 'garbage', 'dust', 'broom', 'mop', 'brush', 'scrubber', 'sponge', 'glove', 'mask', 'sanitizer', 'disinfectant', 'bleach', 'acid', 'harpic', 'lizol', 'colin', 'vim', 'prill', 'surf', 'ariel', 'tide', 'wheel', 'rin', 'comfort', 'lenor', 'vanish'],
+                'Baby Care': ['diaper', 'baby', 'wipe', 'food', 'milk', 'formula', 'cereal', 'porridge', 'puree', 'juice', 'snack', 'biscuit', 'cookie', 'teether', 'soother', 'pacifier', 'bottle', 'nipple', 'sipper', 'cup', 'bowl', 'plate', 'spoon', 'fork', 'bib', 'apron', 'clothing', 'shoe', 'sock', 'bootie', 'mitten', 'cap', 'hat', 'blanket', 'swaddle', 'wrap', 'towel', 'cloth', 'napkin', 'tissue', 'wet', 'dry', 'cream', 'lotion', 'oil', 'powder', 'shampoo', 'wash', 'soap', 'bath', 'tub', 'toy', 'rattle', 'walker', 'stroller', 'pram', 'carrier', 'seat', 'bed', 'cot', 'mattress'],
+                'Pet Care': ['dog', 'cat', 'pet', 'food', 'treat', 'snack', 'biscuit', 'chew', 'bone', 'stick', 'toy', 'ball', 'rope', 'collar', 'leash', 'harness', 'bed', 'mat', 'cage', 'crate', 'carrier', 'bowl', 'shampoo', 'soap', 'brush', 'comb', 'litter', 'sand', 'tray', 'scoop', 'medicine', 'vitamin', 'supplement'],
+                'Fruits & Vegetables': ['fruit', 'vegetable', 'fresh', 'apple', 'banana', 'orange', 'grape', 'mango', 'pineapple', 'watermelon', 'melon', 'papaya', 'guava', 'pomegranate', 'kiwi', 'pear', 'peach', 'plum', 'cherry', 'berry', 'strawberry', 'blueberry', 'raspberry', 'blackberry', 'cranberry', 'date', 'fig', 'apricot', 'raisin', 'prune', 'potato', 'onion', 'tomato', 'garlic', 'ginger', 'chilli', 'pepper', 'capsicum', 'cucumber', 'carrot', 'radish', 'beetroot', 'turnip', 'sweet', 'corn', 'pea', 'bean', 'spinach', 'lettuce', 'cabbage', 'cauliflower', 'broccoli', 'brinjal', 'eggplant', 'okra', 'ladyfinger', 'pumpkin', 'gourd', 'squash', 'mushroom', 'lemon', 'lime', 'citrus', 'herb', 'coriander', 'mint', 'parsley', 'basil', 'oregano', 'thyme', 'rosemary', 'curry', 'leaf'],
+                'Breakfast & Cereals': ['oat', 'muesli', 'flake', 'cornflakes', 'chocos', 'loops', 'crunch', 'wheat', 'bran', 'honey', 'jam', 'spread', 'butter', 'peanut', 'almond', 'cashew', 'hazelnut', 'nutella', 'marmalade', 'preserve', 'conserve', 'syrup', 'maple', 'chocolate', 'fruit', 'berry'],
+            }
             
-            chain = category_hierarchy[-3:] # Get last 3
-            
-            current_parent = None
-            for cat_tag in chain:
-                cat_name = clean_cat(cat_tag)
-                cat_obj, _ = ProductCategory.objects.get_or_create(
-                    name=cat_name,
-                    defaults={'parent': current_parent, 'is_active': True}
+            # Helper to create core cats if not exist (should be created by migration script but just in case)
+            def get_core_cat(name):
+                cat, _ = ProductCategory.objects.get_or_create(
+                    name=name,
+                    defaults={'parent': None, 'is_active': True}
                 )
-                current_parent = cat_obj
-                final_category = cat_obj
+                return cat
+            
+            # Fallback
+            others_cat = get_core_cat('Others')
+            
+            search_text = " ".join([clean_cat(c) for c in category_hierarchy]).lower() + " " + name.lower()
+            
+            matched_cat_name = None
+            for core_name, keywords in CORE_CATEGORIES.items():
+                for keyword in keywords:
+                    if f" {keyword} " in f" {search_text} " or \
+                       search_text.startswith(keyword + " ") or \
+                       search_text.endswith(" " + keyword) or \
+                       search_text == keyword:
+                        matched_cat_name = core_name
+                        break
+                if matched_cat_name:
+                    break
+            
+            if matched_cat_name:
+                final_category = get_core_cat(matched_cat_name)
+            else:
+                final_category = others_cat
 
         # 3. Create/Update MasterProduct
         new_attrs = {

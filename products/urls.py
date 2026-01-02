@@ -11,6 +11,8 @@ urlpatterns = [
     path('upload/', views.upload_products_excel, name='upload_products_excel'),
     path('stats/', views.get_product_stats, name='get_product_stats'),
     path('master/search/', views.search_master_product, name='search_master_product'), # NEW
+    path('upload/check/', views.check_bulk_upload, name='check_bulk_upload'),
+    path('upload/complete/', views.complete_bulk_upload, name='complete_bulk_upload'),
 
     # Public product endpoints
     path('retailer/<int:retailer_id>/', views.get_retailer_products_public, name='get_retailer_products_public'),
