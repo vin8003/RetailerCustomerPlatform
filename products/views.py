@@ -193,7 +193,14 @@ def get_product_detail(request, product_id):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        product = get_object_or_404(Product, id=product_id, retailer=retailer)
+        # Optimize query with select_related and prefetch_related
+        queryset = Product.objects.select_related(
+            'retailer', 'category', 'brand'
+        ).prefetch_related(
+            'additional_images', 'reviews', 'reviews__customer'
+        )
+        
+        product = get_object_or_404(queryset, id=product_id, retailer=retailer)
         serializer = ProductDetailSerializer(product)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -399,8 +406,16 @@ def get_product_detail_public(request, retailer_id, product_id):
     """
     try:
         retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        
+        # Optimize query with select_related and prefetch_related
+        queryset = Product.objects.select_related(
+            'retailer', 'category', 'brand'
+        ).prefetch_related(
+            'additional_images', 'reviews', 'reviews__customer'
+        )
+        
         product = get_object_or_404(
-            Product,
+            queryset,
             id=product_id,
             retailer=retailer,
             is_active=True,

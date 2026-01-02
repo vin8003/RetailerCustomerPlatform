@@ -88,6 +88,7 @@ WSGI_APPLICATION = 'ordering_platform.wsgi.application'
 # https://docs.djangoproject.com/en/stable/ref/settings/#databases
 import dj_database_url
 
+# use sqlite
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
