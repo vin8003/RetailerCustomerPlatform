@@ -88,16 +88,12 @@ WSGI_APPLICATION = 'ordering_platform.wsgi.application'
 # https://docs.djangoproject.com/en/stable/ref/settings/#databases
 import dj_database_url
 
+# use sqlite
 DATABASES = {
-    'default': dj_database_url.config(
-        default=os.getenv('DATABASE_URL') or (
-            f"postgres://{os.getenv('DB_USER', 'vin8003')}:{os.getenv('DB_PASSWORD', 'your_password')}@"
-            f"{os.getenv('DB_HOST', 'dpg-d595ftn5r7bs7392fk10-a.singapore-postgres.render.com')}:"
-            f"{os.getenv('DB_PORT', '5432')}/{os.getenv('DB_NAME', 'db_name_xihp')}"
-        ),
-        conn_max_age=600,
-        conn_health_checks=True,
-    )
+    'default': {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',
+    }
 }
 
 # Production adjustments for PostgreSQL

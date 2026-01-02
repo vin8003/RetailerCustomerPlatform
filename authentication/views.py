@@ -12,6 +12,7 @@ import logging
 
 from .models import User, OTPVerification
 from fcm_django.models import FCMDevice
+from retailers.models import RetailerProfile, RetailerOperatingHours
 from .serializers import (
     UserRegistrationSerializer, UserLoginSerializer, OTPRequestSerializer,
     OTPVerificationSerializer, UserProfileSerializer, TokenSerializer,
@@ -45,6 +46,31 @@ def retailer_signup(request):
         serializer = UserRegistrationSerializer(data=data)
         if serializer.is_valid():
             user = serializer.save()
+
+            # Create RetailerProfile with default values
+            profile = RetailerProfile.objects.create(
+                user=user,
+                shop_name=f"{user.first_name or user.username}'s Shop",
+                shop_description='',
+                business_type='general',
+                address_line1='',
+                city='',
+                state='',
+                pincode='000000',
+                contact_phone=user.phone_number or '',
+                is_active=False,  # Inactive until profile is completed
+            )
+
+            # Create default operating hours (Monday to Sunday, 9 AM to 9 PM)
+            days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+            for day in days:
+                RetailerOperatingHours.objects.create(
+                    retailer=profile,
+                    day_of_week=day,
+                    is_open=True,
+                    opening_time='09:00',
+                    closing_time='21:00'
+                )
 
             # Generate JWT tokens
             refresh = RefreshToken.for_user(user)
