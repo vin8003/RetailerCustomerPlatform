@@ -29,7 +29,7 @@ def verify_firebase_id_token(id_token):
     except Exception as e:
         logger.error(f"Error verifying Firebase ID token: {str(e)}")
         # Handle validation errors
-        if "default credentials" in str(e) or "project ID" in str(e):
+        if "default credentials" in str(e) or "project ID" in str(e) or "was not found" in str(e) or "No such file" in str(e):
              if settings.DEBUG:
                  logger.warning("DEVELOPMENT MODE (FIX-647): Credential error detected. Bypassing verification via jwt.decode (unsafe).")
                  try:

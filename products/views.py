@@ -5,11 +5,13 @@ from rest_framework.pagination import PageNumberPagination
 from django.db.models import Q, Avg, Count
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.conf import settings
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 import pandas as pd
 import io
 import logging
+import os
 
 from .models import (
     Product, ProductCategory, ProductBrand, ProductReview,
@@ -614,6 +616,18 @@ def get_product_brands(request):
     """
     try:
         brands = ProductBrand.objects.filter(is_active=True)
+        
+        search = request.query_params.get('search')
+        if search:
+            brands = brands.filter(name__icontains=search)
+            # Limit results when searching to avoid huge payload
+            brands = brands[:20]
+        else:
+            # If no search, maybe limit to top 50 or popular ones?
+            # Or just return all (but cached)?
+            # For now, let's limit to 100 on default to prevent lag, expecting user to search
+            brands = brands[:100]
+            
         serializer = ProductBrandSerializer(brands, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -920,6 +934,471 @@ def search_master_product(request):
             
     except Exception as e:
         logger.error(f"Error searching master product: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def check_bulk_upload(request):
+    """
+    Check bulk upload file for existing master products
+    """
+    try:
+        if request.user.user_type != 'retailer':
+            return Response(
+                {'error': 'Only retailers can upload products'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            retailer = RetailerProfile.objects.get(user=request.user)
+        except RetailerProfile.DoesNotExist:
+            return Response(
+                {'error': 'Retailer profile not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Validate file
+        if 'file' not in request.FILES:
+            return Response(
+                {'error': 'No file uploaded'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        file = request.FILES['file']
+        
+        try:
+            if file.name.endswith('.csv'):
+                df = pd.read_csv(file)
+            else:
+                df = pd.read_excel(file)
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to read file: {str(e)}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Normalize column names
+        df.columns = df.columns.astype(str).str.lower().str.strip()
+        
+        # Check required columns
+        required_columns = ['barcode', 'mrp', 'rate', 'stock qty']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            return Response(
+                {'error': f"Missing required columns: {', '.join(missing_columns)}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Extract barcodes and clean them
+        df['barcode'] = df['barcode'].astype(str).str.strip()
+        df = df[df['barcode'].notna() & (df['barcode'] != 'nan')]
+        
+        barcodes = df['barcode'].unique().tolist()
+        
+        # 1. Fetch matching MasterProducts in one query
+        master_products = MasterProduct.objects.filter(barcode__in=barcodes)
+        master_product_map = {mp.barcode: mp for mp in master_products}
+        
+        # 2. Fetch existing Retailer Products for these barcodes in one query
+        existing_products = Product.objects.filter(retailer=retailer, barcode__in=barcodes)
+        existing_product_map = {p.barcode: p for p in existing_products}
+        
+        matched_products_report = []
+        unmatched_products_report = []
+        
+        products_to_create = []
+        products_to_update = []
+        inventory_logs = []
+        
+        for index, row in df.iterrows():
+            barcode = row['barcode']
+            mrp = row.get('mrp')
+            rate = row.get('rate')
+            qty = row.get('stock qty')
+            
+            # Use the maps instead of DB queries
+            master_product = master_product_map.get(barcode)
+            
+            if master_product:
+                matched_products_report.append({
+                    'barcode': barcode,
+                    'name': master_product.name,
+                    'mrp': mrp,
+                    'rate': rate,
+                    'stock qty': qty,
+                    'status': 'Matched'
+                })
+                
+                price = float(rate) if pd.notna(rate) else 0
+                original_price = float(mrp) if pd.notna(mrp) else 0
+                quantity = int(qty) if pd.notna(qty) else 0
+                
+                existing_product = existing_product_map.get(barcode)
+                
+                if existing_product:
+                    # Prepare for update
+                    needs_update = False
+                    if pd.notna(rate) and existing_product.price != price:
+                        existing_product.price = price
+                        needs_update = True
+                    if pd.notna(mrp) and existing_product.original_price != original_price:
+                        existing_product.original_price = original_price
+                        needs_update = True
+                        
+                    # Handle quantity logic
+                    if pd.notna(qty):
+                        old_qty = existing_product.quantity
+                        if old_qty != quantity:
+                            existing_product.quantity = quantity
+                            needs_update = True
+                            
+                            # Log inventory change
+                            inventory_logs.append(ProductInventoryLog(
+                                product=existing_product, # Note: This works because object exists
+                                log_type='added' if quantity > old_qty else 'removed',
+                                quantity_change=abs(quantity - old_qty),
+                                previous_quantity=old_qty,
+                                new_quantity=quantity,
+                                reason='Bulk upload update',
+                                created_by=request.user
+                            ))
+                    
+                    if needs_update:
+                        products_to_update.append(existing_product)
+                        
+                else:
+                    # Prepare for creation
+                    new_product = Product(
+                        retailer=retailer,
+                        name=master_product.name,
+                        barcode=barcode,
+                        price=price,
+                        original_price=original_price,
+                        quantity=quantity,
+                        description=master_product.description,
+                        category=master_product.category,
+                        brand=master_product.brand,
+                        image_url=master_product.image_url,
+                        master_product=master_product,
+                        is_active=True
+                    )
+                    products_to_create.append(new_product)
+                    
+            else:
+                 unmatched_products_report.append({
+                    'barcode': barcode,
+                    'mrp': mrp,
+                    'rate': rate,
+                    'stock qty': qty,
+                    'product name': '',
+                    'category': '',
+                    'brand': '',
+                    'description': '',
+                    'unit': 'piece'
+                })
+
+        # Bulk Operations
+        try:
+            if products_to_create:
+                created_products = Product.objects.bulk_create(products_to_create)
+                # Create logs for new products
+                new_logs = []
+                for p in created_products:
+                    new_logs.append(ProductInventoryLog(
+                        product=p,
+                        log_type='added',
+                        quantity_change=p.quantity,
+                        previous_quantity=0,
+                        new_quantity=p.quantity,
+                        reason='Bulk upload creation',
+                        created_by=request.user
+                    ))
+                inventory_logs.extend(new_logs)
+
+            if products_to_update:
+                Product.objects.bulk_update(products_to_update, ['price', 'original_price', 'quantity'])
+
+            if inventory_logs:
+                ProductInventoryLog.objects.bulk_create(inventory_logs)
+                
+        except Exception as e:
+            logger.error(f"Bulk operation failed: {str(e)}")
+            # In case of DB error, the response will still show reports but might miss DB updates
+            # Ideally we should rollback, but for now we just log it. 
+            # With transaction.atomic() we could be safer.
+
+        # Generate reports (same as before)
+        timestamp = timezone.now().strftime('%Y%m%d_%H%M%S')
+        upload_dir = os.path.join(settings.MEDIA_ROOT, 'uploads', 'reports')
+        os.makedirs(upload_dir, exist_ok=True)
+        
+        matched_filename = f"matched_products_{retailer.id}_{timestamp}.xlsx"
+        unmatched_filename = f"unmatched_products_{retailer.id}_{timestamp}.xlsx"
+        
+        matched_path = os.path.join(upload_dir, matched_filename)
+        unmatched_path = os.path.join(upload_dir, unmatched_filename)
+        
+        # Save matched
+        if matched_products_report:
+            pd.DataFrame(matched_products_report).to_excel(matched_path, index=False)
+        else:
+            pd.DataFrame(columns=['barcode', 'name', 'mrp', 'rate', 'stock qty', 'status']).to_excel(matched_path, index=False)
+            
+        # Save unmatched
+        if unmatched_products_report:
+             pd.DataFrame(unmatched_products_report).to_excel(unmatched_path, index=False)
+        else:
+             pd.DataFrame(columns=['barcode', 'mrp', 'rate', 'stock qty', 'product name', 'category', 'brand', 'description', 'unit']).to_excel(unmatched_path, index=False)
+
+        # Construct URLs
+        media_url = settings.MEDIA_URL
+        if not media_url.endswith('/'):
+            media_url += '/'
+            
+        matched_url = f"{request.scheme}://{request.get_host()}{media_url}uploads/reports/{matched_filename}"
+        unmatched_url = f"{request.scheme}://{request.get_host()}{media_url}uploads/reports/{unmatched_filename}"
+
+        return Response({
+            'message': 'File processed successfully',
+            'matched_count': len(matched_products_report),
+            'unmatched_count': len(unmatched_products_report),
+            'matched_file_url': matched_url,
+            'unmatched_file_url': unmatched_url
+        })
+        
+    except Exception as e:
+        logger.error(f"Error check bulk upload: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def complete_bulk_upload(request):
+    """
+    Complete bulk upload for unmatched products
+    """
+    try:
+        if request.user.user_type != 'retailer':
+            return Response(
+                {'error': 'Only retailers can upload products'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            retailer = RetailerProfile.objects.get(user=request.user)
+        except RetailerProfile.DoesNotExist:
+            return Response(
+                {'error': 'Retailer profile not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Validate file
+        if 'file' not in request.FILES:
+            return Response(
+                {'error': 'No file uploaded'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        file = request.FILES['file']
+        
+        try:
+            if file.name.endswith('.csv'):
+                df = pd.read_csv(file)
+            else:
+                df = pd.read_excel(file)
+        except Exception as e:
+            return Response(
+                {'error': f'Failed to read file: {str(e)}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Normalize column names
+        df.columns = df.columns.astype(str).str.lower().str.strip()
+        
+        # Check required columns from the template
+        required_columns = ['barcode', 'rate', 'stock qty', 'product name']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            return Response(
+                {'error': f"Missing required columns: {', '.join(missing_columns)}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Pre-fetch existing data to minimize DB hits
+        # Fetched existing Categories
+        cat_names = df['category'].dropna().astype(str).unique().tolist()
+        existing_categories = ProductCategory.objects.filter(name__in=cat_names)
+        category_map = {c.name.lower(): c for c in existing_categories}
+        
+        # Fetched existing Brands
+        brand_names = df['brand'].dropna().astype(str).unique().tolist()
+        existing_brands = ProductBrand.objects.filter(name__in=brand_names)
+        brand_map = {b.name.lower(): b for b in existing_brands}
+        
+        # Existing Products (by name, as unmatched products rely on manual name entry)
+        product_names = df['product name'].dropna().astype(str).str.strip().unique().tolist()
+        existing_products = Product.objects.filter(retailer=retailer, name__in=product_names)
+        existing_product_map = {p.name.lower(): p for p in existing_products}
+
+        success_count = 0
+        failed_count = 0
+        errors = []
+        
+        products_to_create = []
+        products_to_update = []
+        inventory_logs = []
+        
+        # Need to handle creating new categories/brands on the fly if they don't exist
+        # To avoid complex bulk logic for new foreign keys, we'll create them sequentially if missing
+        # but cache them in the map.
+        
+        for index, row in df.iterrows():
+            try:
+                name = str(row['product name']).strip()
+                if not name or name.lower() == 'nan':
+                    continue
+                    
+                barcode = str(row['barcode']).strip() if pd.notna(row.get('barcode')) else None
+                rate = float(row['rate']) if pd.notna(row.get('rate')) else 0
+                mrp = float(row['mrp']) if pd.notna(row.get('mrp')) else 0
+                qty = int(row['stock qty']) if pd.notna(row.get('stock qty')) else 0
+                
+                # Category
+                category = None
+                cat_name = row.get('category')
+                if pd.notna(cat_name):
+                    cat_name_str = str(cat_name).strip()
+                    cat_key = cat_name_str.lower()
+                    if cat_key in category_map:
+                        category = category_map[cat_key]
+                    else:
+                        category = ProductCategory.objects.create(name=cat_name_str, is_active=True)
+                        category_map[cat_key] = category # Cache it
+                
+                # Brand
+                brand = None
+                brand_name = row.get('brand')
+                if pd.notna(brand_name):
+                    brand_name_str = str(brand_name).strip()
+                    brand_key = brand_name_str.lower()
+                    if brand_key in brand_map:
+                        brand = brand_map[brand_key]
+                    else:
+                        brand = ProductBrand.objects.create(name=brand_name_str, is_active=True)
+                        brand_map[brand_key] = brand # Cache it
+
+                # Check existing product by name
+                existing_product = existing_product_map.get(name.lower())
+                
+                if existing_product:
+                    # Update
+                    needs_update = False
+                    if existing_product.price != rate:
+                        existing_product.price = rate
+                        needs_update = True
+                    if existing_product.original_price != mrp:
+                        existing_product.original_price = mrp
+                        needs_update = True
+                    
+                    # Update metadata if provided
+                    if barcode and existing_product.barcode != barcode:
+                         existing_product.barcode = barcode
+                         needs_update = True
+                    if category and existing_product.category != category:
+                         existing_product.category = category
+                         needs_update = True
+                    if brand and existing_product.brand != brand:
+                         existing_product.brand = brand
+                         needs_update = True
+                        
+                    old_qty = existing_product.quantity
+                    if old_qty != qty:
+                        existing_product.quantity = qty
+                        needs_update = True
+                        
+                        inventory_logs.append(ProductInventoryLog(
+                            product=existing_product,
+                            log_type='added' if qty > old_qty else 'removed',
+                            quantity_change=abs(qty - old_qty),
+                            previous_quantity=old_qty,
+                            new_quantity=qty,
+                            reason='Bulk upload update (unmatched)',
+                            created_by=request.user
+                        ))
+                    
+                    if needs_update:
+                        products_to_update.append(existing_product)
+
+                else:
+                    # Create
+                    new_product = Product(
+                        retailer=retailer,
+                        name=name,
+                        barcode=barcode,
+                        price=rate,
+                        original_price=mrp,
+                        quantity=qty,
+                        description=str(row.get('description', '')) if pd.notna(row.get('description')) else '',
+                        category=category,
+                        brand=brand,
+                        unit=str(row.get('unit', 'piece')) if pd.notna(row.get('unit')) else 'piece',
+                        is_active=True
+                    )
+                    products_to_create.append(new_product)
+                    
+                success_count += 1
+                
+            except Exception as e:
+                failed_count += 1
+                errors.append(f"Row {index + 2}: {str(e)}")
+
+        # Bulk Write
+        try:
+            if products_to_create:
+                created_products = Product.objects.bulk_create(products_to_create)
+                # Create logs for new products
+                new_logs = []
+                for p in created_products:
+                    new_logs.append(ProductInventoryLog(
+                        product=p,
+                        log_type='added',
+                        quantity_change=p.quantity,
+                        previous_quantity=0,
+                        new_quantity=p.quantity,
+                        reason='Bulk upload creation (unmatched)',
+                        created_by=request.user
+                    ))
+                inventory_logs.extend(new_logs)
+
+            if products_to_update:
+                Product.objects.bulk_update(products_to_update, ['price', 'original_price', 'quantity', 'barcode', 'category', 'brand'])
+
+            if inventory_logs:
+                ProductInventoryLog.objects.bulk_create(inventory_logs)
+                
+        except Exception as e:
+            logger.error(f"Bulk complete upload failed: {str(e)}")
+            return Response(
+                 {'error': f"Database error during bulk save: {str(e)}"},
+                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        return Response({
+            'message': 'Upload processed',
+            'success_count': success_count,
+            'failed_count': failed_count,
+            'errors': errors
+        })
+ 
+    except Exception as e:
+        logger.error(f"Error complete bulk upload: {str(e)}")
         return Response(
             {'error': 'Internal server error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
