@@ -723,8 +723,22 @@ def process_excel_upload(file, retailer, user):
     """
     try:
         # Read Excel file
+        # Read Excel file
         if file.name.endswith('.csv'):
-            df = pd.read_csv(file)
+            # Ensure we start from the beginning
+            file.seek(0)
+            # Try reading with default settings first
+            try:
+                df = pd.read_csv(file)
+            except Exception:
+                # If that fails, try with python engine and fallback delimiters
+                file.seek(0)
+                try:
+                    df = pd.read_csv(file, sep=None, engine='python')
+                except Exception:
+                    # Try tab separator explicitly if common csv fails
+                    file.seek(0)
+                    df = pd.read_csv(file, sep='\t')
         else:
             df = pd.read_excel(file)
 
@@ -972,12 +986,25 @@ def check_bulk_upload(request):
         
         try:
             if file.name.endswith('.csv'):
-                df = pd.read_csv(file)
+                # Ensure we start from the beginning
+                file.seek(0)
+                # Try reading with default settings first
+                try:
+                    df = pd.read_csv(file)
+                except Exception:
+                    # If that fails, try with python engine and fallback delimiters
+                    file.seek(0)
+                    try:
+                        df = pd.read_csv(file, sep=None, engine='python')
+                    except Exception:
+                        # Try tab separator explicitly if common csv fails
+                        file.seek(0)
+                        df = pd.read_csv(file, sep='\t')
             else:
                 df = pd.read_excel(file)
         except Exception as e:
             return Response(
-                {'error': f'Failed to read file: {str(e)}'},
+                {'error': f'Failed to process file: {str(e)}'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -986,10 +1013,20 @@ def check_bulk_upload(request):
         
         # Check required columns
         required_columns = ['barcode', 'mrp', 'rate', 'stock qty']
+        # Handle potential tab-separated issues where columns might be merged
+        if len(df.columns) == 1 and len(required_columns) > 1:
+             # Retrying read assuming tab separator if only 1 column found
+             file.seek(0)
+             try:
+                df = pd.read_csv(file, sep='\t')
+                df.columns = df.columns.astype(str).str.lower().str.strip()
+             except:
+                pass
+
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
             return Response(
-                {'error': f"Missing required columns: {', '.join(missing_columns)}"},
+                {'error': f"Missing required columns: {', '.join(missing_columns)}. Found: {', '.join(df.columns)}"},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -1010,10 +1047,19 @@ def check_bulk_upload(request):
         matched_products_report = []
         unmatched_products_report = []
         
+        # 3. Fetch existing Retailer Products by NAME for the matched master products
+        #    This is to prevent unique_together(retailer, name) constraint violations and to merge products
+        matched_mp_names = [mp.name for mp in master_products]
+        existing_products_by_name = Product.objects.filter(retailer=retailer, name__in=matched_mp_names)
+        existing_product_name_map = {p.name: p for p in existing_products_by_name}
+
         products_to_create = []
         products_to_update = []
         inventory_logs = []
         
+        # Track names processed in this batch to prevent duplicates within the file itself
+        processed_names_batch = set()
+
         for index, row in df.iterrows():
             barcode = row['barcode']
             mrp = row.get('mrp')
@@ -1037,11 +1083,27 @@ def check_bulk_upload(request):
                 original_price = float(mrp) if pd.notna(mrp) else 0
                 quantity = int(qty) if pd.notna(qty) else 0
                 
+                # Check priority: 1. By Barcode, 2. By Name
                 existing_product = existing_product_map.get(barcode)
-                
+                if not existing_product:
+                    existing_product = existing_product_name_map.get(master_product.name)
+
                 if existing_product:
                     # Prepare for update
                     needs_update = False
+                    
+                    # Update metadata linkage if finding by name
+                    if existing_product.barcode != barcode:
+                        existing_product.barcode = barcode
+                        needs_update = True
+                    if existing_product.master_product != master_product:
+                        existing_product.master_product = master_product
+                        needs_update = True
+                        # Also update details from master if linking for first time
+                        if existing_product.image_url != master_product.image_url:
+                            existing_product.image_url = master_product.image_url
+                            needs_update = True
+
                     if pd.notna(rate) and existing_product.price != price:
                         existing_product.price = price
                         needs_update = True
@@ -1072,6 +1134,14 @@ def check_bulk_upload(request):
                         
                 else:
                     # Prepare for creation
+                    # Ensure we don't duplicate names within this batch
+                    if master_product.name in processed_names_batch:
+                         # Skip duplicate in same batch, or log warning?
+                         # For now, let's skip to avoid error, maybe add to error report theoretically but here matched report is already done
+                         continue
+                         
+                    processed_names_batch.add(master_product.name)
+
                     new_product = Product(
                         retailer=retailer,
                         name=master_product.name,
@@ -1210,12 +1280,25 @@ def complete_bulk_upload(request):
         
         try:
             if file.name.endswith('.csv'):
-                df = pd.read_csv(file)
+                # Ensure we start from the beginning
+                file.seek(0)
+                # Try reading with default settings first
+                try:
+                    df = pd.read_csv(file)
+                except Exception:
+                    # If that fails, try with python engine and fallback delimiters
+                    file.seek(0)
+                    try:
+                        df = pd.read_csv(file, sep=None, engine='python')
+                    except Exception:
+                        # Try tab separator explicitly if common csv fails
+                        file.seek(0)
+                        df = pd.read_csv(file, sep='\t')
             else:
                 df = pd.read_excel(file)
         except Exception as e:
             return Response(
-                {'error': f'Failed to read file: {str(e)}'},
+                {'error': f'Failed to process file: {str(e)}'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -1224,10 +1307,20 @@ def complete_bulk_upload(request):
         
         # Check required columns from the template
         required_columns = ['barcode', 'rate', 'stock qty', 'product name']
+        # Handle potential tab-separated issues where columns might be merged
+        if len(df.columns) == 1 and len(required_columns) > 1:
+             # Retrying read assuming tab separator if only 1 column found
+             file.seek(0)
+             try:
+                df = pd.read_csv(file, sep='\t')
+                df.columns = df.columns.astype(str).str.lower().str.strip()
+             except:
+                pass
+
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
             return Response(
-                {'error': f"Missing required columns: {', '.join(missing_columns)}"},
+                {'error': f"Missing required columns: {', '.join(missing_columns)}. Found: {', '.join(df.columns)}"},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
