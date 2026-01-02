@@ -14,6 +14,8 @@ urlpatterns = [
 
     # Public product endpoints
     path('retailer/<int:retailer_id>/', views.get_retailer_products_public, name='get_retailer_products_public'),
+    path('retailer/<int:retailer_id>/categories/', views.get_retailer_categories, name='get_retailer_categories'),
+    path('retailer/<int:retailer_id>/featured/', views.get_retailer_featured_products, name='get_retailer_featured_products'),
     path('retailer/<int:retailer_id>/<int:product_id>/', views.get_product_detail_public, name='get_product_detail_public'),
 
     # Categories and brands

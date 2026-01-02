@@ -400,6 +400,80 @@ def get_retailer_products_public(request, retailer_id):
 
 @api_view(['GET'])
 @permission_classes([permissions.AllowAny])
+def get_retailer_categories(request, retailer_id):
+    """
+    Get categories that have products for a specific retailer (public endpoint).
+    Returns only categories where the retailer has active, available products.
+    """
+    try:
+        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+
+        # Get distinct category IDs from retailer's active products
+        category_ids = Product.objects.filter(
+            retailer=retailer,
+            is_active=True,
+            is_available=True,
+            category__isnull=False
+        ).values_list('category_id', flat=True).distinct()
+
+        # Get categories with product count for this retailer
+        categories = ProductCategory.objects.filter(
+            id__in=category_ids,
+            is_active=True
+        ).annotate(
+            product_count=Count('products', filter=Q(
+                products__retailer=retailer,
+                products__is_active=True,
+                products__is_available=True
+            ))
+        ).order_by('name')
+
+        serializer = ProductCategorySerializer(categories, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        logger.error(f"Error getting retailer categories: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def get_retailer_featured_products(request, retailer_id):
+    """
+    Get featured products for a specific retailer (public endpoint).
+    Returns at most 10 featured products, optimized for home page display.
+    """
+    try:
+        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+
+        products = Product.objects.select_related(
+            'retailer', 'category', 'brand'
+        ).annotate(
+            average_rating_annotated=Avg('reviews__rating'),
+            review_count_annotated=Count('reviews')
+        ).filter(
+            retailer=retailer,
+            is_active=True,
+            is_available=True,
+            is_featured=True
+        ).order_by('-created_at')[:10]
+
+        serializer = ProductListSerializer(products, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        logger.error(f"Error getting retailer featured products: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
 def get_product_detail_public(request, retailer_id, product_id):
     """
     Get product detail (public endpoint)
