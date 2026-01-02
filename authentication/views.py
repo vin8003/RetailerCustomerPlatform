@@ -325,21 +325,39 @@ def verify_otp(request):
                         user.is_phone_verified = True
                         user.save()
                         
-                        # Create RetailerProfile if retailer user and profile doesn't exist
+                        # Create or activate RetailerProfile for retailer users
                         if user.user_type == 'retailer':
-                            if not RetailerProfile.objects.filter(user=user).exists():
-                                profile = RetailerProfile.objects.create(
-                                    user=user,
-                                    shop_name=f"{user.first_name or user.username}'s Shop",
-                                    shop_description='',
-                                    business_type='general',
-                                    address_line1='',
-                                    city='',
-                                    state='',
-                                    pincode='000000',
-                                    contact_phone=user.phone_number or '',
-                                    is_active=False,
-                                )
+                            profile, created = RetailerProfile.objects.get_or_create(
+                                user=user,
+                                defaults={
+                                    'shop_name': f"{user.first_name or user.username}'s Shop",
+                                    'shop_description': '',
+                                    'business_type': 'general',
+                                    'address_line1': '',
+                                    'city': '',
+                                    'state': '',
+                                    'pincode': '000000',
+                                    'contact_phone': user.phone_number or '',
+                                    'is_active': True,
+                                }
+                            )
+                            # Activate existing profile on phone verification
+                            if not created and not profile.is_active:
+                                profile.is_active = True
+                                profile.save()
+                                logger.info(f"Activated RetailerProfile for user: {user.username}")
+                            elif created:
+                                # Create default operating hours for new profile
+                                days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+                                for day in days:
+                                    RetailerOperatingHours.objects.create(
+                                        retailer=profile,
+                                        day_of_week=day,
+                                        is_open=True,
+                                        opening_time='09:00',
+                                        closing_time='21:00'
+                                    )
+                                logger.info(f"Created RetailerProfile for user: {user.username}")
                         
                         # Generate JWT tokens
                         refresh = RefreshToken.for_user(user)
@@ -403,22 +421,29 @@ def verify_otp(request):
                 user.is_phone_verified = True
                 user.save()
 
-                # Create RetailerProfile if retailer user and profile doesn't exist
+                # Create or activate RetailerProfile for retailer users
                 if user.user_type == 'retailer':
-                    if not RetailerProfile.objects.filter(user=user).exists():
-                        profile = RetailerProfile.objects.create(
-                            user=user,
-                            shop_name=f"{user.first_name or user.username}'s Shop",
-                            shop_description='',
-                            business_type='general',
-                            address_line1='',
-                            city='',
-                            state='',
-                            pincode='000000',
-                            contact_phone=user.phone_number or '',
-                            is_active=False,
-                        )
-                        # Create default operating hours
+                    profile, created = RetailerProfile.objects.get_or_create(
+                        user=user,
+                        defaults={
+                            'shop_name': f"{user.first_name or user.username}'s Shop",
+                            'shop_description': '',
+                            'business_type': 'general',
+                            'address_line1': '',
+                            'city': '',
+                            'state': '',
+                            'pincode': '000000',
+                            'contact_phone': user.phone_number or '',
+                            'is_active': True,
+                        }
+                    )
+                    # Activate existing profile on phone verification
+                    if not created and not profile.is_active:
+                        profile.is_active = True
+                        profile.save()
+                        logger.info(f"Activated RetailerProfile for user: {user.username}")
+                    elif created:
+                        # Create default operating hours for new profile
                         days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
                         for day in days:
                             RetailerOperatingHours.objects.create(
