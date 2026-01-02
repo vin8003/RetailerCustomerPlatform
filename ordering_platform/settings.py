@@ -191,11 +191,13 @@ if DEBUG:
 else:
     CORS_ALLOWED_ORIGIN_REGEXES = []
 
+CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True
+from corsheaders.defaults import default_headers
 
-# CSRF settings for production
-CSRF_TRUSTED_ORIGINS = [
-    f"https://{host}" for host in os.getenv('ALLOWED_HOSTS', '').split(',') if host
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    "authorization",
+    "content-type",
 ]
 
 # SMS Configuration (using a generic SMS API)
@@ -296,6 +298,8 @@ if not firebase_admin._apps:
 
 CSRF_TRUSTED_ORIGINS = [
     "http://80.225.240.187",
+    "https://*.pages.dev",
+    "https://*.trycloudflare.com",
 ]
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
