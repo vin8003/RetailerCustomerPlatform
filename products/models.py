@@ -396,3 +396,61 @@ class ProductUpload(models.Model):
     
     def __str__(self):
         return f"Upload by {self.retailer.shop_name} - {self.status}"
+
+
+class ProductUploadSession(models.Model):
+    """
+    Track visual bulk upload sessions
+    """
+    SESSION_STATUS = [
+        ('active', 'Active'),
+        ('completed', 'Completed'),
+        ('discarded', 'Discarded'),
+    ]
+    
+    retailer = models.ForeignKey(
+        'retailers.RetailerProfile', 
+        on_delete=models.CASCADE, 
+        related_name='upload_sessions'
+    )
+    status = models.CharField(max_length=20, choices=SESSION_STATUS, default='active')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'product_upload_session'
+        indexes = [
+            models.Index(fields=['retailer', 'status']),
+        ]
+    
+    def __str__(self):
+        return f"Session {self.id} - {self.retailer.shop_name}"
+
+
+class UploadSessionItem(models.Model):
+    """
+    Items within an upload session
+    """
+    session = models.ForeignKey(
+        ProductUploadSession, 
+        on_delete=models.CASCADE, 
+        related_name='items'
+    )
+    barcode = models.CharField(max_length=50)
+    image = models.ImageField(upload_to=generate_upload_path, blank=True, null=True)
+    
+    # Store partial/draft details: name, price, stock, brand, category etc.
+    product_details = models.JSONField(default=dict, blank=True) 
+    
+    is_processed = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'upload_session_item'
+        indexes = [
+            models.Index(fields=['session', 'barcode']),
+        ]
+    
+    def __str__(self):
+        return f"Item {self.barcode} in Session {self.session.id}"
