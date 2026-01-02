@@ -325,6 +325,22 @@ def verify_otp(request):
                         user.is_phone_verified = True
                         user.save()
                         
+                        # Create RetailerProfile if retailer user and profile doesn't exist
+                        if user.user_type == 'retailer':
+                            if not RetailerProfile.objects.filter(user=user).exists():
+                                profile = RetailerProfile.objects.create(
+                                    user=user,
+                                    shop_name=f"{user.first_name or user.username}'s Shop",
+                                    shop_description='',
+                                    business_type='general',
+                                    address_line1='',
+                                    city='',
+                                    state='',
+                                    pincode='000000',
+                                    contact_phone=user.phone_number or '',
+                                    is_active=False,
+                                )
+                        
                         # Generate JWT tokens
                         refresh = RefreshToken.for_user(user)
 
@@ -386,6 +402,33 @@ def verify_otp(request):
                 user.is_active = True
                 user.is_phone_verified = True
                 user.save()
+
+                # Create RetailerProfile if retailer user and profile doesn't exist
+                if user.user_type == 'retailer':
+                    if not RetailerProfile.objects.filter(user=user).exists():
+                        profile = RetailerProfile.objects.create(
+                            user=user,
+                            shop_name=f"{user.first_name or user.username}'s Shop",
+                            shop_description='',
+                            business_type='general',
+                            address_line1='',
+                            city='',
+                            state='',
+                            pincode='000000',
+                            contact_phone=user.phone_number or '',
+                            is_active=False,
+                        )
+                        # Create default operating hours
+                        days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+                        for day in days:
+                            RetailerOperatingHours.objects.create(
+                                retailer=profile,
+                                day_of_week=day,
+                                is_open=True,
+                                opening_time='09:00',
+                                closing_time='21:00'
+                            )
+                        logger.info(f"Created RetailerProfile for user: {user.username}")
 
                 # Generate JWT tokens
                 refresh = RefreshToken.for_user(user)
