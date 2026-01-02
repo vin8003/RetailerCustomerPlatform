@@ -2,7 +2,8 @@ from rest_framework import serializers
 from django.db.models import Avg
 from .models import (
     Product, ProductCategory, ProductBrand, ProductImage, 
-    ProductReview, ProductUpload, MasterProduct
+    ProductReview, ProductUpload, MasterProduct,
+    ProductUploadSession, UploadSessionItem
 )
 
 
@@ -284,3 +285,26 @@ class ProductStatsSerializer(serializers.Serializer):
     average_price = serializers.DecimalField(max_digits=10, decimal_places=2)
     top_categories = serializers.ListField()
     recent_products = serializers.ListField()
+
+
+class UploadSessionItemSerializer(serializers.ModelSerializer):
+    """
+    Serializer for upload session items
+    """
+    class Meta:
+        model = UploadSessionItem
+        fields = ['id', 'barcode', 'image', 'product_details', 'is_processed', 'created_at']
+        read_only_fields = ['id', 'is_processed', 'created_at']
+
+
+class ProductUploadSessionSerializer(serializers.ModelSerializer):
+    """
+    Serializer for product upload sessions
+    """
+    items = UploadSessionItemSerializer(many=True, read_only=True)
+    
+    class Meta:
+        model = ProductUploadSession
+        fields = ['id', 'status', 'created_at', 'updated_at', 'items']
+        read_only_fields = ['id', 'status', 'created_at', 'updated_at', 'items']
+

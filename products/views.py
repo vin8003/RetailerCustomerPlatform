@@ -13,15 +13,21 @@ import io
 import logging
 import os
 
+from rest_framework.views import APIView
+from rest_framework.parsers import MultiPartParser, FormParser
+from django.db import transaction
+
 from .models import (
     Product, ProductCategory, ProductBrand, ProductReview,
-    ProductUpload, ProductInventoryLog, MasterProduct
+    ProductUpload, ProductInventoryLog, MasterProduct,
+    ProductUploadSession, UploadSessionItem
 )
 from .serializers import (
     ProductListSerializer, ProductDetailSerializer, ProductCreateSerializer,
     ProductUpdateSerializer, ProductCategorySerializer, ProductBrandSerializer,
     ProductReviewSerializer, ProductUploadSerializer, ProductBulkUploadSerializer,
-    ProductStatsSerializer, MasterProductSerializer
+    ProductStatsSerializer, MasterProductSerializer,
+    ProductUploadSessionSerializer, UploadSessionItemSerializer
 )
 from retailers.models import RetailerProfile
 from common.permissions import IsRetailerOwner
@@ -723,8 +729,22 @@ def process_excel_upload(file, retailer, user):
     """
     try:
         # Read Excel file
+        # Read Excel file
         if file.name.endswith('.csv'):
-            df = pd.read_csv(file)
+            # Ensure we start from the beginning
+            file.seek(0)
+            # Try reading with default settings first
+            try:
+                df = pd.read_csv(file)
+            except Exception:
+                # If that fails, try with python engine and fallback delimiters
+                file.seek(0)
+                try:
+                    df = pd.read_csv(file, sep=None, engine='python')
+                except Exception:
+                    # Try tab separator explicitly if common csv fails
+                    file.seek(0)
+                    df = pd.read_csv(file, sep='\t')
         else:
             df = pd.read_excel(file)
 
@@ -972,12 +992,25 @@ def check_bulk_upload(request):
         
         try:
             if file.name.endswith('.csv'):
-                df = pd.read_csv(file)
+                # Ensure we start from the beginning
+                file.seek(0)
+                # Try reading with default settings first
+                try:
+                    df = pd.read_csv(file)
+                except Exception:
+                    # If that fails, try with python engine and fallback delimiters
+                    file.seek(0)
+                    try:
+                        df = pd.read_csv(file, sep=None, engine='python')
+                    except Exception:
+                        # Try tab separator explicitly if common csv fails
+                        file.seek(0)
+                        df = pd.read_csv(file, sep='\t')
             else:
                 df = pd.read_excel(file)
         except Exception as e:
             return Response(
-                {'error': f'Failed to read file: {str(e)}'},
+                {'error': f'Failed to process file: {str(e)}'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -986,10 +1019,20 @@ def check_bulk_upload(request):
         
         # Check required columns
         required_columns = ['barcode', 'mrp', 'rate', 'stock qty']
+        # Handle potential tab-separated issues where columns might be merged
+        if len(df.columns) == 1 and len(required_columns) > 1:
+             # Retrying read assuming tab separator if only 1 column found
+             file.seek(0)
+             try:
+                df = pd.read_csv(file, sep='\t')
+                df.columns = df.columns.astype(str).str.lower().str.strip()
+             except:
+                pass
+
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
             return Response(
-                {'error': f"Missing required columns: {', '.join(missing_columns)}"},
+                {'error': f"Missing required columns: {', '.join(missing_columns)}. Found: {', '.join(df.columns)}"},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -1010,10 +1053,19 @@ def check_bulk_upload(request):
         matched_products_report = []
         unmatched_products_report = []
         
+        # 3. Fetch existing Retailer Products by NAME for the matched master products
+        #    This is to prevent unique_together(retailer, name) constraint violations and to merge products
+        matched_mp_names = [mp.name for mp in master_products]
+        existing_products_by_name = Product.objects.filter(retailer=retailer, name__in=matched_mp_names)
+        existing_product_name_map = {p.name: p for p in existing_products_by_name}
+
         products_to_create = []
         products_to_update = []
         inventory_logs = []
         
+        # Track names processed in this batch to prevent duplicates within the file itself
+        processed_names_batch = set()
+
         for index, row in df.iterrows():
             barcode = row['barcode']
             mrp = row.get('mrp')
@@ -1037,11 +1089,27 @@ def check_bulk_upload(request):
                 original_price = float(mrp) if pd.notna(mrp) else 0
                 quantity = int(qty) if pd.notna(qty) else 0
                 
+                # Check priority: 1. By Barcode, 2. By Name
                 existing_product = existing_product_map.get(barcode)
-                
+                if not existing_product:
+                    existing_product = existing_product_name_map.get(master_product.name)
+
                 if existing_product:
                     # Prepare for update
                     needs_update = False
+                    
+                    # Update metadata linkage if finding by name
+                    if existing_product.barcode != barcode:
+                        existing_product.barcode = barcode
+                        needs_update = True
+                    if existing_product.master_product != master_product:
+                        existing_product.master_product = master_product
+                        needs_update = True
+                        # Also update details from master if linking for first time
+                        if existing_product.image_url != master_product.image_url:
+                            existing_product.image_url = master_product.image_url
+                            needs_update = True
+
                     if pd.notna(rate) and existing_product.price != price:
                         existing_product.price = price
                         needs_update = True
@@ -1072,6 +1140,14 @@ def check_bulk_upload(request):
                         
                 else:
                     # Prepare for creation
+                    # Ensure we don't duplicate names within this batch
+                    if master_product.name in processed_names_batch:
+                         # Skip duplicate in same batch, or log warning?
+                         # For now, let's skip to avoid error, maybe add to error report theoretically but here matched report is already done
+                         continue
+                         
+                    processed_names_batch.add(master_product.name)
+
                     new_product = Product(
                         retailer=retailer,
                         name=master_product.name,
@@ -1210,12 +1286,25 @@ def complete_bulk_upload(request):
         
         try:
             if file.name.endswith('.csv'):
-                df = pd.read_csv(file)
+                # Ensure we start from the beginning
+                file.seek(0)
+                # Try reading with default settings first
+                try:
+                    df = pd.read_csv(file)
+                except Exception:
+                    # If that fails, try with python engine and fallback delimiters
+                    file.seek(0)
+                    try:
+                        df = pd.read_csv(file, sep=None, engine='python')
+                    except Exception:
+                        # Try tab separator explicitly if common csv fails
+                        file.seek(0)
+                        df = pd.read_csv(file, sep='\t')
             else:
                 df = pd.read_excel(file)
         except Exception as e:
             return Response(
-                {'error': f'Failed to read file: {str(e)}'},
+                {'error': f'Failed to process file: {str(e)}'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -1224,10 +1313,20 @@ def complete_bulk_upload(request):
         
         # Check required columns from the template
         required_columns = ['barcode', 'rate', 'stock qty', 'product name']
+        # Handle potential tab-separated issues where columns might be merged
+        if len(df.columns) == 1 and len(required_columns) > 1:
+             # Retrying read assuming tab separator if only 1 column found
+             file.seek(0)
+             try:
+                df = pd.read_csv(file, sep='\t')
+                df.columns = df.columns.astype(str).str.lower().str.strip()
+             except:
+                pass
+
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
             return Response(
-                {'error': f"Missing required columns: {', '.join(missing_columns)}"},
+                {'error': f"Missing required columns: {', '.join(missing_columns)}. Found: {', '.join(df.columns)}"},
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -1403,3 +1502,328 @@ def complete_bulk_upload(request):
             {'error': 'Internal server error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+# --- Visual Bulk Upload Views ---
+
+class CreateUploadSessionView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        try:
+            retailer = RetailerProfile.objects.get(user=request.user)
+            # Check for existing active session? Or allow multiple?
+            # Let's create a new one.
+            session = ProductUploadSession.objects.create(retailer=retailer)
+            serializer = ProductUploadSessionSerializer(session)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        except RetailerProfile.DoesNotExist:
+            return Response({'error': 'Retailer profile not found'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class GetActiveSessionsView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        try:
+             # Find sessions that are not completed
+             sessions = ProductUploadSession.objects.filter(
+                 retailer__user=request.user, 
+                 status='active'
+             ).order_by('-created_at')
+             serializer = ProductUploadSessionSerializer(sessions, many=True)
+             return Response(serializer.data)
+        except Exception as e:
+             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class AddSessionItemView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        session_id = request.data.get('session_id')
+        barcode = request.data.get('barcode', '').strip()
+        image = request.FILES.get('image')
+
+        if not session_id or not barcode:
+            return Response({'error': 'session_id and barcode are required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            session = ProductUploadSession.objects.get(id=session_id, retailer__user=request.user)
+            
+            # Simple check for duplicate barcode in same session?
+            # User might scan same item twice, technically allowed but maybe warn?
+            # For now, just add it.
+            
+            item = UploadSessionItem.objects.create(
+                session=session,
+                barcode=barcode,
+                image=image
+            )
+            serializer = UploadSessionItemSerializer(item)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+        except ProductUploadSession.DoesNotExist:
+            return Response({'error': 'Session not found or access denied'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class GetSessionDetailsView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, session_id):
+        try:
+            session = ProductUploadSession.objects.get(id=session_id, retailer__user=request.user)
+            items = session.items.all().order_by('-created_at')
+            
+            # Smart Lookup Logic
+            # Optimization: Fetch all barcodes at once and map to MasterProducts
+            barcodes = [item.barcode for item in items]
+            
+            # 1. Master Product Match
+            master_products = MasterProduct.objects.filter(barcode__in=barcodes)
+            master_map = {mp.barcode: mp for mp in master_products}
+            
+            # 2. Existing Local Product Match (by Barcode)
+            retailer = session.retailer
+            local_products = Product.objects.filter(retailer=retailer, barcode__in=barcodes)
+            local_map = {p.barcode: p for p in local_products}
+
+            # 3. Existing Local Product Match (by Name if MP found) - To prevent duplicate name error
+            matched_mp_names = [mp.name for mp in master_products]
+            local_products_by_name = Product.objects.filter(retailer=retailer, name__in=matched_mp_names)
+            local_name_map = {p.name: p for p in local_products_by_name}
+
+            response_data = {
+                'session': ProductUploadSessionSerializer(session).data,
+                'matched_items': [],
+                'unmatched_items': []
+            }
+
+            for item in items:
+                item_data = UploadSessionItemSerializer(item).data
+                details = item.product_details # Draft data if any
+
+                matched_mp = master_map.get(item.barcode)
+                existing_local = local_map.get(item.barcode)
+                
+                # If no existing local by barcode, check by name (if MP exists)
+                if not existing_local and matched_mp:
+                     existing_local = local_name_map.get(matched_mp.name)
+
+                if matched_mp:
+                    # Matched Logic
+                    mp_data = MasterProductSerializer(matched_mp).data
+                    
+                    # Merge data for UI: Draft > Existing Local > Master
+                    final_name = details.get('name') or (existing_local.name if existing_local else matched_mp.name)
+                    final_price = details.get('price') or (existing_local.price if existing_local else 0)
+                    final_stock = details.get('quantity') or (existing_local.quantity if existing_local else 0)
+                    final_mrp = details.get('original_price') or (existing_local.original_price if existing_local else matched_mp.mrp or 0)
+
+                    item_data['master_product'] = mp_data
+                    item_data['existing_product_id'] = existing_local.id if existing_local else None
+                    
+                    # Pre-fill UI fields
+                    item_data['ui_data'] = {
+                        'name': final_name,
+                        'price': final_price,
+                        'original_price': final_mrp,
+                        'quantity': final_stock,
+                    }
+                    response_data['matched_items'].append(item_data)
+                else:
+                    # Unmatched Logic
+                    # Merge data for UI: Draft > Existing Local (only if barcode matched locally but not in MP DB? Rare) > Default
+                    
+                    final_name = details.get('name') or (existing_local.name if existing_local else "")
+                    final_price = details.get('price') or (existing_local.price if existing_local else 0)
+                    final_stock = details.get('quantity') or (existing_local.quantity if existing_local else 0)
+                    final_mrp = details.get('original_price') or (existing_local.original_price if existing_local else 0)
+                    final_brand = details.get('brand') or (existing_local.brand.name if existing_local and existing_local.brand else "")
+                    final_category = details.get('category') or (existing_local.category.name if existing_local and existing_local.category else "")
+
+                    item_data['existing_product_id'] = existing_local.id if existing_local else None
+                    item_data['ui_data'] = {
+                        'name': final_name,
+                        'price': final_price,
+                        'original_price': final_mrp,
+                        'quantity': final_stock,
+                        'brand': final_brand,
+                        'category': final_category,
+                    }
+                    response_data['unmatched_items'].append(item_data)
+
+            return Response(response_data)
+
+        except ProductUploadSession.DoesNotExist:
+            return Response({'error': 'Session not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
+class UpdateSessionItemsView(APIView):
+    """
+    Draft Save: Updates details in UploadSessionItem without creating products
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        session_id = request.data.get('session_id')
+        items_data = request.data.get('items', []) # List of {id, product_details: {...}}
+
+        if not session_id:
+            return Response({'error': 'session_id required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            session = ProductUploadSession.objects.get(id=session_id, retailer__user=request.user)
+            
+            updated_count = 0
+            for item in items_data:
+                item_id = item.get('id')
+                details = item.get('product_details') # JSON dict
+                
+                if item_id and details:
+                    # Verify item belongs to session
+                    try:
+                        session_item = UploadSessionItem.objects.get(id=item_id, session=session)
+                        session_item.product_details = details
+                        session_item.save()
+                        updated_count += 1
+                    except UploadSessionItem.DoesNotExist:
+                        continue
+            
+            return Response({'message': f'Updated {updated_count} items'}, status=status.HTTP_200_OK)
+
+        except ProductUploadSession.DoesNotExist:
+             return Response({'error': 'Session not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
+class CommitUploadSessionView(APIView):
+    """
+    Finalize Session: Create/Update actual products
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        session_id = request.data.get('session_id')
+        
+        if not session_id:
+            return Response({'error': 'session_id required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            session = ProductUploadSession.objects.get(id=session_id, retailer__user=request.user)
+            retailer = session.retailer
+            
+            if session.status == 'completed':
+                 return Response({'error': 'Session already completed'}, status=status.HTTP_400_BAD_REQUEST)
+
+            items = session.items.all()
+            success_count = 0
+            
+            with transaction.atomic():
+                for item in items:
+                    details = item.product_details
+                    if not details: 
+                        # If no details saved, maybe skip or use defaults? 
+                        # Assuming frontend validates before commit.
+                        continue
+                        
+                    barcode = item.barcode
+                    name = details.get('name')
+                    price = details.get('price', 0)
+                    mrp = details.get('original_price', 0)
+                    qty = details.get('quantity', 0)
+                    
+                    if not name:
+                        continue # Name is mandatory
+
+                    # Identify Targets
+                    # 1. Master Product
+                    try:
+                        master_product = MasterProduct.objects.get(barcode=barcode)
+                    except MasterProduct.DoesNotExist:
+                        master_product = None
+                    
+                    # 2. Existing Local Product
+                    existing_product = None
+                    try:
+                        existing_product = Product.objects.get(retailer=retailer, barcode=barcode)
+                    except Product.DoesNotExist:
+                        # Fallback to name check
+                        existing_product = Product.objects.filter(retailer=retailer, name__iexact=name).first()
+
+                    # Handle Category/Brand creation if unmatched
+                    category = None
+                    brand = None
+                    
+                    if not master_product:
+                        # Handle new/custom category/brand logic here if provided in details
+                        cat_name = details.get('category')
+                        if cat_name:
+                             category, _ = ProductCategory.objects.get_or_create(name=cat_name)
+                        
+                        brand_name = details.get('brand')
+                        if brand_name:
+                             brand, _ = ProductBrand.objects.get_or_create(name=brand_name)
+
+
+                    if existing_product:
+                        # UPDATE
+                        existing_product.price = price
+                        existing_product.original_price = mrp
+                        existing_product.quantity = qty # Should we add or set? "Stock Input" usually means "Current Stock". Let's Update.
+                        
+                        # Update metadata if context allows
+                        if master_product and not existing_product.master_product:
+                            existing_product.master_product = master_product
+                        
+                        if barcode and existing_product.barcode != barcode:
+                             existing_product.barcode = barcode
+                             
+                        # If image was captured in session and local prod has no image can update?
+                        # item.image is the file.
+                        if item.image and not existing_product.image:
+                             # Duplicate file? Or just assign.
+                             # Better to verify if user wants to replace image.
+                             # For now, let's say we update image if "unmatched" logic was used (user took photo for a reason)
+                             existing_product.image = item.image
+
+                        existing_product.save()
+                        
+                        # TODO: Log inventory change
+                    else:
+                        # CREATE
+                        new_prod = Product(
+                            retailer=retailer,
+                            name=name,
+                            barcode=barcode,
+                            price=price,
+                            original_price=mrp,
+                            quantity=qty,
+                            master_product=master_product,
+                            image=item.image # Assign the captured image
+                        )
+                        if category: new_prod.category = category
+                        if brand: new_prod.brand = brand
+                        
+                        # Copy from Master if available and not overridden
+                        if master_product:
+                            if not category and master_product.category: new_prod.category = master_product.category
+                            if not brand and master_product.brand: new_prod.brand = master_product.brand
+                        
+                        new_prod.save()
+                    
+                    item.is_processed = True
+                    item.save()
+                    success_count += 1
+            
+            session.status = 'completed'
+            session.save()
+            
+            return Response({'message': 'Session committed', 'count': success_count})
+
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

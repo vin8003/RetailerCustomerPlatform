@@ -13,6 +13,14 @@ urlpatterns = [
     path('master/search/', views.search_master_product, name='search_master_product'), # NEW
     path('upload/check/', views.check_bulk_upload, name='check_bulk_upload'),
     path('upload/complete/', views.complete_bulk_upload, name='complete_bulk_upload'),
+    
+    # Visual Bulk Upload (Session Based)
+    path('upload/session/create/', views.CreateUploadSessionView.as_view(), name='create_upload_session'),
+    path('upload/session/active/', views.GetActiveSessionsView.as_view(), name='get_active_sessions'),
+    path('upload/session/add-item/', views.AddSessionItemView.as_view(), name='add_session_item'),
+    path('upload/session/<int:session_id>/', views.GetSessionDetailsView.as_view(), name='get_session_details'),
+    path('upload/session/update-items/', views.UpdateSessionItemsView.as_view(), name='update_session_items'),
+    path('upload/session/commit/', views.CommitUploadSessionView.as_view(), name='commit_upload_session'),
 
     # Public product endpoints
     path('retailer/<int:retailer_id>/', views.get_retailer_products_public, name='get_retailer_products_public'),
