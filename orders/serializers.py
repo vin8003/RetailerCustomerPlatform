@@ -441,10 +441,20 @@ class OrderModificationSerializer(serializers.Serializer):
     def validate_items(self, value):
         """Validate items structure and content"""
         for item in value:
-            if 'id' not in item:
-                raise serializers.ValidationError("Item ID is required")
-            if 'quantity' not in item and 'unit_price' not in item:
-                raise serializers.ValidationError("Either quantity or unit_price is required for update")
+            if 'id' not in item and 'product_id' not in item:
+                raise serializers.ValidationError("Item ID (for existing) or Product ID (for new) is required")
+            
+            if 'product_id' in item:
+                # New item validation
+                if 'quantity' not in item:
+                    raise serializers.ValidationError("Quantity is required for new items")
+                if int(item['quantity']) <= 0:
+                     raise serializers.ValidationError("Quantity must be positive for new items")
+            
+            if 'id' in item:
+                # Existing item validation
+                if 'quantity' not in item and 'unit_price' not in item:
+                    raise serializers.ValidationError("Either quantity or unit_price is required for update")
         return value
 
     def update(self, instance, validated_data):
@@ -461,46 +471,73 @@ class OrderModificationSerializer(serializers.Serializer):
             existing_items = {item.id: item for item in instance.items.all()}
             
             for item_data in items_data:
-                item_id = item_data.get('id')
-                if item_id in existing_items:
-                    item = existing_items[item_id]
-                    
-                    # Update quantity if provided
-                    if 'quantity' in item_data:
-                        quantity = int(item_data['quantity'])
-                        if quantity < 0:
-                            raise serializers.ValidationError(f"Invalid quantity for item {item.product_name}")
+                # Handle existing items
+                if 'id' in item_data:
+                    item_id = item_data.get('id')
+                    if item_id in existing_items:
+                        item = existing_items[item_id]
                         
-                        if quantity == 0:
-                            # If quantity is 0, we can either remove the item or mark it as removed. 
-                            # For now, let's keep it but maybe handle removal logic if needed. 
-                            # Or strictly remove it. Let's delete it for cleanliness.
-                            # Restore stock for removed items?
-                            # Assuming stock management is strict:
-                            item.product.increase_quantity(item.quantity)
-                            item.delete()
-                            continue
+                        # Update quantity if provided
+                        if 'quantity' in item_data:
+                            quantity = int(item_data['quantity'])
+                            if quantity < 0:
+                                raise serializers.ValidationError(f"Invalid quantity for item {item.product_name}")
+                            
+                            if quantity == 0:
+                                # Remove item
+                                # Restore stock
+                                item.product.increase_quantity(item.quantity)
+                                item.delete()
+                                continue
+                            
+                            # Handle stock change for quantity difference
+                            diff = quantity - item.quantity
+                            if diff > 0:
+                                 # Need more
+                                 if not item.product.can_order_quantity(diff):
+                                     raise serializers.ValidationError(f"Not enough stock for {item.product_name}")
+                                 item.product.reduce_quantity(diff)
+                            elif diff < 0:
+                                 # Returning some
+                                 item.product.increase_quantity(abs(diff))
+                            
+                            item.quantity = quantity
                         
-                        # Handle stock change for quantity difference
-                        diff = quantity - item.quantity
-                        if diff > 0:
-                             # Need more
-                             if not item.product.can_order_quantity(diff):
-                                 raise serializers.ValidationError(f"Not enough stock for {item.product_name}")
-                             item.product.reduce_quantity(diff)
-                        elif diff < 0:
-                             # Returning some
-                             item.product.increase_quantity(abs(diff))
+                        # Update price if provided
+                        if 'unit_price' in item_data:
+                            item.unit_price = item_data['unit_price']
                         
-                        item.quantity = quantity
+                        # Recalculate item total and save
+                        item.save() # save() method in model calculates total_price
+                
+                # Handle new items
+                elif 'product_id' in item_data:
+                    product_id = item_data.get('product_id')
+                    quantity = int(item_data['quantity'])
                     
-                    # Update price if provided
-                    if 'unit_price' in item_data:
-                        item.unit_price = item_data['unit_price']
+                    try:
+                        product = Product.objects.get(id=product_id, retailer=instance.retailer)
+                    except Product.DoesNotExist:
+                        raise serializers.ValidationError(f"Product with ID {product_id} not found in your catalog")
                     
-                    # Recalculate item total and save
-                    item.save() # save() method in model calculates total_price
-                    subtotal += item.total_price
+                    # Check stock
+                    if not product.can_order_quantity(quantity):
+                        raise serializers.ValidationError(f"Not enough stock for {product.name}")
+                    
+                    # Reduce stock
+                    product.reduce_quantity(quantity)
+                    
+                    # Create new OrderItem
+                    OrderItem.objects.create(
+                        order=instance,
+                        product=product,
+                        product_name=product.name,
+                        product_price=product.price,
+                        product_unit=product.unit,
+                        quantity=quantity,
+                        unit_price=product.price, # Default to current product price
+                        total_price=product.price * quantity
+                    )
             
             # Recalculate order subtotal from scratch to be safe
             # (In case some items were not in the update list but still exist)
