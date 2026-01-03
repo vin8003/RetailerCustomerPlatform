@@ -196,6 +196,16 @@ CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True
 from corsheaders.defaults import default_headers
 
+CORS_ALLOWED_ORIGINS = [
+    "https://customer.ordereasy.win",
+    "https://retailer.ordereasy.win",
+]
+
+CORS_ALLOWED_ORIGINS += [
+    "http://localhost:3000",
+    "http://localhost:5173",
+]
+
 CORS_ALLOW_HEADERS = list(default_headers) + [
     "authorization",
     "content-type",
@@ -298,9 +308,8 @@ if not firebase_admin._apps:
 
 
 CSRF_TRUSTED_ORIGINS = [
-    "http://80.225.240.187",
-    "https://*.pages.dev",
-    "https://*.trycloudflare.com",
+    "https://customer.ordereasy.win",
+    "https://retailer.ordereasy.win",
 ]
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
