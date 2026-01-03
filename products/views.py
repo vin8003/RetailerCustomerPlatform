@@ -1761,13 +1761,19 @@ class CommitUploadSessionView(APIView):
                     
                     if not master_product:
                         # Handle new/custom category/brand logic here if provided in details
-                        cat_name = details.get('category')
-                        if cat_name:
-                             category, _ = ProductCategory.objects.get_or_create(name=cat_name)
+                        cat_id = details.get('category_id')
+                        if cat_id:
+                             try:
+                                category = ProductCategory.objects.get(id=cat_id)
+                             except ProductCategory.DoesNotExist:
+                                pass
                         
-                        brand_name = details.get('brand')
-                        if brand_name:
-                             brand, _ = ProductBrand.objects.get_or_create(name=brand_name)
+                        brand_id = details.get('brand_id')
+                        if brand_id:
+                             try:
+                                brand = ProductBrand.objects.get(id=brand_id)
+                             except ProductBrand.DoesNotExist:
+                                pass
 
 
                     if existing_product:
