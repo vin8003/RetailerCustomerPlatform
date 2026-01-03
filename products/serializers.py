@@ -131,6 +131,37 @@ class ProductDetailSerializer(serializers.ModelSerializer):
     def get_image(self, obj):
         """Get product image URL or fallback to image_url"""
         return obj.image_display_url
+
+    def get_images(self, obj):
+        """Get unified list of all images"""
+        imgs = []
+        
+        # 1. Primary Image
+        if obj.image:
+            imgs.append(obj.image.url)
+        elif obj.image_url:
+            imgs.append(obj.image_url)
+            
+        # 2. Additional Images (Model)
+        for img in obj.additional_images.all():
+            imgs.append(img.image.url)
+            
+        # 3. Additional Images (JSON)
+        if obj.images and isinstance(obj.images, list):
+            for img in obj.images:
+                if img: imgs.append(str(img))
+
+        # 4. Master Product Images
+        if obj.master_product:
+             if obj.master_product.image_url and obj.master_product.image_url not in imgs:
+                 imgs.append(obj.master_product.image_url)
+             
+             for mp_img in obj.master_product.images.all():
+                 url = mp_img.image.url if mp_img.image else mp_img.image_url
+                 if url and url not in imgs:
+                     imgs.append(url)
+                     
+        return list(dict.fromkeys(imgs)) # Remove duplicates preserving order
     
     def get_average_rating(self, obj):
         """Calculate average rating"""
@@ -149,14 +180,29 @@ class MasterProductSerializer(serializers.ModelSerializer):
     """
     category_name = serializers.CharField(source='category.name', read_only=True)
     brand_name = serializers.CharField(source='brand.name', read_only=True)
+    images = serializers.SerializerMethodField()
     
     class Meta:
         model = MasterProduct
         fields = [
             'id', 'barcode', 'name', 'description', 
             'category', 'category_name', 'brand', 'brand_name',
-            'image_url', 'mrp', 'attributes', 'created_at'
+            'image_url', 'images', 'mrp', 'attributes', 'created_at'
         ]
+    
+    def get_images(self, obj):
+        """Get all images (primary URL + additional)"""
+        imgs = []
+        if obj.image_url:
+            imgs.append(obj.image_url)
+        
+        # Additional images
+        for img in obj.images.all():  # via related_name='images'
+            if img.image:
+                imgs.append(img.image.url)
+            elif img.image_url:
+                imgs.append(img.image_url)
+        return imgs
 
 
 class ProductCreateSerializer(serializers.ModelSerializer):

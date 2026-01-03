@@ -1624,6 +1624,10 @@ class GetSessionDetailsView(APIView):
                     final_price = details.get('price') or (existing_local.price if existing_local else 0)
                     final_stock = details.get('quantity') or (existing_local.quantity if existing_local else 0)
                     final_mrp = details.get('original_price') or (existing_local.original_price if existing_local else matched_mp.mrp or 0)
+                    
+                    # Fix: Add Brand and Category
+                    final_brand = details.get('brand') or (existing_local.brand.name if existing_local and existing_local.brand else (matched_mp.brand.name if matched_mp.brand else ""))
+                    final_category = details.get('category') or (existing_local.category.name if existing_local and existing_local.category else (matched_mp.category.name if matched_mp.category else ""))
 
                     item_data['master_product'] = mp_data
                     item_data['existing_product_id'] = existing_local.id if existing_local else None
@@ -1634,6 +1638,10 @@ class GetSessionDetailsView(APIView):
                         'price': final_price,
                         'original_price': final_mrp,
                         'quantity': final_stock,
+                        'brand': final_brand,
+                        'category': final_category,
+                        'image_url': matched_mp.image_url if matched_mp.image_url else "",
+                        'images': mp_data.get('images', []) 
                     }
                     response_data['matched_items'].append(item_data)
                 else:
@@ -1665,14 +1673,12 @@ class GetSessionDetailsView(APIView):
 
 
 class UpdateSessionItemsView(APIView):
-    """
-    Draft Save: Updates details in UploadSessionItem without creating products
-    """
+    # ... (No changes needed here for logic, keeping it compact in diff)
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
         session_id = request.data.get('session_id')
-        items_data = request.data.get('items', []) # List of {id, product_details: {...}}
+        items_data = request.data.get('items', []) 
 
         if not session_id:
             return Response({'error': 'session_id required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -1683,10 +1689,9 @@ class UpdateSessionItemsView(APIView):
             updated_count = 0
             for item in items_data:
                 item_id = item.get('id')
-                details = item.get('product_details') # JSON dict
+                details = item.get('product_details') 
                 
                 if item_id and details:
-                    # Verify item belongs to session
                     try:
                         session_item = UploadSessionItem.objects.get(id=item_id, session=session)
                         session_item.product_details = details
@@ -1721,14 +1726,17 @@ class CommitUploadSessionView(APIView):
                  return Response({'error': 'Session already completed'}, status=status.HTTP_400_BAD_REQUEST)
 
             items = session.items.all()
-            success_count = 0
+            
+            created_count = 0
+            updated_count = 0
             
             with transaction.atomic():
+                print(f"DEBUG: Processing {len(items)} items for Session {session.id}")
                 for item in items:
                     details = item.product_details
+                    print(f"DEBUG: Item {item.id} details: {details}")
                     if not details: 
-                        # If no details saved, maybe skip or use defaults? 
-                        # Assuming frontend validates before commit.
+                        print(f"DEBUG: Skipping Item {item.id} - No details")
                         continue
                         
                     barcode = item.barcode
@@ -1738,7 +1746,8 @@ class CommitUploadSessionView(APIView):
                     qty = details.get('quantity', 0)
                     
                     if not name:
-                        continue # Name is mandatory
+                        print(f"DEBUG: Skipping Item {item.id} - No name found")
+                        continue 
 
                     # Identify Targets
                     # 1. Master Product
@@ -1752,7 +1761,6 @@ class CommitUploadSessionView(APIView):
                     try:
                         existing_product = Product.objects.get(retailer=retailer, barcode=barcode)
                     except Product.DoesNotExist:
-                        # Fallback to name check
                         existing_product = Product.objects.filter(retailer=retailer, name__iexact=name).first()
 
                     # Handle Category/Brand creation if unmatched
@@ -1760,7 +1768,6 @@ class CommitUploadSessionView(APIView):
                     brand = None
                     
                     if not master_product:
-                        # Handle new/custom category/brand logic here if provided in details
                         cat_id = details.get('category_id')
                         if cat_id:
                              try:
@@ -1778,30 +1785,25 @@ class CommitUploadSessionView(APIView):
 
                     if existing_product:
                         # UPDATE
+                        print(f"DEBUG: Updating existing product {existing_product.id}")
                         existing_product.price = price
                         existing_product.original_price = mrp
-                        existing_product.quantity = qty # Should we add or set? "Stock Input" usually means "Current Stock". Let's Update.
+                        existing_product.quantity = qty 
                         
-                        # Update metadata if context allows
                         if master_product and not existing_product.master_product:
                             existing_product.master_product = master_product
                         
                         if barcode and existing_product.barcode != barcode:
                              existing_product.barcode = barcode
                              
-                        # If image was captured in session and local prod has no image can update?
-                        # item.image is the file.
                         if item.image and not existing_product.image:
-                             # Duplicate file? Or just assign.
-                             # Better to verify if user wants to replace image.
-                             # For now, let's say we update image if "unmatched" logic was used (user took photo for a reason)
                              existing_product.image = item.image
 
                         existing_product.save()
-                        
-                        # TODO: Log inventory change
+                        updated_count += 1
                     else:
                         # CREATE
+                        print(f"DEBUG: Creating new product '{name}'")
                         new_prod = Product(
                             retailer=retailer,
                             name=name,
@@ -1810,24 +1812,29 @@ class CommitUploadSessionView(APIView):
                             original_price=mrp,
                             quantity=qty,
                             master_product=master_product,
-                            image=item.image # Assign the captured image
+                            image=item.image
                         )
                         if category: new_prod.category = category
                         if brand: new_prod.brand = brand
                         
-                        # Copy from Master if available and not overridden
                         if master_product:
                             if not category and master_product.category: new_prod.category = master_product.category
                             if not brand and master_product.brand: new_prod.brand = master_product.brand
                         
                         new_prod.save()
+                        created_count += 1
                     
                     item.is_processed = True
                     item.save()
-                    success_count += 1
             
+            print(f"DEBUG: Session {session.id} completed. Created: {created_count}, Updated: {updated_count}")
             session.status = 'completed'
             session.save()
+            
+            return Response({
+                'created_count': created_count,
+                'updated_count': updated_count
+            }, status=status.HTTP_200_OK)
             
             return Response({'message': 'Session committed', 'count': success_count})
 

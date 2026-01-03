@@ -410,7 +410,8 @@ def verify_otp(request):
                 )
 
             # Verify OTP
-            if verify_otp_helper(otp_verification.secret_key, otp_code):
+            # Use direct comparison now
+            if str(otp_verification.otp_code) == str(otp_code):
                 # Mark as verified
                 otp_verification.is_verified = True
                 otp_verification.save()
