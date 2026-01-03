@@ -205,9 +205,12 @@ CSRF_TRUSTED_ORIGINS = [
 if os.getenv('RENDER_EXTERNAL_URL'):
     CSRF_TRUSTED_ORIGINS.append(os.getenv('RENDER_EXTERNAL_URL'))
 
-# SMS Configuration (using a generic SMS API)
-SMS_API_KEY = os.getenv('SMS_API_KEY', 'your-sms-api-key')
-SMS_API_URL = os.getenv('SMS_API_URL', 'https://api.example.com/sms/send')
+# SMS Configuration (Authkey.io)
+AUTHKEY_API_KEY = os.getenv('AUTHKEY_API_KEY', '')
+AUTHKEY_URL = os.getenv('AUTHKEY_URL', 'https://api.authkey.io/request')
+AUTHKEY_SENDER = os.getenv('AUTHKEY_SENDER', 'SENDERID')
+AUTHKEY_PE_ID = os.getenv('AUTHKEY_PE_ID', '')
+AUTHKEY_TEMPLATE_ID = os.getenv('AUTHKEY_TEMPLATE_ID', '')
 
 # OTP Settings
 OTP_EXPIRY_TIME = 300  # 5 minutes in seconds
