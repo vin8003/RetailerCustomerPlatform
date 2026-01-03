@@ -95,6 +95,27 @@ class MasterProduct(models.Model):
         return f"{self.name} ({self.barcode})"
 
 
+class MasterProductImage(models.Model):
+    """
+    Additional images for master products
+    """
+    master_product = models.ForeignKey(
+        MasterProduct, 
+        on_delete=models.CASCADE, 
+        related_name='images'
+    )
+    image = models.ImageField(upload_to=generate_upload_path, blank=True, null=True)
+    image_url = models.URLField(max_length=500, blank=True, null=True)
+    is_primary = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'master_product_image'
+
+    def __str__(self):
+        return f"Image for {self.master_product.name}"
+
+
 class Product(models.Model):
     """
     Product model for retailer products
