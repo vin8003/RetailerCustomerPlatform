@@ -227,7 +227,11 @@ class Product(models.Model):
         """Get product image URL or fallback to image_url"""
         if self.image:
             return self.image.url
-        return self.image_url
+        if self.image_url:
+            return self.image_url
+        if self.master_product and self.master_product.image_url:
+            return self.master_product.image_url
+        return None
 
     @property
     def discounted_price(self):

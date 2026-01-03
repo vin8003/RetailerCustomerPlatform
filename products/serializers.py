@@ -83,9 +83,7 @@ class ProductListSerializer(serializers.ModelSerializer):
     
     def get_image(self, obj):
         """Get product image URL or fallback to image_url"""
-        if obj.image:
-            return obj.image.url
-        return obj.image_url
+        return obj.image_display_url
     
     def get_average_rating(self, obj):
         """Calculate average rating"""
@@ -132,9 +130,7 @@ class ProductDetailSerializer(serializers.ModelSerializer):
     
     def get_image(self, obj):
         """Get product image URL or fallback to image_url"""
-        if obj.image:
-            return obj.image.url
-        return obj.image_url
+        return obj.image_display_url
     
     def get_average_rating(self, obj):
         """Calculate average rating"""
