@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from django.db import transaction
 from django.utils import timezone
-from .models import Order, OrderItem, OrderStatusLog, OrderDelivery, OrderFeedback, OrderReturn
+from .models import Order, OrderItem, OrderStatusLog, OrderDelivery, OrderFeedback, OrderReturn, OrderChatMessage
 from customers.models import CustomerAddress
 from products.models import Product
 from cart.models import Cart, CartItem
@@ -56,6 +56,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     delivery_address_text = serializers.CharField(source='delivery_address.full_address', read_only=True)
     delivery_latitude = serializers.DecimalField(source='delivery_address.latitude', max_digits=10, decimal_places=8, read_only=True)
     delivery_longitude = serializers.DecimalField(source='delivery_address.longitude', max_digits=11, decimal_places=8, read_only=True)
+    unread_messages_count = serializers.SerializerMethodField()
     
     class Meta:
         model = Order
@@ -67,8 +68,16 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'special_instructions', 'cancellation_reason', 'delivery_address_text',
             'delivery_latitude', 'delivery_longitude',
             'items', 'created_at', 'updated_at', 'confirmed_at', 'delivered_at',
-            'cancelled_at'
+            'cancelled_at', 'unread_messages_count'
         ]
+    
+    def get_unread_messages_count(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user:
+            return 0
+        
+        # Count messages NOT sent by me and NOT read
+        return obj.chat_messages.exclude(sender=request.user).filter(is_read=False).count()
 
 
 class OrderCreateSerializer(serializers.Serializer):
@@ -568,7 +577,31 @@ class OrderModificationSerializer(serializers.Serializer):
             if instance.total_amount < 0:
                 instance.total_amount = 0
             
+            
             # Change status to waiting for approval using update_status to trigger notifications
             instance.update_status('waiting_for_customer_approval', self.context.get('user'))
             
             return instance
+
+
+class OrderChatMessageSerializer(serializers.ModelSerializer):
+    """
+    Serializer for order chat messages
+    """
+    sender_name = serializers.CharField(source='sender.first_name', read_only=True)
+    sender_type = serializers.CharField(source='sender.user_type', read_only=True)
+    is_me = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = OrderChatMessage
+        fields = [
+            'id', 'sender', 'sender_name', 'sender_type', 'message', 
+            'is_read', 'created_at', 'is_me'
+        ]
+        read_only_fields = ['id', 'sender', 'created_at', 'is_read']
+    
+    def get_is_me(self, obj):
+        request = self.context.get('request')
+        if request and request.user:
+            return obj.sender == request.user
+        return False

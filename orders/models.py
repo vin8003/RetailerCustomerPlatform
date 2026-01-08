@@ -535,3 +535,32 @@ class OrderReturn(models.Model):
     
     def __str__(self):
         return f"Return request for Order #{self.order.order_number}"
+
+
+class OrderChatMessage(models.Model):
+    """
+    Chat messages between customer and retailer for an order
+    """
+    order = models.ForeignKey(
+        Order, 
+        on_delete=models.CASCADE, 
+        related_name='chat_messages'
+    )
+    sender = models.ForeignKey(
+        settings.AUTH_USER_MODEL, 
+        on_delete=models.SET_NULL,
+        null=True
+    )
+    message = models.TextField()
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'order_chat_message'
+        indexes = [
+            models.Index(fields=['order', 'created_at']),
+        ]
+        ordering = ['created_at']
+    
+    def __str__(self):
+        return f"Chat on {self.order.order_number}: {self.message[:20]}"

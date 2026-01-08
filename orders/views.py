@@ -4,15 +4,16 @@ from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Q, Sum, Count, Avg
 from django.shortcuts import get_object_or_404
+from django.http import Http404
 from django.utils import timezone
 from datetime import timedelta
 import logging
 
-from .models import Order, OrderItem, OrderStatusLog, OrderFeedback, OrderReturn
+from .models import Order, OrderItem, OrderStatusLog, OrderFeedback, OrderReturn, OrderChatMessage
 from .serializers import (
     OrderListSerializer, OrderDetailSerializer, OrderCreateSerializer,
     OrderStatusUpdateSerializer, OrderFeedbackSerializer, OrderReturnSerializer,
-    OrderStatsSerializer, OrderModificationSerializer
+    OrderStatsSerializer, OrderModificationSerializer, OrderChatMessageSerializer
 )
 from retailers.models import RetailerProfile, RetailerReview
 from retailers.serializers import RetailerReviewSerializer
@@ -75,7 +76,7 @@ def place_order(request):
                     data={'order_id': str(order.id)}
                 )
 
-            response_serializer = OrderDetailSerializer(order)
+            response_serializer = OrderDetailSerializer(order, context={'request': request})
             logger.info(f"Order placed: {order.order_number} by {request.user.username}")
             return Response(response_serializer.data, status=status.HTTP_201_CREATED)
         
@@ -283,7 +284,7 @@ def get_order_detail(request, order_id):
             if last_updated == current_updated or last_updated == order.updated_at.isoformat():
                 return Response(status=status.HTTP_304_NOT_MODIFIED)
         
-        serializer = OrderDetailSerializer(order)
+        serializer = OrderDetailSerializer(order, context={'request': request})
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     except Exception as e:
@@ -324,7 +325,7 @@ def update_order_status(request, order_id):
         
         if serializer.is_valid():
             order = serializer.save()
-            response_serializer = OrderDetailSerializer(order)
+            response_serializer = OrderDetailSerializer(order, context={'request': request})
             logger.info(f"Order status updated: {order.order_number} to {order.status}")
             return Response(response_serializer.data, status=status.HTTP_200_OK)
         
@@ -390,7 +391,7 @@ def cancel_order(request, order_id):
         
         logger.info(f"Order cancelled: {order.order_number} by {user.username}")
         
-        serializer = OrderDetailSerializer(order)
+        serializer = OrderDetailSerializer(order, context={'request': request})
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     except Exception as e:
@@ -725,3 +726,120 @@ def confirm_modification(request, order_id):
             {'error': 'Internal server error'}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def get_order_chat(request, order_id):
+    """
+    Get chat messages for an order
+    """
+    try:
+        user = request.user
+        
+        if user.user_type == 'customer':
+            order = get_object_or_404(Order, id=order_id, customer=user)
+        elif user.user_type == 'retailer':
+            try:
+                retailer = RetailerProfile.objects.get(user=user)
+                order = get_object_or_404(Order, id=order_id, retailer=retailer)
+            except RetailerProfile.DoesNotExist:
+                return Response({'error': 'Retailer profile not found'}, status=404)
+        else:
+            return Response({'error': 'Invalid user type'}, status=403)
+            
+        messages = order.chat_messages.all()
+        serializer = OrderChatMessageSerializer(messages, many=True, context={'request': request})
+        return Response(serializer.data)
+        
+    except Http404:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting chat: {e}")
+        return Response({'error': 'Internal server error'}, status=500)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def send_order_message(request, order_id):
+    """
+    Send a chat message
+    """
+    try:
+        user = request.user
+        
+        if user.user_type == 'customer':
+            order = get_object_or_404(Order, id=order_id, customer=user)
+            recipient = order.retailer.user
+        elif user.user_type == 'retailer':
+            try:
+                retailer = RetailerProfile.objects.get(user=user)
+                order = get_object_or_404(Order, id=order_id, retailer=retailer)
+                recipient = order.customer
+            except RetailerProfile.DoesNotExist:
+                return Response({'error': 'Retailer profile not found'}, status=404)
+        else:
+            return Response({'error': 'Invalid user type'}, status=403)
+            
+        message_text = request.data.get('message')
+        if not message_text:
+            return Response({'error': 'Message cannot be empty'}, status=400)
+            
+        message = OrderChatMessage.objects.create(
+            order=order,
+            sender=user,
+            message=message_text
+        )
+        
+        # Send notification to recipient
+        if recipient:
+            send_push_notification(
+                user=recipient,
+                title=f"Message from {user.first_name or user.username}",
+                message=message_text,
+                data={
+                    'type': 'order_chat',
+                    'order_id': str(order.id)
+                }
+            )
+            
+        serializer = OrderChatMessageSerializer(message, context={'request': request})
+        return Response(serializer.data, status=201)
+        
+    except Http404:
+        raise
+    except Exception as e:
+        logger.error(f"Error sending message: {e}")
+        return Response({'error': 'Internal server error'}, status=500)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def mark_chat_read(request, order_id):
+    """
+    Mark all unread messages in this order as read (for the current user)
+    """
+    try:
+        user = request.user
+        
+        if user.user_type == 'customer':
+            order = get_object_or_404(Order, id=order_id, customer=user)
+        elif user.user_type == 'retailer':
+            try:
+                retailer = RetailerProfile.objects.get(user=user)
+                order = get_object_or_404(Order, id=order_id, retailer=retailer)
+            except RetailerProfile.DoesNotExist:
+                return Response({'error': 'Retailer profile not found'}, status=404)
+        else:
+            return Response({'error': 'Invalid user type'}, status=403)
+            
+        # Mark all messages NOT sent by me as read
+        order.chat_messages.exclude(sender=user).filter(is_read=False).update(is_read=True)
+        
+        return Response({'status': 'ok'})
+        
+    except Http404:
+        raise
+    except Exception as e:
+        logger.error(f"Error marking read: {e}")
+        return Response({'error': 'Internal server error'}, status=500)
