@@ -15,6 +15,7 @@ urlpatterns = [
     
     # Feedback and returns
     path('<int:order_id>/feedback/', views.create_order_feedback, name='create_order_feedback'),
+    path('<int:order_id>/rate-customer/', views.create_retailer_rating, name='create_retailer_rating'),
     path('<int:order_id>/return/', views.create_return_request, name='create_return_request'),
 
     # Chat

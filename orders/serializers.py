@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from django.db import transaction
 from django.utils import timezone
-from .models import Order, OrderItem, OrderStatusLog, OrderDelivery, OrderFeedback, OrderReturn, OrderChatMessage
+from .models import Order, OrderItem, OrderStatusLog, OrderDelivery, OrderFeedback, OrderReturn, OrderChatMessage, RetailerRating
 from customers.models import CustomerAddress
 from products.models import Product
 from cart.models import Cart, CartItem
@@ -29,17 +29,25 @@ class OrderListSerializer(serializers.ModelSerializer):
     retailer_name = serializers.CharField(source='retailer.shop_name', read_only=True)
     customer_name = serializers.CharField(source='customer.first_name', read_only=True)
     items_count = serializers.SerializerMethodField()
+    has_customer_feedback = serializers.SerializerMethodField()
+    has_retailer_rating = serializers.SerializerMethodField()
     
     class Meta:
         model = Order
         fields = [
             'id', 'order_number', 'retailer', 'retailer_name', 'customer_name', 'delivery_mode', 'payment_mode',
-            'status', 'total_amount', 'items_count', 'created_at', 'updated_at'
+            'status', 'total_amount', 'items_count', 'created_at', 'updated_at', 'has_customer_feedback', 'has_retailer_rating'
         ]
     
     def get_items_count(self, obj):
         """Get number of items in order"""
         return getattr(obj, 'items_count_annotated', obj.items.count())
+
+    def get_has_customer_feedback(self, obj):
+        return hasattr(obj, 'feedback')
+
+    def get_has_retailer_rating(self, obj):
+        return hasattr(obj, 'retailer_rating')
 
 
 class OrderDetailSerializer(serializers.ModelSerializer):
@@ -57,6 +65,8 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     delivery_latitude = serializers.DecimalField(source='delivery_address.latitude', max_digits=10, decimal_places=8, read_only=True)
     delivery_longitude = serializers.DecimalField(source='delivery_address.longitude', max_digits=11, decimal_places=8, read_only=True)
     unread_messages_count = serializers.SerializerMethodField()
+    has_customer_feedback = serializers.SerializerMethodField()
+    has_retailer_rating = serializers.SerializerMethodField()
     
     class Meta:
         model = Order
@@ -68,7 +78,8 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'special_instructions', 'cancellation_reason', 'delivery_address_text',
             'delivery_latitude', 'delivery_longitude',
             'items', 'created_at', 'updated_at', 'confirmed_at', 'delivered_at',
-            'cancelled_at', 'unread_messages_count'
+            'cancelled_at', 'unread_messages_count',
+            'has_customer_feedback', 'has_retailer_rating'
         ]
     
     def get_unread_messages_count(self, obj):
@@ -78,6 +89,12 @@ class OrderDetailSerializer(serializers.ModelSerializer):
         
         # Count messages NOT sent by me and NOT read
         return obj.chat_messages.exclude(sender=request.user).filter(is_read=False).count()
+
+    def get_has_customer_feedback(self, obj):
+        return hasattr(obj, 'feedback')
+
+    def get_has_retailer_rating(self, obj):
+        return hasattr(obj, 'retailer_rating')
 
 
 class OrderCreateSerializer(serializers.Serializer):
@@ -605,3 +622,46 @@ class OrderChatMessageSerializer(serializers.ModelSerializer):
         if request and request.user:
             return obj.sender == request.user
         return False
+
+
+class RetailerRatingSerializer(serializers.ModelSerializer):
+    """
+    Serializer for retailer rating (Retailer -> Customer)
+    """
+    class Meta:
+        model = RetailerRating
+        fields = [
+            'id', 'rating', 'comment', 'created_at'
+        ]
+        read_only_fields = ['id', 'created_at']
+    
+    def validate_rating(self, value):
+        """Validate rating range (0-5)"""
+        if value < 0 or value > 5:
+            raise serializers.ValidationError("Rating must be between 0 and 5")
+        return value
+    
+    def create(self, validated_data):
+        """Create rating with order and retailer from context"""
+        order = self.context['order']
+        retailer = self.context['retailer']
+        customer = order.customer
+        
+        # Check if order is delivered or cancelled (retailers can probably rate cancelled orders too strictly speaking, but let's stick to completed/cancelled flow)
+        # Actually requirements say "after every completed order".
+        # Let's assume 'delivered', 'cancelled', 'returned' are completed states.
+        if not order.is_completed: 
+             # Wait, is_completed is a property in model? Yes lines 152-155: delivered, cancelled, returned.
+             raise serializers.ValidationError("Can only rate completed orders")
+
+        
+        # Check if rating already exists
+        if hasattr(order, 'retailer_rating'):
+            raise serializers.ValidationError("Rating already provided for this customer on this order")
+        
+        return RetailerRating.objects.create(
+            order=order,
+            retailer=retailer,
+            customer=customer,
+            **validated_data
+        )

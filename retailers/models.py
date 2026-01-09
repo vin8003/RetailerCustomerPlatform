@@ -247,3 +247,31 @@ class RetailerRewardConfig(models.Model):
         
     def __str__(self):
         return f"Reward Config for {self.retailer.shop_name}"
+
+
+class RetailerBlacklist(models.Model):
+    """
+    List of customers blacklisted by a retailer
+    """
+    retailer = models.ForeignKey(
+        RetailerProfile, 
+        on_delete=models.CASCADE, 
+        related_name='blacklisted_customers'
+    )
+    customer = models.ForeignKey(
+        settings.AUTH_USER_MODEL, 
+        on_delete=models.CASCADE, 
+        related_name='blacklisted_by'
+    )
+    reason = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'retailer_blacklist'
+        unique_together = ['retailer', 'customer']
+        indexes = [
+            models.Index(fields=['retailer', 'customer']),
+        ]
+    
+    def __str__(self):
+        return f"{self.customer.username} blacklisted by {self.retailer.shop_name}"

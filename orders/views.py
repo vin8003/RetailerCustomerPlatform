@@ -13,7 +13,8 @@ from .models import Order, OrderItem, OrderStatusLog, OrderFeedback, OrderReturn
 from .serializers import (
     OrderListSerializer, OrderDetailSerializer, OrderCreateSerializer,
     OrderStatusUpdateSerializer, OrderFeedbackSerializer, OrderReturnSerializer,
-    OrderStatsSerializer, OrderModificationSerializer, OrderChatMessageSerializer
+    OrderStatsSerializer, OrderModificationSerializer, OrderChatMessageSerializer,
+    RetailerRatingSerializer
 )
 from retailers.models import RetailerProfile, RetailerReview
 from retailers.serializers import RetailerReviewSerializer
@@ -54,6 +55,20 @@ def place_order(request):
         )
         
         if serializer.is_valid():
+            # Check for blacklist
+            from retailers.models import RetailerBlacklist, RetailerProfile
+            retailer_id = request.data.get('retailer_id')
+            if retailer_id:
+                try:
+                    retailer = RetailerProfile.objects.get(id=retailer_id)
+                    if RetailerBlacklist.objects.filter(retailer=retailer, customer=request.user).exists():
+                        return Response(
+                            {'error': 'You are blacklisted by this retailer and cannot place orders.'},
+                            status=status.HTTP_403_FORBIDDEN
+                        )
+                except RetailerProfile.DoesNotExist:
+                     pass # Serializer will handle this
+
             order = serializer.save()
             
             # Notify Retailer
@@ -798,19 +813,59 @@ def send_order_message(request, order_id):
                 title=f"Message from {user.first_name or user.username}",
                 message=message_text,
                 data={
-                    'type': 'order_chat',
+                    'type': 'new_message',
                     'order_id': str(order.id)
                 }
             )
             
         serializer = OrderChatMessageSerializer(message, context={'request': request})
-        return Response(serializer.data, status=201)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
         
-    except Http404:
-        raise
     except Exception as e:
         logger.error(f"Error sending message: {e}")
         return Response({'error': 'Internal server error'}, status=500)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def create_retailer_rating(request, order_id):
+    """
+    Create rating for a customer - only for retailers
+    """
+    try:
+        if request.user.user_type != 'retailer':
+            return Response(
+                {'error': 'Only retailers can rate customers'}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        try:
+            retailer = RetailerProfile.objects.get(user=request.user)
+            order = get_object_or_404(Order, id=order_id, retailer=retailer)
+        except RetailerProfile.DoesNotExist:
+            return Response(
+                {'error': 'Retailer profile not found'}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        serializer = RetailerRatingSerializer(
+            data=request.data,
+            context={'order': order, 'retailer': retailer}
+        )
+        
+        if serializer.is_valid():
+            rating = serializer.save()
+            logger.info(f"Rating created for customer {order.customer.username} by retailer {retailer.shop_name}")
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    except Exception as e:
+        logger.error(f"Error creating retailer rating: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 
 @api_view(['POST'])
