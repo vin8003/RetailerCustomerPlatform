@@ -144,3 +144,44 @@ class CustomerSearchHistorySerializer(serializers.Serializer):
     created_at = serializers.DateTimeField()
 
 
+class RetailerCustomerListSerializer(serializers.Serializer):
+    """
+    Serializer for listing customers for a retailer with enhanced metrics
+    """
+    customer_id = serializers.IntegerField()
+    customer_name = serializers.CharField()
+    phone_number = serializers.CharField(required=False)
+    profile_image = serializers.CharField(required=False, allow_null=True)
+    points = serializers.DecimalField(max_digits=10, decimal_places=2)
+    average_rating = serializers.DecimalField(max_digits=3, decimal_places=2)
+    total_orders = serializers.IntegerField()
+    total_spent = serializers.DecimalField(max_digits=10, decimal_places=2)
+    is_blacklisted = serializers.BooleanField()
+    last_order_date = serializers.DateTimeField(allow_null=True)
+    joined_date = serializers.DateTimeField(required=False)
+
+
+class RetailerCustomerDetailSerializer(serializers.Serializer):
+    """
+    Serializer for detailed customer view for a retailer
+    """
+    customer_id = serializers.IntegerField()
+    customer_name = serializers.CharField()
+    phone_number = serializers.CharField()
+    email = serializers.EmailField()
+    profile_image = serializers.CharField(allow_null=True)
+    points = serializers.DecimalField(max_digits=10, decimal_places=2)
+    average_rating = serializers.DecimalField(max_digits=3, decimal_places=2)
+    total_orders = serializers.IntegerField()
+    total_spent = serializers.DecimalField(max_digits=10, decimal_places=2)
+    is_blacklisted = serializers.BooleanField()
+    last_order_date = serializers.DateTimeField(allow_null=True)
+    joined_date = serializers.DateTimeField()
+    
+    # Additional detail fields
+    recent_orders = serializers.ListField()
+    reward_history = serializers.ListField()
+    retailer_ratings = serializers.ListField()
+
+
+

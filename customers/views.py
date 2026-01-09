@@ -12,10 +12,11 @@ from .models import CustomerProfile, CustomerAddress, CustomerWishlist, Customer
 from .serializers import (
     CustomerProfileSerializer, CustomerAddressSerializer, CustomerAddressUpdateSerializer,
     CustomerWishlistSerializer, CustomerNotificationSerializer, CustomerDashboardSerializer,
+    RetailerCustomerListSerializer, RetailerCustomerDetailSerializer,
 )
-from retailers.models import RetailerProfile, RetailerRewardConfig
+from retailers.models import RetailerProfile, RetailerRewardConfig, RetailerBlacklist
 from retailers.serializers import RetailerRewardConfigSerializer
-from orders.models import Order
+from orders.models import Order, RetailerRating
 from products.models import Product
 from retailers.models import RetailerProfile
 
@@ -770,6 +771,237 @@ def get_referral_stats(request):
         
     except Exception as e:
         logger.error(f"Error getting referral stats: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def get_retailer_customers(request):
+    """
+    Get all customers for the authenticated retailer with rich operational data
+    """
+    try:
+        if request.user.user_type != 'retailer':
+            return Response(
+                {'error': 'Only retailers can access this endpoint'}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+            
+        retailer = get_object_or_404(RetailerProfile, user=request.user)
+        
+        # 1. Get all customers who have placed orders
+        customers_with_orders = Order.objects.filter(retailer=retailer).values_list('customer', flat=True).distinct()
+        
+        # 2. Get all customers with loyalty points
+        customers_with_loyalty = CustomerLoyalty.objects.filter(retailer=retailer).values_list('customer', flat=True)
+        
+        # 3. Get all blacklisted customers
+        blacklisted_customers = RetailerBlacklist.objects.filter(retailer=retailer).values_list('customer', flat=True)
+        
+        # Combine unique customer IDs
+        all_customer_ids = set(customers_with_orders) | set(customers_with_loyalty) | set(blacklisted_customers)
+        
+        # Fetch detailed data for each customer
+        customer_profiles = CustomerProfile.objects.filter(user__id__in=all_customer_ids).select_related('user')
+        
+        data = []
+        for profile in customer_profiles:
+            user = profile.user
+            
+            # Helper: Get Stats
+            orders = Order.objects.filter(retailer=retailer, customer=user)
+            delivered_orders = orders.filter(status='delivered')
+            
+            total_orders = orders.count()
+            total_spent = delivered_orders.aggregate(Sum('total_amount'))['total_amount__sum'] or 0
+            last_order = orders.order_by('-created_at').first()
+            last_order_date = last_order.created_at if last_order else None
+            
+            # Helper: Get Points
+            loyalty = CustomerLoyalty.objects.filter(retailer=retailer, customer=user).first()
+            points = loyalty.points if loyalty else 0
+            
+            # Helper: Get Blacklist details
+            is_blacklisted = RetailerBlacklist.objects.filter(retailer=retailer, customer=user).exists()
+            
+            data.append({
+                'customer_id': user.id,
+                'customer_name': user.get_full_name() or user.username,
+                'phone_number': user.phone_number,
+                'profile_image': profile.profile_image.url if profile.profile_image else None,
+                'points': points,
+                'average_rating': profile.average_rating, # Global rating
+                'total_orders': total_orders,
+                'total_spent': total_spent,
+                'is_blacklisted': is_blacklisted,
+                'last_order_date': last_order_date,
+                'joined_date': profile.created_at
+            })
+            
+        serializer = RetailerCustomerListSerializer(data, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    except Exception as e:
+        logger.error(f"Error getting retailer customers: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def get_customer_details_for_retailer(request, customer_id):
+    """
+    Get detailed customer view for a retailer
+    """
+    try:
+        if request.user.user_type != 'retailer':
+            return Response(
+                {'error': 'Only retailers can access this endpoint'}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+            
+        retailer = get_object_or_404(RetailerProfile, user=request.user)
+        profile = get_object_or_404(CustomerProfile, user__id=customer_id)
+        user = profile.user
+        
+        # Stats
+        orders = Order.objects.filter(retailer=retailer, customer=user).order_by('-created_at')
+        delivered_orders = orders.filter(status='delivered')
+        
+        total_orders = orders.count()
+        total_spent = delivered_orders.aggregate(Sum('total_amount'))['total_amount__sum'] or 0
+        last_order = orders.first()
+        
+        # Points
+        loyalty = CustomerLoyalty.objects.filter(retailer=retailer, customer=user).first()
+        points = loyalty.points if loyalty else 0
+        
+        # Blacklist
+        is_blacklisted = RetailerBlacklist.objects.filter(retailer=retailer, customer=user).exists()
+        
+        # Recent Orders Data
+        recent_orders_data = []
+        for order in orders[:10]: # Increased to 10
+            # Check if rated
+            rating_obj = RetailerRating.objects.filter(order=order, retailer=retailer).first()
+            rating_val = rating_obj.rating if rating_obj else None
+            
+            recent_orders_data.append({
+                'id': order.id,
+                'order_number': order.order_number,
+                'status': order.status,
+                'total_amount': order.total_amount,
+                'created_at': order.created_at,
+                'items_count': order.items.count(),
+                'my_rating': rating_val
+            })
+            
+        # Reward History (Simplification: using Order logs or just returning empty for now if no dedicated log)
+        # We can simulate reward history from 'points_earned' in orders
+        reward_history = []
+        for order in delivered_orders.filter(points_earned__gt=0).order_by('-created_at')[:5]:
+             reward_history.append({
+                 'date': order.delivered_at or order.updated_at,
+                 'points': order.points_earned,
+                 'type': 'earned',
+                 'order_number': order.order_number
+             })
+             
+        # Retailer Ratings (My ratings for this customer)
+        my_ratings_qs = RetailerRating.objects.filter(retailer=retailer, customer=user).order_by('-created_at')
+        my_ratings = []
+        for rating in my_ratings_qs:
+            my_ratings.append({
+                'rating': rating.rating,
+                'comment': rating.comment,
+                'created_at': rating.created_at,
+                'order_number': rating.order.order_number
+            })
+            
+        data = {
+            'customer_id': user.id,
+            'customer_name': user.get_full_name() or user.username,
+            'phone_number': user.phone_number,
+            'email': user.email,
+            'profile_image': profile.profile_image.url if profile.profile_image else None,
+            'points': points,
+            'average_rating': profile.average_rating,
+            'total_orders': total_orders,
+            'total_spent': total_spent,
+            'is_blacklisted': is_blacklisted,
+            'last_order_date': last_order.created_at if last_order else None,
+            'joined_date': profile.created_at,
+            'recent_orders': recent_orders_data,
+            'reward_history': reward_history,
+            'retailer_ratings': my_ratings
+        }
+        
+        serializer = RetailerCustomerDetailSerializer(data)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        logger.error(f"Error getting customer details: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def toggle_blacklist(request):
+    """
+    Toggle blacklist status for a customer
+    """
+    try:
+        if request.user.user_type != 'retailer':
+            return Response(
+                {'error': 'Only retailers can manage blacklist'}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+            
+        customer_id = request.data.get('customer_id')
+        reason = request.data.get('reason', '')
+        action = request.data.get('action') # 'blacklist' or 'unblacklist'
+        
+        if not customer_id or not action:
+            return Response(
+                {'error': 'Customer ID and action are required'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        retailer = get_object_or_404(RetailerProfile, user=request.user)
+        customer_profile = get_object_or_404(CustomerProfile, user__id=customer_id)
+        customer = customer_profile.user
+        
+        if action == 'blacklist':
+            RetailerBlacklist.objects.get_or_create(
+                retailer=retailer,
+                customer=customer,
+                defaults={'reason': reason}
+            )
+            message = 'Customer blacklisted successfully'
+        elif action == 'unblacklist':
+            RetailerBlacklist.objects.filter(
+                retailer=retailer,
+                customer=customer
+            ).delete()
+            message = 'Customer removed from blacklist'
+        else:
+             return Response(
+                {'error': 'Invalid action'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        return Response({'message': message}, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        logger.error(f"Error toggling blacklist: {str(e)}")
         return Response(
             {'error': 'Internal server error'}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
