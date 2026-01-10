@@ -33,6 +33,7 @@ class Order(models.Model):
     
     # Order identification
     order_number = models.CharField(max_length=20, unique=True, editable=False)
+    source = models.CharField(max_length=50, default='app')
     
     # Relationships
     customer = models.ForeignKey(
@@ -535,3 +536,117 @@ class OrderReturn(models.Model):
     
     def __str__(self):
         return f"Return request for Order #{self.order.order_number}"
+
+
+class OrderChatMessage(models.Model):
+    """
+    Chat messages between customer and retailer for an order
+    """
+    order = models.ForeignKey(
+        Order, 
+        on_delete=models.CASCADE, 
+        related_name='chat_messages'
+    )
+    sender = models.ForeignKey(
+        settings.AUTH_USER_MODEL, 
+        on_delete=models.SET_NULL,
+        null=True
+    )
+    message = models.TextField()
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'order_chat_message'
+        indexes = [
+            models.Index(fields=['order', 'created_at']),
+        ]
+        ordering = ['created_at']
+    
+    def __str__(self):
+        return f"Chat on {self.order.order_number}: {self.message[:20]}"
+
+
+class RetailerRating(models.Model):
+    """
+    Rating given by retailer to a customer
+    """
+    order = models.OneToOneField(
+        Order, 
+        on_delete=models.CASCADE, 
+        related_name='retailer_rating'
+    )
+    retailer = models.ForeignKey(
+        'retailers.RetailerProfile', 
+        on_delete=models.CASCADE
+    )
+    customer = models.ForeignKey(
+        settings.AUTH_USER_MODEL, 
+        on_delete=models.CASCADE
+    )
+    rating = models.PositiveIntegerField() # 0-5 stars
+    comment = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'retailer_rating'
+        unique_together = ['order', 'retailer'] # One rating per order
+    
+    def __str__(self):
+        return f"Rating for {self.customer.username} by {self.retailer.shop_name}: {self.rating}"
+
+
+# Signals for Rating Updates
+
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+from django.db.models import Avg
+
+@receiver(post_save, sender=OrderFeedback)
+def update_retailer_rating_stats(sender, instance, created, **kwargs):
+    """
+    Update retailer's average rating when a new feedback is added
+    """
+    if created:
+        retailer = instance.order.retailer
+        
+        # Calculate new average
+        # We need to import RetailerReview if we want to include those too, 
+        # but requirements say "Retailer’s overall rating = average of all ratings received from customers".
+        # OrderFeedback is the "Customer -> Retailer Rating" per completed order.
+        # RetailerReview might be a separate "general review" thing.
+        # Let's check if we should aggregate ALL OrderFeedback for this retailer.
+        
+        avg_rating = OrderFeedback.objects.filter(order__retailer=retailer).aggregate(Avg('overall_rating'))['overall_rating__avg'] or 0
+        total_ratings = OrderFeedback.objects.filter(order__retailer=retailer).count()
+        
+        retailer.average_rating = round(avg_rating, 2)
+        retailer.total_ratings = total_ratings
+        retailer.save()
+
+
+@receiver(post_save, sender=RetailerRating)
+def update_customer_rating_stats(sender, instance, created, **kwargs):
+    """
+    Update customer's average rating and handle blacklist
+    """
+    # 1. Handle Blacklist (0 stars)
+    if instance.rating == 0:
+        from retailers.models import RetailerBlacklist
+        RetailerBlacklist.objects.get_or_create(
+            retailer=instance.retailer,
+            customer=instance.customer,
+            defaults={'reason': f"Automated blacklist due to 0-star rating on Order #{instance.order.order_number}"}
+        )
+    
+    # 2. Update Average Rating
+    if created or instance.rating > 0: # Even if 0, it counts towards average?
+        # Requirement: "Customer average rating = (0 + 4) / 2 = 2 stars" -> YES, 0 counts.
+        customer_profile = instance.customer.customer_profile
+        
+        avg_rating = RetailerRating.objects.filter(customer=instance.customer).aggregate(Avg('rating'))['rating__avg'] or 0
+        total_count = RetailerRating.objects.filter(customer=instance.customer).count()
+        
+        customer_profile.average_rating = round(avg_rating, 2)
+        customer_profile.total_ratings = total_count
+        customer_profile.save()

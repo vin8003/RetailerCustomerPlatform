@@ -29,6 +29,11 @@ urlpatterns = [
     path('loyalty/all/', views.get_all_customer_loyalty, name='get_all_customer_loyalty'),
     path('loyalty/retailer-customers/', views.get_retailer_customers_loyalty, name='get_retailer_customers_loyalty'),
     
+    # Retailer Customer Management
+    path('retailer/list/', views.get_retailer_customers, name='get_retailer_customers'),
+    path('retailer/details/<int:customer_id>/', views.get_customer_details_for_retailer, name='get_customer_details_for_retailer'),
+    path('retailer/blacklist/toggle/', views.toggle_blacklist, name='toggle_blacklist'),
+    
     # Referral
     path('referral/apply/', views.apply_referral_code, name='apply_referral_code'),
     path('referral/stats/', views.get_referral_stats, name='get_referral_stats'),
