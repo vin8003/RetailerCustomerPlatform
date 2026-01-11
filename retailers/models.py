@@ -46,6 +46,14 @@ class RetailerProfile(models.Model):
     gst_number = models.CharField(max_length=15, blank=True)
     pan_number = models.CharField(max_length=10, blank=True)
     
+    # Payment information
+    upi_id = models.CharField(max_length=50, blank=True)
+    upi_qr_code = models.ImageField(
+        upload_to=generate_upload_path, 
+        blank=True, 
+        null=True
+    )
+    
     # Service settings
     offers_delivery = models.BooleanField(default=True)
     offers_pickup = models.BooleanField(default=True)
@@ -78,6 +86,8 @@ class RetailerProfile(models.Model):
     def save(self, *args, **kwargs):
         if self.shop_image:
             resize_image(self.shop_image)
+        if self.upi_qr_code:
+            resize_image(self.upi_qr_code)
         super().save(*args, **kwargs)
     
     @property
