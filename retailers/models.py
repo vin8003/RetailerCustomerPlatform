@@ -1,7 +1,7 @@
 from django.db import models
 from django.conf import settings
 from django.core.validators import RegexValidator
-from common.utils import generate_upload_path
+from common.utils import generate_upload_path, resize_image
 
 
 class RetailerProfile(models.Model):
@@ -74,6 +74,11 @@ class RetailerProfile(models.Model):
     
     def __str__(self):
         return f"{self.shop_name} - {self.city}"
+    
+    def save(self, *args, **kwargs):
+        if self.shop_image:
+            resize_image(self.shop_image)
+        super().save(*args, **kwargs)
     
     @property
     def full_address(self):

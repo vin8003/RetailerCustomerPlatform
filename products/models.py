@@ -2,7 +2,7 @@ from django.db import models
 from django.conf import settings
 from django.core.validators import MinValueValidator, MaxValueValidator
 from decimal import Decimal
-from common.utils import generate_upload_path
+from common.utils import generate_upload_path, resize_image
 
 
 class ProductCategory(models.Model):
@@ -108,6 +108,11 @@ class MasterProductImage(models.Model):
     image_url = models.URLField(max_length=500, blank=True, null=True)
     is_primary = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        if self.image:
+            resize_image(self.image)
+        super().save(*args, **kwargs)
 
     class Meta:
         db_table = 'master_product_image'
@@ -236,6 +241,10 @@ class Product(models.Model):
             self.discount_percentage = ((self.original_price - self.price) / self.original_price) * 100
         else:
             self.discount_percentage = Decimal('0.00')
+            
+        if self.image:
+            resize_image(self.image)
+            
         super().save(*args, **kwargs)
     
     @property
@@ -302,6 +311,11 @@ class ProductImage(models.Model):
     is_primary = models.BooleanField(default=False)
     order = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        if self.image:
+            resize_image(self.image)
+        super().save(*args, **kwargs)
     
     class Meta:
         db_table = 'product_image'

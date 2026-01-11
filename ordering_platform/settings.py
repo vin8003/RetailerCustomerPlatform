@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'django_filters',
+    'storages',
 
     # Local apps
     'authentication',
@@ -317,3 +318,43 @@ CSRF_TRUSTED_ORIGINS = [
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 CONN_MAX_AGE = 600
+
+# oracle bucket configuration
+AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID', '')
+AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY', '')
+
+# oracle bucket config
+AWS_STORAGE_BUCKET_NAME = 'product_images' # The bucket you created
+AWS_S3_OBJECT_PARAMETERS = {
+    'CacheControl': 'max-age=86400', # Tell Cloudflare to cache images for 1 day
+}
+
+# oracle bucket endpoint
+AWS_S3_ENDPOINT_URL = 'https://bmvhzw5ybhpw.compat.objectstorage.ap-mumbai-1.oraclecloud.com'
+
+# oracle bucket vanity domain
+AWS_S3_CUSTOM_DOMAIN = f'images.ordereasy.win/n/bmvhzw5ybhpw/b/product_images/o'
+
+# tell django to use s3 for media
+STORAGES = {
+    "default": {
+        "BACKEND": "storages.backends.s3.S3Storage",
+    },
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+    },
+}
+
+# ensure urls are https
+AWS_S3_URL_PROTOCOL = 'https:'
+AWS_QUERYSTRING_AUTH = False # Don't add messy signature tokens to the URL (since bucket is public)
+
+# botocore config to fix oracle compatibility issues (missingcontentlength)
+from botocore.config import Config
+AWS_S3_REGION_NAME = 'ap-mumbai-1'
+AWS_S3_CLIENT_CONFIG = Config(
+    signature_version='s3v4',
+    request_checksum_calculation='when_required',
+    response_checksum_validation='when_required',
+    s3={'addressing_style': 'path'}
+)
