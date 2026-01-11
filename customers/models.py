@@ -1,7 +1,7 @@
 from django.db import models
 from django.conf import settings
 from django.core.validators import RegexValidator
-from common.utils import generate_upload_path
+from common.utils import generate_upload_path, resize_image
 
 
 class CustomerProfile(models.Model):
@@ -56,6 +56,10 @@ class CustomerProfile(models.Model):
             uid = str(self.user.id)
             chars = ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
             self.referral_code = f"REF{uid}{chars}"
+            
+        if self.profile_image:
+            resize_image(self.profile_image)
+            
         super().save(*args, **kwargs)
 
 

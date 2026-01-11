@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'django_filters',
+    'storages',
 
     # Local apps
     'authentication',
@@ -302,3 +303,47 @@ if not firebase_admin._apps:
             firebase_admin.initialize_app(options={'projectId': 'buyeasy-4003f'})
     except Exception as e:
         print(f"Warning: Firebase Admin SDK could not be initialized: {e}")
+
+
+AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID', '')
+AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY', '')
+
+# 2. Bucket Config
+AWS_STORAGE_BUCKET_NAME = 'product_images' # The bucket you created
+AWS_S3_OBJECT_PARAMETERS = {
+    'CacheControl': 'max-age=86400', # Tell Cloudflare to cache images for 1 day
+}
+
+# 3. The Oracle S3 Endpoint (Different from the Cloudflare target!)
+# Format: https://<namespace>.compat.objectstorage.<region>.oraclecloud.com
+# Example: https://ax7j3k4.compat.objectstorage.us-ashburn-1.oraclecloud.com
+AWS_S3_ENDPOINT_URL = 'https://bmvhzw5ybhpw.compat.objectstorage.ap-mumbai-1.oraclecloud.com'
+
+# 4. The Cloudflare "Vanity" Domain
+# This constructs the public URL exactly how we discussed:
+# https://images.yourdomain.com/n/<namespace>/b/<bucket>/o/<filename>
+AWS_S3_CUSTOM_DOMAIN = f'images.ordereasy.win/n/bmvhzw5ybhpw/b/product_images/o'
+
+# 5. Tell Django to use S3 for media
+STORAGES = {
+    "default": {
+        "BACKEND": "storages.backends.s3.S3Storage",
+    },
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+    },
+}
+
+# Ensure URLs are https
+AWS_S3_URL_PROTOCOL = 'https:'
+AWS_QUERYSTRING_AUTH = False # Don't add messy signature tokens to the URL (since bucket is public)
+
+# Botocore Config to fix Oracle Compatibility Issues (MissingContentLength)
+from botocore.config import Config
+AWS_S3_REGION_NAME = 'ap-mumbai-1'
+AWS_S3_CLIENT_CONFIG = Config(
+    signature_version='s3v4',
+    request_checksum_calculation='when_required',
+    response_checksum_validation='when_required',
+    s3={'addressing_style': 'path'}
+)

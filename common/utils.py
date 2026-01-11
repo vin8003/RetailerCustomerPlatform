@@ -84,25 +84,57 @@ def generate_customer_image_path(instance, filename):
     return os.path.join(upload_dir, unique_filename)
 
 
-def compress_image(image_path, quality=85, max_size=(800, 800)):
+def resize_image(image_field, max_size=(800, 800), quality=85):
     """
-    Compress and resize image
+    Resize image to ensure it fits within max_size, maintaining aspect ratio.
+    Works with Django ImageField/FileField in-memory.
     """
     try:
-        with Image.open(image_path) as img:
-            # Convert to RGB if necessary
+        if not image_field:
+            return False
+
+        # If it's just a string (path), we can't resize it easily in this context 
+        # (mostly happens on update when file isn't changed)
+        if hasattr(image_field, 'file') and not image_field._committed:
+            # Only process if file is new/updated (not committed yet)
+            from io import BytesIO
+            from django.core.files.base import ContentFile
+            
+            img = Image.open(image_field)
+            
+            # Check if resizing is needed
+            if img.height <= max_size[1] and img.width <= max_size[0] and img.format in ['JPEG', 'PNG']:
+                 # Check size? For now, we assume if dimensions are ok, we leave it be 
+                 # unless we strictly want to enforce compression.
+                 # Let's enforce compression for consistency.
+                 pass
+
+            # Convert to RGB (for JPEG compatibility)
             if img.mode != 'RGB':
                 img = img.convert('RGB')
             
-            # Resize image maintaining aspect ratio
+            # Resize
             img.thumbnail(max_size, Image.Resampling.LANCZOS)
             
-            # Save compressed image
-            img.save(image_path, format='JPEG', quality=quality, optimize=True)
+            # Save to buffer
+            buffer = BytesIO()
+            img.save(buffer, format='JPEG', quality=quality, optimize=True)
+            buffer.seek(0)
             
-        return True
+            # Update the field file
+            filename = image_field.name.split('/')[-1] # keep original filename base
+            # Ensure .jpg extension
+            if not filename.lower().endswith('.jpg') and not filename.lower().endswith('.jpeg'):
+                filename = f"{filename.split('.')[0]}.jpg"
+                
+            image_field.save(filename, ContentFile(buffer.read()), save=False)
+            
+            return True
+            
+        return False
     except Exception as e:
-        logger.error(f"Error compressing image: {str(e)}")
+        logger.error(f"Error resizing image: {str(e)}")
+        # Don't block the save if resizing fails
         return False
 
 
