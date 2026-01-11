@@ -238,6 +238,16 @@ def list_retailers(request):
                              # Actually if they specify serviceable_pincodes, it overrides?
                              # Let's say: if serviceable_pincodes is set, it MUST be in it.
                              pass
+                    elif user_pincode and isinstance(retailer.serviceable_pincodes, str):
+                        if user_pincode == retailer.serviceable_pincodes:
+                            filtered_retailer_ids.append(retailer.id)
+                            continue
+                        elif retailer.pincode != user_pincode and retailer.serviceable_pincodes:
+                             # If pincodes are restricted and user's pincode is not in it, skip
+                             # unless it's their own pincode (which is always serviceable?)
+                             # Actually if they specify serviceable_pincodes, it overrides?
+                             # Let's say: if serviceable_pincodes is set, it MUST be in it.
+                             pass
                     
                     # 2. Check Distance Restriction
                     distance = retailer.get_distance_from(lat, lng)
