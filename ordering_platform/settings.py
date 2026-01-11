@@ -332,8 +332,10 @@ AWS_S3_OBJECT_PARAMETERS = {
 # oracle bucket endpoint
 AWS_S3_ENDPOINT_URL = 'https://bmvhzw5ybhpw.compat.objectstorage.ap-mumbai-1.oraclecloud.com'
 
-# oracle bucket vanity domain
-AWS_S3_CUSTOM_DOMAIN = f'images.ordereasy.win/n/bmvhzw5ybhpw/b/product_images/o'
+# 4. The Cloudflare "Vanity" Domain
+# This constructs the public URL exactly how we discussed:
+# https://images.yourdomain.com/n/<namespace>/b/<bucket>/o/<filename>
+# AWS_S3_CUSTOM_DOMAIN = f'images.ordereasy.win/n/bmvhzw5ybhpw/b/product_images/o'
 
 # tell django to use s3 for media
 STORAGES = {
