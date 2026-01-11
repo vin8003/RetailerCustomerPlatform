@@ -228,7 +228,7 @@ def list_retailers(request):
                 filtered_retailer_ids = []
                 for retailer in queryset:
                     # 1. Check Pincode Specific Restriction
-                    if user_pincode and retailer.serviceable_pincodes:
+                    if user_pincode and isinstance(retailer.serviceable_pincodes, list):
                         if user_pincode in retailer.serviceable_pincodes:
                             filtered_retailer_ids.append(retailer.id)
                             continue
