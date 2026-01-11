@@ -29,6 +29,7 @@ class Order(models.Model):
     PAYMENT_MODE_CHOICES = [
         ('cash', 'Cash on Delivery'),
         ('cash_pickup', 'Cash on Pickup'),
+        ('upi', 'UPI'),
     ]
     
     # Order identification

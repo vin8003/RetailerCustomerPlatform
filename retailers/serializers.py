@@ -43,7 +43,8 @@ class RetailerProfileSerializer(serializers.ModelSerializer):
             'shop_description', 'shop_image', 'contact_email', 'contact_phone',
             'whatsapp_number', 'address_line1', 'address_line2', 'city', 
             'state', 'pincode', 'country', 'latitude', 'longitude',
-            'business_type', 'gst_number', 'pan_number', 'offers_delivery',
+            'business_type', 'gst_number', 'pan_number', 'upi_id', 'upi_qr_code', 
+            'offers_delivery',
             'offers_pickup', 'delivery_radius', 'serviceable_pincodes', 'minimum_order_amount',
             'is_verified', 'is_active', 'average_rating', 'total_ratings',
             'operating_hours', 'categories', 'created_at', 'updated_at'
@@ -61,7 +62,8 @@ class RetailerProfileUpdateSerializer(serializers.ModelSerializer):
             'shop_name', 'shop_description', 'shop_image', 'contact_email', 
             'contact_phone', 'whatsapp_number', 'address_line1', 'address_line2',
             'city', 'state', 'pincode', 'country', 'latitude', 'longitude',
-            'business_type', 'gst_number', 'pan_number', 'offers_delivery',
+            'business_type', 'gst_number', 'pan_number', 'upi_id', 'upi_qr_code', 
+            'offers_delivery',
             'offers_pickup', 'delivery_radius', 'serviceable_pincodes', 'minimum_order_amount'
         ]
     

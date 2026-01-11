@@ -58,6 +58,8 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     retailer_name = serializers.CharField(source='retailer.shop_name', read_only=True)
     retailer_phone = serializers.CharField(source='retailer.contact_phone', read_only=True)
     retailer_address = serializers.CharField(source='retailer.full_address', read_only=True)
+    retailer_upi_id = serializers.CharField(source='retailer.upi_id', read_only=True)
+    retailer_upi_qr_code = serializers.ImageField(source='retailer.upi_qr_code', read_only=True)
     customer_name = serializers.CharField(source='customer.first_name', read_only=True)
     customer_phone = serializers.CharField(source='customer.phone_number', read_only=True)
     customer_email = serializers.CharField(source='customer.email', read_only=True)
@@ -73,7 +75,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'order_number', 'customer_name', 'customer_phone', 'customer_email',
             'retailer', 'retailer_name', 'retailer_phone',
-            'retailer_address', 'delivery_mode', 'payment_mode', 'status',
+            'retailer_address', 'retailer_upi_id', 'retailer_upi_qr_code', 'delivery_mode', 'payment_mode', 'status',
             'subtotal', 'delivery_fee', 'discount_amount', 'discount_from_points', 'points_redeemed', 'total_amount',
             'special_instructions', 'cancellation_reason', 'delivery_address_text',
             'delivery_latitude', 'delivery_longitude',
@@ -133,10 +135,10 @@ class OrderCreateSerializer(serializers.Serializer):
         if data['delivery_mode'] == 'delivery' and not data.get('address_id'):
             raise serializers.ValidationError("Address is required for delivery orders")
         
-        if data['delivery_mode'] == 'delivery' and data['payment_mode'] not in ['cash']:
+        if data['delivery_mode'] == 'delivery' and data['payment_mode'] not in ['cash', 'upi']:
             raise serializers.ValidationError("Invalid payment mode for delivery")
         
-        if data['delivery_mode'] == 'pickup' and data['payment_mode'] not in ['cash_pickup']:
+        if data['delivery_mode'] == 'pickup' and data['payment_mode'] not in ['cash_pickup', 'upi']:
             raise serializers.ValidationError("Invalid payment mode for pickup")
         
         return data
