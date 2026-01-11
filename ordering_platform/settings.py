@@ -322,7 +322,7 @@ AWS_S3_ENDPOINT_URL = 'https://bmvhzw5ybhpw.compat.objectstorage.ap-mumbai-1.ora
 # 4. The Cloudflare "Vanity" Domain
 # This constructs the public URL exactly how we discussed:
 # https://images.yourdomain.com/n/<namespace>/b/<bucket>/o/<filename>
-AWS_S3_CUSTOM_DOMAIN = f'images.ordereasy.win/n/bmvhzw5ybhpw/b/product_images/o'
+# AWS_S3_CUSTOM_DOMAIN = f'images.ordereasy.win/n/bmvhzw5ybhpw/b/product_images/o'
 
 # 5. Tell Django to use S3 for media
 STORAGES = {
