@@ -1735,24 +1735,28 @@ class CommitUploadSessionView(APIView):
                 for item in items:
                     details = item.product_details
                     print(f"DEBUG: Item {item.id} details: {details}")
-                    if not details: 
-                        print(f"DEBUG: Skipping Item {item.id} - No details")
-                        continue
-                        
+                    # Change: Do not skip if details are empty. Create Draft instead.
+                    
                     barcode = item.barcode
                     name = details.get('name')
                     price = details.get('price', 0)
                     mrp = details.get('original_price', 0)
                     qty = details.get('quantity', 0)
                     
+                    is_draft_item = False
                     if not name:
-                        print(f"DEBUG: Skipping Item {item.id} - No name found")
-                        continue 
+                        print(f"DEBUG: Creating Draft for Item {item.id} - No name found")
+                        name = f"Draft Item {barcode}"
+                        is_draft_item = True
 
                     # Identify Targets
                     # 1. Master Product
                     try:
                         master_product = MasterProduct.objects.get(barcode=barcode)
+                        if is_draft_item and master_product:
+                             # If we have master product, auto-fill name even if user didn't provide it
+                             name = master_product.name
+                             is_draft_item = False # Not a draft if we have a valid name
                     except MasterProduct.DoesNotExist:
                         master_product = None
                     
@@ -1812,7 +1816,9 @@ class CommitUploadSessionView(APIView):
                             original_price=mrp,
                             quantity=qty,
                             master_product=master_product,
-                            image=item.image
+                            image=item.image,
+                            is_draft=is_draft_item,
+                            is_active=not is_draft_item # Drafts are inactive by default? Or active but marked simply as draft. Let's make them inactive so customers don't see them.
                         )
                         if category: new_prod.category = category
                         if brand: new_prod.brand = brand
