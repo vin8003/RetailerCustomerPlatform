@@ -1554,14 +1554,18 @@ class AddSessionItemView(APIView):
         try:
             session = ProductUploadSession.objects.get(id=session_id, retailer__user=request.user)
             
-            # Simple check for duplicate barcode in same session?
-            # User might scan same item twice, technically allowed but maybe warn?
-            # For now, just add it.
+            # Extract optional product details
+            details = {}
+            if 'name' in request.data: details['name'] = request.data['name']
+            if 'price' in request.data: details['price'] = request.data['price']
+            if 'mrp' in request.data: details['original_price'] = request.data['mrp']
+            if 'qty' in request.data: details['quantity'] = request.data['qty']
             
             item = UploadSessionItem.objects.create(
                 session=session,
                 barcode=barcode,
-                image=image
+                image=image,
+                product_details=details
             )
             serializer = UploadSessionItemSerializer(item)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
