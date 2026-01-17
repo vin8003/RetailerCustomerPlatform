@@ -12,10 +12,13 @@ class MasterProductAdmin(admin.ModelAdmin):
     Admin configuration for master products
     """
     list_display = ['name', 'barcode', 'category', 'brand', 'mrp', 'get_nutriscore', 'get_generic_name', 'created_at']
+    # list_display = ['name', 'barcode', 'category', 'brand', 'mrp', 'created_at']
     list_filter = ['category', 'brand', 'created_at']
     search_fields = ['name', 'barcode', 'brand__name', 'attributes']
+    # search_fields = ['name', 'barcode', 'brand__name']
     ordering = ['-created_at']
     readonly_fields = ['created_at', 'updated_at', 'attributes']
+    # readonly_fields = ['created_at', 'updated_at']
 
     def get_nutriscore(self, obj):
         val = obj.attributes.get('nutriscore') if obj.attributes else None
