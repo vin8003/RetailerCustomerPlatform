@@ -347,6 +347,6 @@ class ProductUploadSessionSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = ProductUploadSession
-        fields = ['id', 'status', 'created_at', 'updated_at', 'items']
+        fields = ['id', 'name', 'status', 'created_at', 'updated_at', 'items']
         read_only_fields = ['id', 'status', 'created_at', 'updated_at', 'items']
 
