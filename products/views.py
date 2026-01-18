@@ -12,6 +12,7 @@ import pandas as pd
 import io
 import logging
 import os
+import json
 
 from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -1556,10 +1557,24 @@ class AddSessionItemView(APIView):
             
             # Extract optional product details
             details = {}
-            if 'name' in request.data: details['name'] = request.data['name']
-            if 'price' in request.data: details['price'] = request.data['price']
-            if 'mrp' in request.data: details['original_price'] = request.data['mrp']
-            if 'qty' in request.data: details['quantity'] = request.data['qty']
+            
+            # Check for JSON data field (preserves types)
+            data_str = request.data.get('data')
+            if data_str:
+                try:
+                    data_json = json.loads(data_str)
+                    if 'name' in data_json: details['name'] = data_json['name']
+                    if 'price' in data_json: details['price'] = data_json['price']
+                    if 'mrp' in data_json: details['original_price'] = data_json['mrp']
+                    if 'qty' in data_json: details['quantity'] = data_json['qty']
+                except json.JSONDecodeError:
+                    pass
+
+            # Fallback to individual fields
+            if 'name' not in details and 'name' in request.data: details['name'] = request.data['name']
+            if 'price' not in details and 'price' in request.data: details['price'] = request.data['price']
+            if 'original_price' not in details and 'mrp' in request.data: details['original_price'] = request.data['mrp']
+            if 'quantity' not in details and 'qty' in request.data: details['quantity'] = request.data['qty']
             
             item = UploadSessionItem.objects.create(
                 session=session,
