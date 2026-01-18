@@ -453,6 +453,7 @@ class ProductUploadSession(models.Model):
         on_delete=models.CASCADE, 
         related_name='upload_sessions'
     )
+    name = models.CharField(max_length=255, default="Untitled Session", blank=True)
     status = models.CharField(max_length=20, choices=SESSION_STATUS, default='active')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

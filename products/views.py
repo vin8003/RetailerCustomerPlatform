@@ -1515,7 +1515,8 @@ class CreateUploadSessionView(APIView):
             retailer = RetailerProfile.objects.get(user=request.user)
             # Check for existing active session? Or allow multiple?
             # Let's create a new one.
-            session = ProductUploadSession.objects.create(retailer=retailer)
+            name = request.data.get('name', 'Untitled Session')
+            session = ProductUploadSession.objects.create(retailer=retailer, name=name)
             serializer = ProductUploadSessionSerializer(session)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         except RetailerProfile.DoesNotExist:
