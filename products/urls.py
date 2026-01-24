@@ -18,7 +18,8 @@ urlpatterns = [
     path('upload/session/create/', views.CreateUploadSessionView.as_view(), name='create_upload_session'),
     path('upload/session/active/', views.GetActiveSessionsView.as_view(), name='get_active_sessions'),
     path('upload/session/add-item/', views.AddSessionItemView.as_view(), name='add_session_item'),
-    path('upload/session/<int:session_id>/', views.GetSessionDetailsView.as_view(), name='get_session_details'),
+    path('upload/session/<int:session_id>/', views.GetSessionDetailsView.as_view(), name='get_session_details_old'),
+    path('upload/session/details/<int:session_id>/', views.GetSessionDetailsView.as_view(), name='get_session_details'),
     path('upload/session/update-items/', views.UpdateSessionItemsView.as_view(), name='update_session_items'),
     path('upload/session/commit/', views.CommitUploadSessionView.as_view(), name='commit_upload_session'),
 

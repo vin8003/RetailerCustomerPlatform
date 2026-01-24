@@ -35,11 +35,12 @@ class RetailerProfileSerializer(serializers.ModelSerializer):
     username = serializers.CharField(source='user.username', read_only=True)
     email = serializers.EmailField(source='user.email', read_only=True)
     phone_number = serializers.CharField(source='user.phone_number', read_only=True)
+    is_phone_verified = serializers.BooleanField(source='user.is_phone_verified', read_only=True)
     
     class Meta:
         model = RetailerProfile
         fields = [
-            'id', 'username', 'email', 'phone_number', 'shop_name', 
+            'id', 'username', 'email', 'phone_number', 'is_phone_verified', 'shop_name', 
             'shop_description', 'shop_image', 'contact_email', 'contact_phone',
             'whatsapp_number', 'address_line1', 'address_line2', 'city', 
             'state', 'pincode', 'country', 'latitude', 'longitude',

@@ -13,17 +13,18 @@ class CustomerProfileSerializer(serializers.ModelSerializer):
     username = serializers.CharField(source='user.username', read_only=True)
     email = serializers.EmailField(source='user.email', read_only=True)
     phone_number = serializers.CharField(source='user.phone_number', read_only=True)
+    is_phone_verified = serializers.BooleanField(source='user.is_phone_verified', read_only=True)
     first_name = serializers.CharField(source='user.first_name')
     last_name = serializers.CharField(source='user.last_name')
     
     class Meta:
         model = CustomerProfile
         fields = [
-            'id', 'username', 'email', 'phone_number', 'first_name', 'last_name',
+            'id', 'username', 'email', 'phone_number', 'is_phone_verified', 'first_name', 'last_name',
             'date_of_birth', 'gender', 'profile_image', 'preferred_language',
             'notification_preferences', 'referral_code', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'username', 'email', 'phone_number', 'referral_code', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'username', 'email', 'phone_number', 'is_phone_verified', 'referral_code', 'created_at', 'updated_at']
     
     def update(self, instance, validated_data):
         """Update customer profile and user fields"""
