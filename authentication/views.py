@@ -318,12 +318,40 @@ def verify_otp(request):
             if firebase_token:
                 decoded_token = verify_firebase_id_token(firebase_token)
                 if decoded_token:
+                    # STRICT CHECK: Ensure the token belongs to the phone number being verified
+                    token_phone = decoded_token.get('phone_number', '')  # E.g. +919876543210
+                    # Normalize both to ensure match (remove spaces, ensure + prefix)
+                    
+                    def normalize_for_match(p):
+                        if not p: return ''
+                        p = p.replace(' ', '').replace('-', '')
+                        if not p.startswith('+'): p = '+' + p
+                        return p
+
+                    if normalize_for_match(token_phone) != normalize_for_match(phone_number):
+                        logger.warning(f"Phone mismatch in Firebase Token. Token: {token_phone}, Request: {phone_number}")
+                        return Response(
+                            {'error': 'Phone number in token does not match requested phone number'},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+
                     # User phone verification successful
                     try:
-                        user = User.objects.get(phone_number=phone_number)
-                        user.is_active = True
-                        user.is_phone_verified = True
-                        user.save()
+                        # Prefer authenticated user if available
+                        if request.user and request.user.is_authenticated:
+                            user = request.user
+                            # If user verified a different phone number, should we update it?
+                            # Yes, creating a seamless "change number and verify" flow.
+                            user.phone_number = phone_number 
+                            user.is_active = True
+                            user.is_phone_verified = True
+                            user.save()
+                        else:
+                            user = User.objects.get(phone_number=phone_number)
+                            user.is_active = True
+                            user.is_phone_verified = True
+                            user.save()
+
                         
                         # Create or activate RetailerProfile for retailer users
                         if user.user_type == 'retailer':
