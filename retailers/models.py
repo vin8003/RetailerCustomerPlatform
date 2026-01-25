@@ -60,6 +60,8 @@ class RetailerProfile(models.Model):
     delivery_radius = models.PositiveIntegerField(default=5)  # in kilometers
     serviceable_pincodes = models.JSONField(default=list, blank=True)  # List of pincodes
     minimum_order_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    delivery_charge = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    free_delivery_threshold = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     
     # Status and ratings
     is_verified = models.BooleanField(default=False)

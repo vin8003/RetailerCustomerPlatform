@@ -171,7 +171,16 @@ class OrderCreateSerializer(serializers.Serializer):
         subtotal = sum(item.total_price for item in cart_items)
         delivery_fee = 0
         if validated_data['delivery_mode'] == 'delivery':
-            delivery_fee = 50  # Fixed delivery fee, can be made configurable
+            # Dynamic Delivery Charge Logic
+            if retailer.delivery_charge > 0:
+                # Check for free delivery threshold
+                if retailer.free_delivery_threshold > 0 and subtotal >= retailer.free_delivery_threshold:
+                    delivery_fee = 0
+                else:
+                    delivery_fee = retailer.delivery_charge
+            else:
+                 # Default logic if not set (or 0 means free)
+                 delivery_fee = 0
         
         total_amount = subtotal + delivery_fee
         
