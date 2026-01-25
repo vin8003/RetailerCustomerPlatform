@@ -370,10 +370,21 @@ def validate_cart(request):
             for item in cart.items.all():
                 if not item.product.is_available or not item.product.is_active:
                     validation_errors.append(f"{item.product.name} is no longer available")
-                elif not item.product.can_order_quantity(item.quantity):
+                elif item.quantity > item.product.quantity:
                     validation_errors.append(
                         f"{item.product.name} - only {item.product.quantity} items available"
                     )
+                else:
+                    # Check minimum and maximum order quantities
+                    if item.quantity < item.product.minimum_order_quantity:
+                        validation_errors.append(
+                            f"{item.product.name} - minimum order quantity is {item.product.minimum_order_quantity}"
+                        )
+                    
+                    if item.product.maximum_order_quantity and item.quantity > item.product.maximum_order_quantity:
+                        validation_errors.append(
+                            f"{item.product.name} - maximum order quantity is {item.product.maximum_order_quantity}"
+                        )
             
             # Check minimum order amount
             if cart.total_amount < retailer.minimum_order_amount:

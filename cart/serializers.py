@@ -46,20 +46,9 @@ class CartItemSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError("Product is not available")
             
             # Check stock availability
-            if not product.can_order_quantity(quantity):
+            if quantity > product.quantity:
                 raise serializers.ValidationError(
                     f"Only {product.quantity} items available in stock"
-                )
-            
-            # Check minimum and maximum order quantities
-            if quantity < product.minimum_order_quantity:
-                raise serializers.ValidationError(
-                    f"Minimum order quantity is {product.minimum_order_quantity}"
-                )
-            
-            if product.maximum_order_quantity and quantity > product.maximum_order_quantity:
-                raise serializers.ValidationError(
-                    f"Maximum order quantity is {product.maximum_order_quantity}"
                 )
         
         return data
@@ -117,22 +106,11 @@ class AddToCartSerializer(serializers.Serializer):
             raise serializers.ValidationError("Product not found")
         
         quantity = data['quantity']
-        
+            
         # Check stock availability
-        if not product.can_order_quantity(quantity):
-            raise serializers.ValidationError(
+        if quantity > product.quantity:
+             raise serializers.ValidationError(
                 f"Only {product.quantity} items available in stock"
-            )
-        
-        # Check minimum and maximum order quantities
-        if quantity < product.minimum_order_quantity:
-            raise serializers.ValidationError(
-                f"Minimum order quantity is {product.minimum_order_quantity}"
-            )
-        
-        if product.maximum_order_quantity and quantity > product.maximum_order_quantity:
-            raise serializers.ValidationError(
-                f"Maximum order quantity is {product.maximum_order_quantity}"
             )
         
         return data
@@ -183,20 +161,9 @@ class UpdateCartItemSerializer(serializers.Serializer):
         quantity = data['quantity']
         
         # Check stock availability
-        if not cart_item.product.can_order_quantity(quantity):
+        if quantity > cart_item.product.quantity:
             raise serializers.ValidationError(
                 f"Only {cart_item.product.quantity} items available in stock"
-            )
-        
-        # Check minimum and maximum order quantities
-        if quantity < cart_item.product.minimum_order_quantity:
-            raise serializers.ValidationError(
-                f"Minimum order quantity is {cart_item.product.minimum_order_quantity}"
-            )
-        
-        if cart_item.product.maximum_order_quantity and quantity > cart_item.product.maximum_order_quantity:
-            raise serializers.ValidationError(
-                f"Maximum order quantity is {cart_item.product.maximum_order_quantity}"
             )
         
         return data
