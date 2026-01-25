@@ -28,6 +28,9 @@ urlpatterns = [
     path('retailer/<int:retailer_id>/', views.get_retailer_products_public, name='get_retailer_products_public'),
     path('retailer/<int:retailer_id>/categories/', views.get_retailer_categories, name='get_retailer_categories'),
     path('retailer/<int:retailer_id>/featured/', views.get_retailer_featured_products, name='get_retailer_featured_products'),
+    path('retailer/<int:retailer_id>/best-selling/', views.get_best_selling_products, name='get_best_selling_products'),
+    path('retailer/<int:retailer_id>/buy-again/', views.get_buy_again_products, name='get_buy_again_products'),
+    path('retailer/<int:retailer_id>/recommended/', views.get_recommended_products, name='get_recommended_products'),
     path('retailer/<int:retailer_id>/<int:product_id>/', views.get_product_detail_public, name='get_product_detail_public'),
 
     # Categories and brands

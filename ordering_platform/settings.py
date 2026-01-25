@@ -186,6 +186,7 @@ SIMPLE_JWT = {
 
 # CORS settings
 if DEBUG:
+    CORS_ALLOW_ALL_ORIGINS = True
     CORS_ALLOWED_ORIGIN_REGEXES = [
         r"^https?://localhost:\d+$",
         r"^https?://127.0.0.1:\d+$",
