@@ -1710,11 +1710,14 @@ class UpdateSessionItemsView(APIView):
             for item in items_data:
                 item_id = item.get('id')
                 details = item.get('product_details') 
-                
+                barcode = item.get('barcode')
+
                 if item_id and details:
                     try:
                         session_item = UploadSessionItem.objects.get(id=item_id, session=session)
                         session_item.product_details = details
+                        if barcode:
+                            session_item.barcode = barcode
                         session_item.save()
                         updated_count += 1
                     except UploadSessionItem.DoesNotExist:
@@ -1866,3 +1869,18 @@ class CommitUploadSessionView(APIView):
 
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class DeleteSessionItemView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def delete(self, request, item_id):
+        try:
+            # ensure item belongs to a session owned by the retailer
+            item = UploadSessionItem.objects.get(
+                id=item_id, 
+                session__retailer__user=request.user
+            )
+            item.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except UploadSessionItem.DoesNotExist:
+            return Response({'error': 'Item not found'}, status=status.HTTP_404_NOT_FOUND)

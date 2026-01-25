@@ -141,6 +141,51 @@ class OrderCreateSerializer(serializers.Serializer):
         if data['delivery_mode'] == 'pickup' and data['payment_mode'] not in ['cash_pickup', 'upi']:
             raise serializers.ValidationError("Invalid payment mode for pickup")
         
+        # Validate cart and items (Moved from create)
+        from retailers.models import RetailerProfile
+        customer = self.context['customer']
+        retailer_id = data.get('retailer_id') 
+        # Note: retailer_id is already validated by validate_retailer_id but we just need it here
+        # Actually validated_data in create has it, but in validate 'data' acts as input.
+        # But wait, validate runs before create. 'data' here is cleaned data so far? 
+        # DRF 'validate' receives 'attrs' which are validated fields.
+        
+        try:
+             retailer = RetailerProfile.objects.get(id=retailer_id)
+        except RetailerProfile.DoesNotExist:
+             # Should be caught by validate_retailer_id but safe to re-check or skip if missing
+             pass
+
+        # Get customer's cart for this retailer
+        # We need to access cart here to validate items
+        try:
+            cart = Cart.objects.get(customer=customer, retailer_id=retailer_id)
+        except Cart.DoesNotExist:
+            raise serializers.ValidationError("Cart is empty")
+
+        cart_items = cart.items.select_related('product').all()
+        if not cart_items.exists():
+            raise serializers.ValidationError("Cart is empty")
+
+        # Validate cart items availability and limits
+        for cart_item in cart_items:
+            # Check stock
+            if cart_item.quantity > cart_item.product.quantity:
+                 raise serializers.ValidationError(
+                    f"Product '{cart_item.product.name}' - only {cart_item.product.quantity} items available"
+                )
+            
+            # Check minimum and maximum order quantities
+            if cart_item.quantity < cart_item.product.minimum_order_quantity:
+                raise serializers.ValidationError(
+                    f"Product '{cart_item.product.name}' - minimum order quantity is {cart_item.product.minimum_order_quantity}"
+                )
+            
+            if cart_item.product.maximum_order_quantity and cart_item.quantity > cart_item.product.maximum_order_quantity:
+                raise serializers.ValidationError(
+                    f"Product '{cart_item.product.name}' - maximum order quantity is {cart_item.product.maximum_order_quantity}"
+                )
+
         return data
     
     def create(self, validated_data):
@@ -151,21 +196,14 @@ class OrderCreateSerializer(serializers.Serializer):
         retailer = RetailerProfile.objects.get(id=validated_data['retailer_id'])
         
         # Get customer's cart for this retailer
+        # (Cart existence already validated in 'validate' method but we need the object)
         try:
             cart = Cart.objects.get(customer=customer, retailer=retailer)
         except Cart.DoesNotExist:
-            raise serializers.ValidationError("Cart is empty")
+            # Should not happen as verified in validate
+             raise serializers.ValidationError("Cart not found")
         
         cart_items = cart.items.select_related('product').all()
-        if not cart_items.exists():
-            raise serializers.ValidationError("Cart is empty")
-        
-        # Validate cart items availability
-        for cart_item in cart_items:
-            if not cart_item.product.can_order_quantity(cart_item.quantity):
-                raise serializers.ValidationError(
-                    f"Product '{cart_item.product.name}' is not available in requested quantity"
-                )
         
         # Calculate totals
         subtotal = sum(item.total_price for item in cart_items)
