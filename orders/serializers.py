@@ -104,7 +104,7 @@ class OrderCreateSerializer(serializers.Serializer):
     Serializer for creating orders
     """
     retailer_id = serializers.IntegerField()
-    address_id = serializers.IntegerField(required=False)
+    address_id = serializers.IntegerField(required=False, allow_null=True)
     delivery_mode = serializers.ChoiceField(choices=Order.DELIVERY_MODE_CHOICES)
     payment_mode = serializers.ChoiceField(choices=Order.PAYMENT_MODE_CHOICES)
     special_instructions = serializers.CharField(required=False, allow_blank=True)

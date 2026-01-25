@@ -608,12 +608,21 @@ def get_all_customer_loyalty(request):
             customer=request.user
         ).select_related('retailer')
         
+        # Prefetch reward configs to avoid N+1
+        from retailers.models import RetailerRewardConfig
+        retailer_ids = [record.retailer.id for record in loyalty_records]
+        configs = RetailerRewardConfig.objects.filter(retailer__id__in=retailer_ids)
+        config_map = {config.retailer.id: config.conversion_rate for config in configs}
+        
         data = []
         for record in loyalty_records:
+            conversion_rate = config_map.get(record.retailer.id, 1.0)
             data.append({
                 'retailer_id': record.retailer.id,
                 'retailer_name': record.retailer.shop_name,
                 'points': record.points,
+                'conversion_rate': conversion_rate,
+                'value_in_currency': float(record.points) * float(conversion_rate),
                 'updated_at': record.updated_at
             })
             
