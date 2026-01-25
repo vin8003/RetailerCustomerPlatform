@@ -612,6 +612,65 @@ def get_product_categories(request):
 
 @api_view(['GET'])
 @permission_classes([permissions.AllowAny])
+def get_all_categories(request):
+    """
+    Get all product categories (flat list for autocomplete)
+    """
+    try:
+        categories = ProductCategory.objects.filter(is_active=True).order_by('name')
+        
+        search = request.query_params.get('search')
+        if search:
+            categories = categories.filter(name__icontains=search)
+            
+        data = []
+        for cat in categories:
+            name = cat.name
+            if cat.parent:
+                name = f"{cat.parent.name} > {cat.name}"
+            data.append({
+                'id': cat.id,
+                'name': name,
+                'raw_name': cat.name
+            })
+            
+        return Response(data, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error getting all categories: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def get_product_groups(request):
+    """
+    Get all unique product groups
+    """
+    try:
+        # Get from both MasterProduct and Product
+        groups_master = MasterProduct.objects.filter(product_group__isnull=False).values_list('product_group', flat=True).distinct()
+        groups_retail = Product.objects.filter(product_group__isnull=False).values_list('product_group', flat=True).distinct()
+        
+        all_groups = sorted(list(set(list(groups_master) + list(groups_retail))))
+        
+        search = request.query_params.get('search')
+        if search:
+            all_groups = [g for g in all_groups if search.lower() in g.lower()]
+            
+        return Response(all_groups, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error getting product groups: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
 def get_product_brands(request):
     """
     Get all product brands
@@ -1790,19 +1849,25 @@ class CommitUploadSessionView(APIView):
                     brand = None
                     
                     if not master_product:
-                        cat_id = details.get('category_id')
+                        # Try to get category from category_id or category field (which might be the ID)
+                        cat_id = details.get('category_id') or details.get('category')
                         if cat_id:
                              try:
-                                category = ProductCategory.objects.get(id=cat_id)
-                             except ProductCategory.DoesNotExist:
+                                # Check if it's an integer ID
+                                if isinstance(cat_id, (int, str)) and str(cat_id).isdigit():
+                                    category = ProductCategory.objects.get(id=int(cat_id))
+                             except (ProductCategory.DoesNotExist, ValueError):
                                 pass
                         
-                        brand_id = details.get('brand_id')
+                        brand_id = details.get('brand_id') or details.get('brand')
                         if brand_id:
                              try:
-                                brand = ProductBrand.objects.get(id=brand_id)
-                             except ProductBrand.DoesNotExist:
+                                if isinstance(brand_id, (int, str)) and str(brand_id).isdigit():
+                                    brand = ProductBrand.objects.get(id=int(brand_id))
+                             except (ProductBrand.DoesNotExist, ValueError):
                                 pass
+
+                    product_group = details.get('product_group')
 
 
                     if existing_product:
@@ -1820,6 +1885,9 @@ class CommitUploadSessionView(APIView):
                              
                         if item.image and not existing_product.image:
                              existing_product.image = item.image
+                             
+                        if product_group:
+                            existing_product.product_group = product_group
 
                         existing_product.save()
                         updated_count += 1
@@ -1836,7 +1904,8 @@ class CommitUploadSessionView(APIView):
                             master_product=master_product,
                             image=item.image,
                             is_draft=is_draft_item,
-                            is_active=not is_draft_item # Drafts are inactive by default? Or active but marked simply as draft. Let's make them inactive so customers don't see them.
+                            is_active=not is_draft_item,
+                            product_group=product_group
                         )
                         if category: new_prod.category = category
                         if brand: new_prod.brand = brand

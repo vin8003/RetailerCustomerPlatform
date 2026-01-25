@@ -80,6 +80,7 @@ class MasterProduct(models.Model):
     image_url = models.URLField(max_length=500, blank=True, null=True)
     mrp = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, help_text="Maximum Retail Price")
     attributes = models.JSONField(default=dict, blank=True)  # Ingredients, nutrition, etc.
+    product_group = models.CharField(max_length=100, blank=True, null=True, db_index=True)
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -204,6 +205,7 @@ class Product(models.Model):
     images = models.JSONField(default=list, blank=True)  # Additional images
     specifications = models.JSONField(default=dict, blank=True)
     tags = models.JSONField(default=list, blank=True)
+    product_group = models.CharField(max_length=100, blank=True, null=True, db_index=True)
     
     # SEO and metadata
     meta_title = models.CharField(max_length=255, blank=True)

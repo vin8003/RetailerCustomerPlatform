@@ -35,7 +35,10 @@ urlpatterns = [
 
     # Categories and brands
     path('categories/', views.get_product_categories, name='get_product_categories'),
+    path('categories/all/', views.get_all_categories, name='get_all_categories'),
     path('categories/create/', views.create_product_category, name='create_product_category'), # NEW
+    
+    path('product-groups/', views.get_product_groups, name='get_product_groups'),
 
     path('brands/', views.get_product_brands, name='get_product_brands'),
     path('brands/create/', views.create_product_brand, name='create_product_brand'), # NEW
