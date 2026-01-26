@@ -176,23 +176,18 @@ class Order(models.Model):
                 from retailers.models import RetailerRewardConfig
                 from customers.models import CustomerLoyalty
                 
+                # 1. Award points from Offers (Independent of Global Config)
+                if self.points_earned > 0:
+                    loyalty, _ = CustomerLoyalty.objects.get_or_create(
+                        customer=self.customer,
+                        retailer=self.retailer
+                    )
+                    loyalty.points += self.points_earned
+                    loyalty.save()
+
                 try:
                     config = RetailerRewardConfig.objects.filter(retailer=self.retailer).first()
                     if config and config.is_active:
-                        # 1. Award standard cashback points
-                        points_to_earn = (self.total_amount * config.cashback_percentage) / Decimal('100.0')
-                        points_to_earn = round(points_to_earn, 2)
-                        
-                        if points_to_earn > 0:
-                            self.points_earned = points_to_earn
-                            
-                            # Update Customer Loyalty for this retailer
-                            loyalty, _ = CustomerLoyalty.objects.get_or_create(
-                                customer=self.customer,
-                                retailer=self.retailer
-                            )
-                            loyalty.points += points_to_earn
-                            loyalty.save()
 
                         # 2. Process Referral Reward
                         if config.is_referral_enabled:
