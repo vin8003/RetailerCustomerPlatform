@@ -23,7 +23,8 @@ from .serializers import (
     ProductUpdateSerializer, ProductCategorySerializer, ProductBrandSerializer,
     ProductReviewSerializer, ProductUploadSerializer, ProductBulkUploadSerializer,
     ProductStatsSerializer, MasterProductSerializer,
-    ProductUploadSessionSerializer, UploadSessionItemSerializer
+    ProductUploadSessionSerializer, UploadSessionItemSerializer,
+    ProductSearchSerializer
 )
 from retailers.models import RetailerProfile
 from common.permissions import IsRetailerOwner
@@ -116,6 +117,61 @@ def get_retailer_products(request):
 
     except Exception as e:
         logger.error(f"Error getting retailer products: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def search_products(request):
+    """
+    Search products for authenticated retailer with minimal data
+    """
+    try:
+        if request.user.user_type != 'retailer':
+            return Response(
+                {'error': 'Only retailers can access this endpoint'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            retailer = RetailerProfile.objects.get(user=request.user)
+        except RetailerProfile.DoesNotExist:
+            return Response(
+                {'error': 'Retailer profile not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        products = Product.objects.filter(retailer=retailer, is_active=True).order_by('-created_at')
+
+        # Apply search
+        search = request.query_params.get('search')
+        if search:
+            products = products.filter(
+                Q(name__icontains=search) |
+                Q(description__icontains=search) |
+                Q(tags__icontains=search) |
+                Q(category__name__icontains=search) |
+                Q(product_group__icontains=search) |
+                Q(barcode__icontains=search)
+            )
+
+        # Apply category filter if provided
+        category = request.query_params.get('category')
+        if category:
+            products = products.filter(category__name__icontains=category)
+
+        # Limit results for search
+        limit = int(request.query_params.get('limit', 50))
+        products = products[:limit]
+
+        serializer = ProductSearchSerializer(products, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        logger.error(f"Error searching retailer products: {str(e)}")
         return Response(
             {'error': 'Internal server error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -349,7 +405,10 @@ def get_retailer_products_public(request, retailer_id):
         in_stock = request.query_params.get('in_stock')
 
         if category:
-            products = products.filter(category__name__icontains=category)
+            if category.isdigit():
+                products = products.filter(category_id=category)
+            else:
+                products = products.filter(category__name__icontains=category)
 
         if brand:
             products = products.filter(brand__name__icontains=brand)
@@ -375,7 +434,9 @@ def get_retailer_products_public(request, retailer_id):
             products = products.filter(
                 Q(name__icontains=search) |
                 Q(description__icontains=search) |
-                Q(tags__icontains=search)
+                Q(tags__icontains=search) |
+                Q(category__name__icontains=search) |
+                Q(product_group__icontains=search)
             )
 
         # Ordering
@@ -396,6 +457,55 @@ def get_retailer_products_public(request, retailer_id):
 
     except Exception as e:
         logger.error(f"Error getting retailer products: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def search_products_public(request, retailer_id):
+    """
+    Search products for a specific retailer (public endpoint) with minimal data
+    """
+    try:
+        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+
+        products = Product.objects.filter(
+            retailer=retailer, 
+            is_active=True,
+            is_available=True
+        ).order_by('-is_featured', '-created_at')
+
+        # Apply search
+        search = request.query_params.get('search')
+        if search:
+            products = products.filter(
+                Q(name__icontains=search) |
+                Q(description__icontains=search) |
+                Q(tags__icontains=search) |
+                Q(category__name__icontains=search) |
+                Q(product_group__icontains=search)
+            )
+
+        # Apply category filter if provided
+        category = request.query_params.get('category')
+        if category:
+            if category.isdigit():
+                products = products.filter(category_id=category)
+            else:
+                products = products.filter(category__name__icontains=category)
+
+        # Limit results for search
+        limit = int(request.query_params.get('limit', 50))
+        products = products[:limit]
+
+        serializer = ProductSearchSerializer(products, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        logger.error(f"Error searching public retailer products: {str(e)}")
         return Response(
             {'error': 'Internal server error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR

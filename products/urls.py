@@ -4,6 +4,7 @@ from . import views
 urlpatterns = [
     # Retailer product management
     path('', views.get_retailer_products, name='get_retailer_products'),
+    path('search/', views.search_products, name='search_products'),
     path('create/', views.create_product, name='create_product'),
     path('<int:product_id>/', views.get_product_detail, name='get_product_detail'),
     path('<int:product_id>/update/', views.update_product, name='update_product'),
@@ -26,6 +27,7 @@ urlpatterns = [
 
     # Public product endpoints
     path('retailer/<int:retailer_id>/', views.get_retailer_products_public, name='get_retailer_products_public'),
+    path('retailer/<int:retailer_id>/search/', views.search_products_public, name='search_products_public'),
     path('retailer/<int:retailer_id>/categories/', views.get_retailer_categories, name='get_retailer_categories'),
     path('retailer/<int:retailer_id>/featured/', views.get_retailer_featured_products, name='get_retailer_featured_products'),
     path('retailer/<int:retailer_id>/best-selling/', views.get_best_selling_products, name='get_best_selling_products'),

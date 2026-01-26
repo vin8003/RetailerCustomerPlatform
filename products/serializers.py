@@ -97,6 +97,20 @@ class ProductListSerializer(serializers.ModelSerializer):
         return getattr(obj, 'review_count_annotated', obj.reviews.count())
 
 
+class ProductSearchSerializer(serializers.ModelSerializer):
+    """
+    Lightweight serializer for product search results
+    """
+    image = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Product
+        fields = ['id', 'name', 'price', 'unit', 'image']
+        
+    def get_image(self, obj):
+        return obj.image_display_url
+
+
 class ProductDetailSerializer(serializers.ModelSerializer):
     """
     Serializer for product detail view
