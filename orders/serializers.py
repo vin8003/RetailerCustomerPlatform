@@ -70,19 +70,32 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     has_customer_feedback = serializers.SerializerMethodField()
     has_retailer_rating = serializers.SerializerMethodField()
     
+    applied_offers = serializers.SerializerMethodField()
+    
     class Meta:
         model = Order
         fields = [
             'id', 'order_number', 'customer_name', 'customer_phone', 'customer_email',
             'retailer', 'retailer_name', 'retailer_phone',
             'retailer_address', 'retailer_upi_id', 'retailer_upi_qr_code', 'delivery_mode', 'payment_mode', 'status',
-            'subtotal', 'delivery_fee', 'discount_amount', 'discount_from_points', 'points_redeemed', 'total_amount',
+            'subtotal', 'delivery_fee', 'discount_amount', 'discount_from_points', 'points_redeemed', 'points_earned', 'total_amount',
             'special_instructions', 'cancellation_reason', 'delivery_address_text',
             'delivery_latitude', 'delivery_longitude',
-            'items', 'created_at', 'updated_at', 'confirmed_at', 'delivered_at',
+            'items', 'applied_offers', 'created_at', 'updated_at', 'confirmed_at', 'delivered_at',
             'cancelled_at', 'unread_messages_count',
             'has_customer_feedback', 'has_retailer_rating'
         ]
+    
+    def get_applied_offers(self, obj):
+        # Return list of applied offers with details
+        offers = []
+        for redemption in obj.applied_offers.select_related('offer').all():
+            offers.append({
+                'name': redemption.offer.name,
+                'type': redemption.offer.get_offer_type_display(),
+                'discount': redemption.discount_amount
+            })
+        return offers
     
     def get_unread_messages_count(self, obj):
         request = self.context.get('request')
@@ -205,14 +218,25 @@ class OrderCreateSerializer(serializers.Serializer):
         
         cart_items = cart.items.select_related('product').all()
         
-        # Calculate totals
-        subtotal = sum(item.total_price for item in cart_items)
+        # Calculate offers using Engine
+        from offers.engine import OfferEngine
+        engine = OfferEngine()
+        offer_results = engine.calculate_offers(cart_items, retailer)
+        
+        subtotal = offer_results['subtotal']
+        offer_discount = offer_results['total_savings']
+        items_total = offer_results['discounted_total']
+        total_points_offer = offer_results.get('total_points', 0)
+        
         delivery_fee = 0
         if validated_data['delivery_mode'] == 'delivery':
             # Dynamic Delivery Charge Logic
             if retailer.delivery_charge > 0:
-                # Check for free delivery threshold
-                if retailer.free_delivery_threshold > 0 and subtotal >= retailer.free_delivery_threshold:
+                # Check for free delivery threshold (Usually based on subtotal or discounted total? 
+                # Standard is usually discounted subtotal but let's stick to subtotal if that's policy. 
+                # Actually commonly it is post-discount value.)
+                # Let's use items_total (discounted) to be safe for retailer.
+                if retailer.free_delivery_threshold > 0 and items_total >= retailer.free_delivery_threshold:
                     delivery_fee = 0
                 else:
                     delivery_fee = retailer.delivery_charge
@@ -220,7 +244,7 @@ class OrderCreateSerializer(serializers.Serializer):
                  # Default logic if not set (or 0 means free)
                  delivery_fee = 0
         
-        total_amount = subtotal + delivery_fee
+        total_amount = items_total + delivery_fee
         
         # Calculate discount from points
         discount_from_points = 0
@@ -275,8 +299,10 @@ class OrderCreateSerializer(serializers.Serializer):
                 'payment_mode': validated_data['payment_mode'],
                 'subtotal': subtotal,
                 'delivery_fee': delivery_fee,
+                'discount_amount': offer_discount,
                 'discount_from_points': discount_from_points,
                 'points_redeemed': points_to_redeem,
+                'points_earned': total_points_offer,
                 'total_amount': total_amount,
                 'special_instructions': validated_data.get('special_instructions', ''),
             }
@@ -288,12 +314,34 @@ class OrderCreateSerializer(serializers.Serializer):
             
             order = Order.objects.create(**order_data)
             
+            # Create Offer Redemptions
+            from offers.models import OfferRedemption
+            for applied in offer_results['applied_offers']:
+                OfferRedemption.objects.create(
+                    order=order,
+                    customer=customer,
+                    offer_id=applied['offer_id'],
+                    discount_amount=applied['savings'] if applied.get('benefit_type', 'discount') == 'discount' else 0,
+                    points_earned=applied['savings'] if applied.get('benefit_type', 'discount') == 'credit_points' else 0
+                )
+            
             # Prepare for bulk operations
             order_items = []
             products_to_update = []
             from products.models import Product  # Ensure Product is imported
+            
+            # Get item discounts map
+            item_discounts = offer_results.get('item_discounts', {})
 
             for cart_item in cart_items:
+                # Calculate final prices based on offers
+                unit_price = cart_item.product.price
+                total_price = cart_item.total_price
+                
+                if cart_item.id in item_discounts:
+                    unit_price = item_discounts[cart_item.id]['final_price']
+                    total_price = unit_price * cart_item.quantity
+                
                 order_items.append(OrderItem(
                     order=order,
                     product=cart_item.product,
@@ -301,8 +349,8 @@ class OrderCreateSerializer(serializers.Serializer):
                     product_price=cart_item.product.price,
                     product_unit=cart_item.product.unit,
                     quantity=cart_item.quantity,
-                    unit_price=cart_item.product.price,
-                    total_price=cart_item.total_price
+                    unit_price=unit_price,
+                    total_price=total_price
                 ))
                 
                 # Reduce product quantity in memory

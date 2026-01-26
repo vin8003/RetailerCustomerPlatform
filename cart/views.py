@@ -42,7 +42,30 @@ def get_cart(request):
                 )
                 prefetch_related_objects([cart], 'items__product', 'retailer')
                 serializer = CartSerializer(cart)
-                return Response(serializer.data, status=status.HTTP_200_OK)
+                data = serializer.data
+                
+                # Calculate Offers
+                from offers.engine import OfferEngine
+                engine = OfferEngine()
+                
+                # Pass cart items directly (Engine expects objects with product/quantity attrs)
+                cart_items = cart.items.select_related('product').all()
+
+                offer_results = engine.calculate_offers(cart_items, retailer)
+                
+                # Merge offer results into response
+                data['subtotal'] = offer_results['subtotal']
+                data['discounted_total'] = offer_results['discounted_total']
+                data['total_savings'] = offer_results['total_savings']
+                data['applied_offers'] = offer_results['applied_offers']
+                data['item_discounts'] = offer_results['item_discounts']
+                
+                # Calculate potential cashback (From Offers Engine)
+                potential_points = offer_results.get('total_points', 0)
+                    
+                data['potential_points'] = potential_points
+                
+                return Response(data, status=status.HTTP_200_OK)
             except RetailerProfile.DoesNotExist:
                 return Response(
                     {'error': 'Retailer not found'}, 
