@@ -1985,11 +1985,16 @@ class CommitUploadSessionView(APIView):
 
 
                     if existing_product:
-                        # UPDATE
+                        # UPDATE (including reactivating soft-deleted products)
                         print(f"DEBUG: Updating existing product {existing_product.id}")
                         existing_product.price = price
                         existing_product.original_price = mrp
                         existing_product.quantity = qty 
+                        
+                        # Reactivate if it was soft-deleted
+                        if not existing_product.is_active:
+                            existing_product.is_active = True
+                            print(f"DEBUG: Reactivating soft-deleted product {existing_product.id}")
                         
                         if master_product and not existing_product.master_product:
                             existing_product.master_product = master_product
