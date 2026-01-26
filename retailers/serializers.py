@@ -58,6 +58,18 @@ class RetailerProfileUpdateSerializer(serializers.ModelSerializer):
     """
     Serializer for updating retailer profile
     """
+    def to_internal_value(self, data):
+        # Handle cases where image fields are sent as URLs (meaning no change)
+        # We create a mutable copy if it's a QueryDict
+        if hasattr(data, 'dict'):
+            data = data.dict()
+        
+        for field in ['shop_image', 'upi_qr_code']:
+            if field in data and isinstance(data[field], str) and data[field].startswith('http'):
+                data.pop(field)
+        
+        return super().to_internal_value(data)
+
     class Meta:
         model = RetailerProfile
         fields = [
