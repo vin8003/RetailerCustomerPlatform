@@ -1,8 +1,10 @@
+from decimal import Decimal
 from rest_framework import status, permissions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Q, Sum, Count, Avg
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.http import Http404
 from django.utils import timezone
@@ -608,72 +610,74 @@ def modify_order(request, order_id):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        serializer = OrderModificationSerializer(
-            order,
-            data=request.data,
-            context={'user': request.user}
-        )
-        
-        if serializer.is_valid():
-            order = serializer.save()
+        # Use transaction to ensure all changes are atomic
+        with transaction.atomic():
+            serializer = OrderModificationSerializer(
+                order,
+                data=request.data,
+                context={'user': request.user}
+            )
             
-            # Recalculate points discount if points were used
-            if order.points_redeemed > 0:
-                from retailers.models import RetailerRewardConfig
-                from customers.models import CustomerLoyalty
+            if serializer.is_valid():
+                order = serializer.save()
                 
-                try:
-                    config = RetailerRewardConfig.objects.filter(retailer=retailer).first()
-                    loyalty = CustomerLoyalty.objects.get(customer=order.customer, retailer=retailer)
+                # Recalculate points discount if points were used
+                if order.points_redeemed > 0:
+                    from retailers.models import RetailerRewardConfig
+                    from customers.models import CustomerLoyalty
                     
-                    if config and config.is_active:
-                        # Calculate total BEFORE points discount is applied
-                        # We calculate from components because total_amount might be capped at 0
-                        total_before_points = max(0, order.subtotal + order.delivery_fee - (order.discount_amount or 0))
-
-                        # Calculate max allowed discount for new total
-                        # 1. Percentage limit on total_before_points
-                        max_by_percent = (total_before_points * config.max_reward_usage_percent) / 100
+                    try:
+                        config = RetailerRewardConfig.objects.filter(retailer=retailer).first()
+                        loyalty = CustomerLoyalty.objects.get(customer=order.customer, retailer=retailer)
                         
-                        # 2. Flat limit
-                        max_by_flat = config.max_reward_usage_flat
-                        
-                        # 3. Current redeemed points value (the user "paid" this much in points initially)
-                        # We don't want to use MORE points than initially redeemed, only LESS if the total dropped
-                        current_points_value = order.points_redeemed * config.conversion_rate
-                        
-                        # New max redeemable amount
-                        redeemable_amount = min(total_before_points, max_by_percent, max_by_flat, current_points_value)
-                        
-                        if redeemable_amount < current_points_value:
-                            # Discount needs to be reduced
-                            diff_value = current_points_value - redeemable_amount
-                            points_to_refund = diff_value / config.conversion_rate
+                        if config and config.is_active:
+                            # Calculate total BEFORE points discount is applied
+                            # Recalculate max allowed discount for new total
+                            total_before_points = max(Decimal('0'), order.subtotal + order.delivery_fee - (order.discount_amount or Decimal('0')))
                             
-                            # Update order
-                            # New discount is redeemable_amount.
-                            # We need to set total_amount = total_before_points - new_discount.
+                            # Calculate max allowed discount for new total
+                            # 1. Percentage limit on total_before_points
+                            max_by_percent = ((total_before_points * config.max_reward_usage_percent) / Decimal('100')).quantize(Decimal('0.01'))
                             
-                            order.discount_from_points = redeemable_amount
-                            order.points_redeemed -= points_to_refund
-                            order.total_amount = total_before_points - redeemable_amount
-                            order.save()
+                            # 2. Flat limit
+                            max_by_flat = config.max_reward_usage_flat
                             
-                            # Refund points to customer
-                            loyalty.points += points_to_refund
-                            loyalty.save()
+                            # 3. Current redeemed points value (the user "paid" this much in points initially)
+                            # We don't want to use MORE points than initially redeemed, only LESS if the total dropped
+                            current_points_value = (order.points_redeemed * config.conversion_rate).quantize(Decimal('0.01'))
                             
-                            logger.info(f"Points adjusted for order {order.order_number}: Refunded {points_to_refund} points")
-
-                except Exception as e:
-                    logger.error(f"Error adjusting points for modified order: {str(e)}")
+                            # New max redeemable amount
+                            redeemable_amount = min(total_before_points, max_by_percent, max_by_flat, current_points_value)
+                            
+                            if redeemable_amount < current_points_value:
+                                # Discount needs to be reduced
+                                diff_value = current_points_value - redeemable_amount
+                                points_to_refund = (diff_value / config.conversion_rate).quantize(Decimal('0.01'))
+                                
+                                # Update order
+                                # New discount is redeemable_amount.
+                                # We need to set total_amount = total_before_points - new_discount.
+                                
+                                order.discount_from_points = redeemable_amount
+                                order.points_redeemed -= points_to_refund
+                                order.total_amount = total_before_points - redeemable_amount
+                                order.save()
+                                
+                                # Refund points to customer
+                                loyalty.points += points_to_refund
+                                loyalty.save()
+                                
+                                logger.info(f"Points adjusted for order {order.order_number}: Refunded {points_to_refund} points")
+                                
+                    except (RetailerRewardConfig.DoesNotExist, CustomerLoyalty.DoesNotExist):
+                        pass
+                
+                # Fetch fresh detail to return
+                detail_serializer = OrderDetailSerializer(order)
+                return Response(detail_serializer.data)
             
-            response_serializer = OrderDetailSerializer(order)
-            logger.info(f"Order modified: {order.order_number} by retailer")
-            return Response(response_serializer.data, status=status.HTTP_200_OK)
-        
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
     except Exception as e:
         logger.error(f"Error modifying order: {str(e)}")
         return Response(

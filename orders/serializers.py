@@ -1,3 +1,4 @@
+from decimal import Decimal
 from rest_framework import serializers
 from django.db import transaction
 from django.utils import timezone
@@ -685,11 +686,12 @@ class OrderModificationSerializer(serializers.Serializer):
                 instance.discount_amount = discount_amount
             
             # Recalculate total
-            instance.total_amount = instance.subtotal + instance.delivery_fee - instance.discount_amount - instance.discount_from_points
+            instance.subtotal = Decimal(sum(item.total_price for item in instance.items.all())).quantize(Decimal('0.01'))
+            instance.total_amount = (instance.subtotal + instance.delivery_fee - instance.discount_amount - instance.discount_from_points).quantize(Decimal('0.01'))
             
             # Validate total amount
             if instance.total_amount < 0:
-                instance.total_amount = 0
+                instance.total_amount = Decimal('0.00')
             
             
             # Change status to waiting for approval using update_status to trigger notifications
