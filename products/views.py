@@ -12,6 +12,7 @@ import json
 from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser
 from django.db import transaction
+from decimal import Decimal, InvalidOperation
 
 from .models import (
     Product, ProductCategory, ProductBrand, ProductReview,
@@ -1930,9 +1931,22 @@ class CommitUploadSessionView(APIView):
                     
                     barcode = item.barcode
                     name = details.get('name')
-                    price = details.get('price', 0)
-                    mrp = details.get('original_price', 0)
-                    qty = details.get('quantity', 0)
+                    
+                    # Safe conversion to numeric types
+                    try:
+                        price = Decimal(str(details.get('price', 0)))
+                    except (ValueError, TypeError, InvalidOperation):
+                        price = Decimal('0.00')
+                        
+                    try:
+                        mrp = Decimal(str(details.get('original_price', 0)))
+                    except (ValueError, TypeError, InvalidOperation):
+                        mrp = Decimal('0.00')
+                        
+                    try:
+                        qty = int(float(str(details.get('quantity', 0))))
+                    except (ValueError, TypeError):
+                        qty = 0
                     
                     is_draft_item = False
                     if not name:
