@@ -1812,6 +1812,7 @@ class GetSessionDetailsView(APIView):
                     # Fix: Add Brand and Category
                     final_brand = details.get('brand') or (existing_local.brand.name if existing_local and existing_local.brand else (matched_mp.brand.name if matched_mp.brand else ""))
                     final_category = details.get('category') or (existing_local.category.name if existing_local and existing_local.category else (matched_mp.category.name if matched_mp.category else ""))
+                    final_product_group = details.get('product_group') or (existing_local.product_group if existing_local else matched_mp.product_group) or ""
 
                     item_data['master_product'] = mp_data
                     item_data['existing_product_id'] = existing_local.id if existing_local else None
@@ -1824,6 +1825,7 @@ class GetSessionDetailsView(APIView):
                         'quantity': final_stock,
                         'brand': final_brand,
                         'category': final_category,
+                        'product_group': final_product_group,
                         'image_url': matched_mp.image_url if matched_mp.image_url else "",
                         'images': mp_data.get('images', []) 
                     }
@@ -1838,6 +1840,7 @@ class GetSessionDetailsView(APIView):
                     final_mrp = details.get('original_price') or (existing_local.original_price if existing_local else 0)
                     final_brand = details.get('brand') or (existing_local.brand.name if existing_local and existing_local.brand else "")
                     final_category = details.get('category') or (existing_local.category.name if existing_local and existing_local.category else "")
+                    final_product_group = details.get('product_group') or (existing_local.product_group if existing_local else "")
 
                     item_data['existing_product_id'] = existing_local.id if existing_local else None
                     item_data['ui_data'] = {
@@ -1847,6 +1850,7 @@ class GetSessionDetailsView(APIView):
                         'quantity': final_stock,
                         'brand': final_brand,
                         'category': final_category,
+                        'product_group': final_product_group,
                     }
                     response_data['unmatched_items'].append(item_data)
 
