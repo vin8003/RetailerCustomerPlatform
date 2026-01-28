@@ -5,7 +5,9 @@ from .models import (
     ProductReview, ProductUpload, MasterProduct,
     ProductUploadSession, UploadSessionItem
 )
+import logging
 
+logger = logging.getLogger(__name__)
 
 class ProductCategorySerializer(serializers.ModelSerializer):
     """
@@ -19,8 +21,11 @@ class ProductCategorySerializer(serializers.ModelSerializer):
     
     def get_subcategories(self, obj):
         """Get subcategories"""
-        if obj.subcategories.exists():
-            return ProductCategorySerializer(obj.subcategories.filter(is_active=True), many=True).data
+        try:
+            if obj.subcategories.exists():
+                return ProductCategorySerializer(obj.subcategories.filter(is_active=True), many=True).data
+        except Exception:
+            pass
         return []
 
 
@@ -61,8 +66,8 @@ class ProductListSerializer(serializers.ModelSerializer):
     """
     Serializer for product list view
     """
-    category_name = serializers.CharField(source='category.name', read_only=True)
-    brand_name = serializers.CharField(source='brand.name', read_only=True)
+    category_name = serializers.SerializerMethodField()
+    brand_name = serializers.SerializerMethodField()
     retailer_name = serializers.CharField(source='retailer.shop_name', read_only=True)
     discounted_price = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
     is_in_stock = serializers.BooleanField(read_only=True)
@@ -81,20 +86,46 @@ class ProductListSerializer(serializers.ModelSerializer):
             'average_rating', 'review_count', 'created_at', 'product_group'
         ]
     
+    def get_category_name(self, obj):
+        try:
+            return obj.category.name if obj.category else None
+        except Exception as e:
+            logger.error(f"Error getting category name: {e}")
+            return None
+
+    def get_brand_name(self, obj):
+        try:
+            return obj.brand.name if obj.brand else None
+        except Exception as e:
+            logger.error(f"Error getting brand name: {e}")
+            return None
+
     def get_image(self, obj):
         """Get product image URL or fallback to image_url"""
-        return obj.image_display_url
+        try:
+            return obj.image_display_url
+        except Exception as e:
+            logger.error(f"Error getting image url: {e}")
+            return None
     
     def get_average_rating(self, obj):
         """Calculate average rating"""
-        if hasattr(obj, 'average_rating_annotated'):
-             return round(obj.average_rating_annotated, 2) if obj.average_rating_annotated else 0
-        avg_rating = obj.reviews.aggregate(avg_rating=Avg('rating'))['avg_rating']
-        return round(avg_rating, 2) if avg_rating else 0
+        try:
+            if hasattr(obj, 'average_rating_annotated'):
+                 return round(obj.average_rating_annotated, 2) if obj.average_rating_annotated else 0
+            avg_rating = obj.reviews.aggregate(avg_rating=Avg('rating'))['avg_rating']
+            return round(avg_rating, 2) if avg_rating else 0
+        except Exception as e:
+            logger.error(f"Error getting avg rating: {e}")
+            return 0
     
     def get_review_count(self, obj):
         """Get review count"""
-        return getattr(obj, 'review_count_annotated', obj.reviews.count())
+        try:
+            return getattr(obj, 'review_count_annotated', obj.reviews.count())
+        except Exception as e:
+            logger.error(f"Error getting review count: {e}")
+            return 0
 
 
 class ProductSearchSerializer(serializers.ModelSerializer):
@@ -108,7 +139,11 @@ class ProductSearchSerializer(serializers.ModelSerializer):
         fields = ['id', 'name', 'price', 'unit', 'image']
         
     def get_image(self, obj):
-        return obj.image_display_url
+        try:
+            return obj.image_display_url
+        except Exception as e:
+            logger.error(f"Error getting search image: {e}")
+            return None
 
 
 class ProductDetailSerializer(serializers.ModelSerializer):
@@ -116,9 +151,9 @@ class ProductDetailSerializer(serializers.ModelSerializer):
     Serializer for product detail view
     """
     category = ProductCategorySerializer(read_only=True)
-    category_name = serializers.CharField(source='category.name', read_only=True)
+    category_name = serializers.SerializerMethodField()
     brand = ProductBrandSerializer(read_only=True)
-    brand_name = serializers.CharField(source='brand.name', read_only=True)
+    brand_name = serializers.SerializerMethodField()
     retailer_name = serializers.CharField(source='retailer.shop_name', read_only=True)
     retailer_id = serializers.IntegerField(source='retailer.id', read_only=True)
     additional_images = ProductImageSerializer(many=True, read_only=True)
@@ -143,49 +178,73 @@ class ProductDetailSerializer(serializers.ModelSerializer):
             'product_group'
         ]
     
+    def get_category_name(self, obj):
+        try:
+            return obj.category.name if obj.category else None
+        except Exception:
+            return None
+
+    def get_brand_name(self, obj):
+        try:
+            return obj.brand.name if obj.brand else None
+        except Exception:
+            return None
+
     def get_image(self, obj):
         """Get product image URL or fallback to image_url"""
-        return obj.image_display_url
+        try:
+            return obj.image_display_url
+        except Exception:
+            return None
 
     def get_images(self, obj):
         """Get unified list of all images"""
-        imgs = []
-        
-        # 1. Primary Image
-        if obj.image:
-            imgs.append(obj.image.url)
-        elif obj.image_url:
-            imgs.append(obj.image_url)
+        try:
+            imgs = []
             
-        # 2. Additional Images (Model)
-        for img in obj.additional_images.all():
-            imgs.append(img.image.url)
-            
-        # 3. Additional Images (JSON)
-        if obj.images and isinstance(obj.images, list):
-            for img in obj.images:
-                if img: imgs.append(str(img))
+            # 1. Primary Image
+            if obj.image:
+                imgs.append(obj.image.url)
+            elif obj.image_url:
+                imgs.append(obj.image_url)
+                
+            # 2. Additional Images (Model)
+            for img in obj.additional_images.all():
+                imgs.append(img.image.url)
+                
+            # 3. Additional Images (JSON)
+            if obj.images and isinstance(obj.images, list):
+                for img in obj.images:
+                    if img: imgs.append(str(img))
 
-        # 4. Master Product Images
-        if obj.master_product:
-             if obj.master_product.image_url and obj.master_product.image_url not in imgs:
-                 imgs.append(obj.master_product.image_url)
-             
-             for mp_img in obj.master_product.images.all():
-                 url = mp_img.image.url if mp_img.image else mp_img.image_url
-                 if url and url not in imgs:
-                     imgs.append(url)
-                     
-        return list(dict.fromkeys(imgs)) # Remove duplicates preserving order
+            # 4. Master Product Images
+            if obj.master_product:
+                if obj.master_product.image_url and obj.master_product.image_url not in imgs:
+                    imgs.append(obj.master_product.image_url)
+                
+                for mp_img in obj.master_product.images.all():
+                    url = mp_img.image.url if mp_img.image else mp_img.image_url
+                    if url and url not in imgs:
+                        imgs.append(url)
+                        
+            return list(dict.fromkeys(imgs)) # Remove duplicates preserving order
+        except Exception:
+            return []
     
     def get_average_rating(self, obj):
         """Calculate average rating"""
-        avg_rating = obj.reviews.aggregate(avg_rating=Avg('rating'))['avg_rating']
-        return round(avg_rating, 2) if avg_rating else 0
+        try:
+            avg_rating = obj.reviews.aggregate(avg_rating=Avg('rating'))['avg_rating']
+            return round(avg_rating, 2) if avg_rating else 0
+        except Exception:
+            return 0
     
     def get_review_count(self, obj):
         """Get review count"""
-        return obj.reviews.count()
+        try:
+            return obj.reviews.count()
+        except Exception:
+            return 0
 
 
 
@@ -193,8 +252,8 @@ class MasterProductSerializer(serializers.ModelSerializer):
     """
     Serializer for Master Product
     """
-    category_name = serializers.CharField(source='category.name', read_only=True)
-    brand_name = serializers.CharField(source='brand.name', read_only=True)
+    category_name = serializers.SerializerMethodField()
+    brand_name = serializers.SerializerMethodField()
     images = serializers.SerializerMethodField()
     
     class Meta:
@@ -206,19 +265,34 @@ class MasterProductSerializer(serializers.ModelSerializer):
             'product_group'
         ]
     
+    def get_category_name(self, obj):
+        try:
+            return obj.category.name if obj.category else None
+        except Exception:
+            return None
+
+    def get_brand_name(self, obj):
+        try:
+            return obj.brand.name if obj.brand else None
+        except Exception:
+            return None
+
     def get_images(self, obj):
         """Get all images (primary URL + additional)"""
-        imgs = []
-        if obj.image_url:
-            imgs.append(obj.image_url)
-        
-        # Additional images
-        for img in obj.images.all():  # via related_name='images'
-            if img.image:
-                imgs.append(img.image.url)
-            elif img.image_url:
-                imgs.append(img.image_url)
-        return imgs
+        try:
+            imgs = []
+            if obj.image_url:
+                imgs.append(obj.image_url)
+            
+            # Additional images
+            for img in obj.images.all():  # via related_name='images'
+                if img.image:
+                    imgs.append(img.image.url)
+                elif img.image_url:
+                    imgs.append(img.image_url)
+            return imgs
+        except Exception:
+            return []
 
 
 class ProductCreateSerializer(serializers.ModelSerializer):
@@ -365,4 +439,3 @@ class ProductUploadSessionSerializer(serializers.ModelSerializer):
         model = ProductUploadSession
         fields = ['id', 'name', 'status', 'created_at', 'updated_at', 'items']
         read_only_fields = ['id', 'status', 'created_at', 'updated_at', 'items']
-
