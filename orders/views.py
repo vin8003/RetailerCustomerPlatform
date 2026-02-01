@@ -18,7 +18,7 @@ from .serializers import (
     OrderStatsSerializer, OrderModificationSerializer, OrderChatMessageSerializer,
     RetailerRatingSerializer, OrderListSerializer
 )
-from retailers.models import RetailerProfile, RetailerReview, RetailerConfig, RetailerRewardConfig
+from retailers.models import RetailerProfile, RetailerReview, RetailerRewardConfig
 from retailers.serializers import RetailerReviewSerializer
 from customers.models import CustomerAddress, CustomerLoyalty
 from django.db.models import Exists, OuterRef, Prefetch
