@@ -74,7 +74,7 @@ class ProductListSerializer(serializers.ModelSerializer):
     average_rating = serializers.SerializerMethodField()
     review_count = serializers.SerializerMethodField()
     image = serializers.SerializerMethodField()
-    
+    active_offer_text = serializers.SerializerMethodField()
     class Meta:
         model = Product
         fields = [
@@ -83,7 +83,8 @@ class ProductListSerializer(serializers.ModelSerializer):
             'minimum_order_quantity', 'maximum_order_quantity',
             'image', 'image_url', 'category_name', 'brand_name', 'retailer_name',
             'is_in_stock', 'is_featured', 'is_active', 'is_available',
-            'average_rating', 'review_count', 'created_at', 'product_group'
+            'average_rating', 'review_count', 'created_at', 'product_group',
+            'active_offer_text'
         ]
     
     def get_category_name(self, obj):
@@ -126,6 +127,57 @@ class ProductListSerializer(serializers.ModelSerializer):
         except Exception as e:
             logger.error(f"Error getting review count: {e}")
             return 0
+
+    def get_active_offer_text(self, obj):
+        """Get the best active offer name for this product (Optimized)"""
+        try:
+            # Check if active offers are provided in context (Fixes N+1)
+            active_offers = self.context.get('active_offers')
+            
+            if active_offers is None:
+                # Fallback for ad-hoc serialization (expensive)
+                from offers.models import Offer
+                from django.utils import timezone
+                active_offers = Offer.objects.filter(
+                    retailer=obj.retailer,
+                    is_active=True,
+                    start_date__lte=timezone.now()
+                ).filter(
+                    models.Q(end_date__isnull=True) | models.Q(end_date__gte=timezone.now())
+                ).order_by('-priority').prefetch_related('targets')
+            
+            for offer in active_offers:
+                # Use pre-fetched targets to avoid N+1 within the loop
+                # If targets were prefetched, .all() won't hit DB
+                targets = offer.targets.all()
+                if not targets: continue
+                
+                is_match = False
+                is_excluded = False
+                for target in targets:
+                    if target.is_excluded:
+                        if target.target_type == 'product' and target.product_id == obj.id:
+                            is_excluded = True
+                        elif target.target_type == 'category' and target.category_id == obj.category_id:
+                            is_excluded = True
+                        elif target.target_type == 'brand' and target.brand_id == obj.brand_id:
+                            is_excluded = True
+                    else:
+                        if target.target_type == 'all_products':
+                            is_match = True
+                        elif target.target_type == 'product' and target.product_id == obj.id:
+                            is_match = True
+                        elif target.target_type == 'category' and target.category_id == obj.category_id:
+                            is_match = True
+                        elif target.target_type == 'brand' and target.brand_id == obj.brand_id:
+                            is_match = True
+                            
+                if is_match and not is_excluded:
+                    return offer.name
+                    
+            return None
+        except Exception:
+            return None
 
 
 class ProductSearchSerializer(serializers.ModelSerializer):

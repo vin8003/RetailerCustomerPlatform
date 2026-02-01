@@ -40,6 +40,8 @@ class Offer(models.Model):
         choices=BENEFIT_TYPE_CHOICES,
         default='discount'
     )
+
+    banner_image = models.ImageField(upload_to='offer_banners/', null=True, blank=True)
     
     # Offer Rules
     offer_type = models.CharField(max_length=20, choices=OFFER_TYPE_CHOICES)

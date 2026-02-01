@@ -130,7 +130,7 @@ def get_retailer_products(request):
             )
 
         products = Product.objects.select_related(
-            'retailer', 'category', 'brand'
+            'retailer', 'category', 'brand', 'master_product'
         ).annotate(
             average_rating_annotated=Avg('reviews__rating'),
             review_count_annotated=Count('reviews')
@@ -178,15 +178,26 @@ def get_retailer_products(request):
                 Q(tags__icontains=search)
             )
 
+        # Pre-fetch active offers for N+1 optimization in serializer
+        from offers.models import Offer
+        from django.utils import timezone
+        active_offers = list(Offer.objects.filter(
+            retailer=retailer,
+            is_active=True,
+            start_date__lte=timezone.now()
+        ).filter(
+            models.Q(end_date__isnull=True) | models.Q(end_date__gte=timezone.now())
+        ).order_by('-priority').prefetch_related('targets'))
+
         # Pagination
         paginator = ProductPagination()
         page = paginator.paginate_queryset(products, request)
 
         if page is not None:
-            serializer = ProductListSerializer(page, many=True)
+            serializer = ProductListSerializer(page, many=True, context={'request': request, 'active_offers': active_offers})
             return paginator.get_paginated_response(serializer.data)
 
-        serializer = ProductListSerializer(products, many=True)
+        serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     except Exception as e:
@@ -464,7 +475,7 @@ def get_retailer_products_public(request, retailer_id):
         retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
 
         products = Product.objects.select_related(
-            'retailer', 'category', 'brand'
+            'retailer', 'category', 'brand', 'master_product'
         ).annotate(
             average_rating_annotated=Avg('reviews__rating'),
             review_count_annotated=Count('reviews')
@@ -480,6 +491,49 @@ def get_retailer_products_public(request, retailer_id):
         min_price = request.query_params.get('min_price')
         max_price = request.query_params.get('max_price')
         in_stock = request.query_params.get('in_stock')
+        offer_id = request.query_params.get('offer_id')
+
+        # Offer filtering
+        if offer_id:
+            from offers.models import Offer
+            try:
+                offer = Offer.objects.prefetch_related('targets').get(id=offer_id, retailer=retailer, is_active=True)
+                targets = offer.targets.all()
+                if targets:
+                    inclusion_q = Q()
+                    exclusion_q = Q()
+                    has_all_products = False
+
+                    for target in targets:
+                        q = Q()
+                        if target.target_type == 'all_products':
+                            if not target.is_excluded:
+                                has_all_products = True
+                        elif target.target_type == 'product':
+                            q = Q(id=target.product_id)
+                        elif target.target_type == 'category':
+                            cat_ids = get_all_category_ids(target.category_id)
+                            q = Q(category_id__in=cat_ids)
+                        elif target.target_type == 'brand':
+                            q = Q(brand_id=target.brand_id)
+                        
+                        if target.is_excluded:
+                            exclusion_q |= q
+                        else:
+                            inclusion_q |= q
+                    
+                    if has_all_products:
+                        if exclusion_q:
+                            products = products.exclude(exclusion_q)
+                    else:
+                        if inclusion_q:
+                            products = products.filter(inclusion_q)
+                        if exclusion_q:
+                            products = products.exclude(exclusion_q)
+                else:
+                    products = products.none()
+            except Offer.DoesNotExist:
+                pass
 
         if category:
             if category.isdigit():
@@ -522,15 +576,26 @@ def get_retailer_products_public(request, retailer_id):
         if ordering in ['name', '-name', 'price', '-price', 'created_at', '-created_at']:
             products = products.order_by(ordering)
 
+        # Pre-fetch active offers for N+1 optimization in serializer
+        from offers.models import Offer
+        from django.utils import timezone
+        active_offers = list(Offer.objects.filter(
+            retailer=retailer,
+            is_active=True,
+            start_date__lte=timezone.now()
+        ).filter(
+            models.Q(end_date__isnull=True) | models.Q(end_date__gte=timezone.now())
+        ).order_by('-priority').prefetch_related('targets'))
+
         # Pagination
         paginator = ProductPagination()
         page = paginator.paginate_queryset(products, request)
 
         if page is not None:
-            serializer = ProductListSerializer(page, many=True)
+            serializer = ProductListSerializer(page, many=True, context={'request': request, 'active_offers': active_offers})
             return paginator.get_paginated_response(serializer.data)
 
-        serializer = ProductListSerializer(products, many=True)
+        serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     except Exception as e:
@@ -691,7 +756,7 @@ def get_retailer_featured_products(request, retailer_id):
         retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
 
         products = Product.objects.select_related(
-            'retailer', 'category', 'brand'
+            'retailer', 'category', 'brand', 'master_product'
         ).annotate(
             average_rating_annotated=Avg('reviews__rating'),
             review_count_annotated=Count('reviews')
@@ -702,7 +767,18 @@ def get_retailer_featured_products(request, retailer_id):
             is_featured=True
         ).order_by('-created_at')[:10]
 
-        serializer = ProductListSerializer(products, many=True)
+        # Pre-fetch active offers for N+1 optimization in serializer
+        from offers.models import Offer
+        from django.utils import timezone
+        active_offers = list(Offer.objects.filter(
+            retailer=retailer,
+            is_active=True,
+            start_date__lte=timezone.now()
+        ).filter(
+            models.Q(end_date__isnull=True) | models.Q(end_date__gte=timezone.now())
+        ).order_by('-priority').prefetch_related('targets'))
+
+        serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     except Exception as e:
@@ -2214,7 +2290,7 @@ def get_best_selling_products(request, retailer_id):
             retailer=retailer,
             is_active=True,
             is_available=True
-        ).annotate(
+        ).select_related('master_product', 'category', 'brand', 'retailer').annotate(
             total_sold=Coalesce(Sum('orderitem__quantity'), 0),
             average_rating_annotated=Avg('reviews__rating'),
             review_count_annotated=Count('reviews')
@@ -2222,7 +2298,18 @@ def get_best_selling_products(request, retailer_id):
             total_sold__gt=0
         ).order_by('-total_sold')[:10]
 
-        serializer = ProductListSerializer(products, many=True)
+        # Pre-fetch active offers for N+1 optimization in serializer
+        from offers.models import Offer
+        from django.utils import timezone
+        active_offers = list(Offer.objects.filter(
+            retailer=retailer,
+            is_active=True,
+            start_date__lte=timezone.now()
+        ).filter(
+            models.Q(end_date__isnull=True) | models.Q(end_date__gte=timezone.now())
+        ).order_by('-priority').prefetch_related('targets'))
+
+        serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     except Exception as e:
@@ -2256,14 +2343,25 @@ def get_buy_again_products(request, retailer_id):
             orderitem__order__status='delivered',
             is_active=True, 
             is_available=True
-        ).annotate(
+        ).select_related('master_product', 'category', 'brand', 'retailer').annotate(
             average_rating_annotated=Avg('reviews__rating'),
             review_count_annotated=Count('reviews'),
             # We can also order by most recently bought
             last_bought=Max('orderitem__order__created_at')
         ).order_by('-last_bought').distinct()[:10]
 
-        serializer = ProductListSerializer(products, many=True)
+        # Pre-fetch active offers for N+1 optimization in serializer
+        from offers.models import Offer
+        from django.utils import timezone
+        active_offers = list(Offer.objects.filter(
+            retailer=retailer,
+            is_active=True,
+            start_date__lte=timezone.now()
+        ).filter(
+            models.Q(end_date__isnull=True) | models.Q(end_date__gte=timezone.now())
+        ).order_by('-priority').prefetch_related('targets'))
+
+        serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     except Exception as e:
@@ -2304,7 +2402,7 @@ def get_recommended_products(request, retailer_id):
             retailer=retailer,
             is_active=True,
             is_available=True
-        ).annotate(
+        ).select_related('master_product', 'category', 'brand', 'retailer').annotate(
             average_rating_annotated=Avg('reviews__rating'),
             review_count_annotated=Count('reviews')
         )
@@ -2319,7 +2417,18 @@ def get_recommended_products(request, retailer_id):
         
         # If not enough products, we could fill with others, but let's keep it simple.
         
-        serializer = ProductListSerializer(products, many=True)
+        # Pre-fetch active offers for N+1 optimization in serializer
+        from offers.models import Offer
+        from django.utils import timezone
+        active_offers = list(Offer.objects.filter(
+            retailer=retailer,
+            is_active=True,
+            start_date__lte=timezone.now()
+        ).filter(
+            models.Q(end_date__isnull=True) | models.Q(end_date__gte=timezone.now())
+        ).order_by('-priority').prefetch_related('targets'))
+
+        serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     except Exception as e:
