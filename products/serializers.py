@@ -300,55 +300,6 @@ class ProductDetailSerializer(serializers.ModelSerializer):
             return obj.reviews.count()
         except Exception:
             return 0
-
-
-
-class MasterProductSerializer(serializers.ModelSerializer):
-    """
-    Serializer for Master Product
-    """
-    category_name = serializers.SerializerMethodField()
-    brand_name = serializers.SerializerMethodField()
-    images = serializers.SerializerMethodField()
-    
-    class Meta:
-        model = MasterProduct
-        fields = [
-            'id', 'barcode', 'name', 'description', 
-            'category', 'category_name', 'brand', 'brand_name',
-            'image_url', 'images', 'mrp', 'attributes', 'created_at',
-            'product_group'
-        ]
-    
-    def get_category_name(self, obj):
-        try:
-            return obj.category.name if obj.category else None
-        except Exception:
-            return None
-
-    def get_brand_name(self, obj):
-        try:
-            return obj.brand.name if obj.brand else None
-        except Exception:
-            return None
-
-    def get_images(self, obj):
-        """Get all images (primary URL + additional)"""
-        try:
-            imgs = []
-            if obj.image_url:
-                imgs.append(obj.image_url)
-            
-            # Additional images
-            for img in obj.images.all():  # via related_name='images'
-                if img.image:
-                    imgs.append(img.image.url)
-                elif img.image_url:
-                    imgs.append(img.image_url)
-            return imgs
-        except Exception:
-            return []
-
     def get_active_offer_text(self, obj):
         """Get the best active offer name for this product (Optimized)"""
         try:
@@ -429,6 +380,57 @@ class MasterProductSerializer(serializers.ModelSerializer):
             return matching_offers
         except Exception:
             return []
+
+
+class MasterProductSerializer(serializers.ModelSerializer):
+    """
+    Serializer for Master Product
+    """
+    category_name = serializers.SerializerMethodField()
+    brand_name = serializers.SerializerMethodField()
+    images = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = MasterProduct
+        fields = [
+            'id', 'barcode', 'name', 'description', 
+            'category', 'category_name', 'brand', 'brand_name',
+            'image_url', 'images', 'mrp', 'attributes', 'created_at',
+            'product_group'
+        ]
+    
+    def get_category_name(self, obj):
+        try:
+            return obj.category.name if obj.category else None
+        except Exception:
+            return None
+
+    def get_brand_name(self, obj):
+        try:
+            return obj.brand.name if obj.brand else None
+        except Exception:
+            return None
+
+    def get_images(self, obj):
+        """Get all images (primary URL + additional)"""
+        try:
+            imgs = []
+            if obj.image_url:
+                imgs.append(obj.image_url)
+            
+            # Additional images
+            for img in obj.images.all():  # via related_name='images'
+                if img.image:
+                    imgs.append(img.image.url)
+                elif img.image_url:
+                    imgs.append(img.image_url)
+            return imgs
+        except Exception:
+            return []
+
+            return []
+
+
 
 
 class ProductCreateSerializer(serializers.ModelSerializer):
