@@ -811,7 +811,23 @@ def get_retailer_featured_products(request, retailer_id):
             Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
         ).order_by('-priority').prefetch_related('targets'))
 
-        serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
+        # Pre-fetch wishlist product IDs for the authenticated user
+        wishlisted_product_ids = []
+        if request.user.is_authenticated:
+            from customers.models import CustomerWishlist
+            wishlisted_product_ids = list(CustomerWishlist.objects.filter(
+                customer=request.user
+            ).values_list('product_id', flat=True))
+
+        serializer = ProductListSerializer(
+            products, 
+            many=True, 
+            context={
+                'request': request, 
+                'active_offers': active_offers,
+                'wishlisted_product_ids': wishlisted_product_ids
+            }
+        )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     except Exception as e:
@@ -857,7 +873,22 @@ def get_product_detail_public(request, retailer_id, product_id):
             Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
         ).order_by('-priority').prefetch_related('targets'))
 
-        serializer = ProductDetailSerializer(product, context={'request': request, 'active_offers': active_offers})
+        # Pre-fetch wishlist product IDs for the authenticated user
+        wishlisted_product_ids = []
+        if request.user.is_authenticated:
+            from customers.models import CustomerWishlist
+            wishlisted_product_ids = list(CustomerWishlist.objects.filter(
+                customer=request.user
+            ).values_list('product_id', flat=True))
+
+        serializer = ProductDetailSerializer(
+            product, 
+            context={
+                'request': request, 
+                'active_offers': active_offers,
+                'wishlisted_product_ids': wishlisted_product_ids
+            }
+        )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     except Exception as e:
