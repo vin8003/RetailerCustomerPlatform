@@ -3,6 +3,9 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from .models import Offer, OfferTarget
 from products.models import Product
+from django.utils import timezone
+from django.db import models
+from products.models import Product
 
 class OfferTargetSerializer(serializers.ModelSerializer):
     class Meta:
@@ -107,3 +110,19 @@ class OfferViewSet(viewsets.ModelViewSet):
         engine = OfferEngine()
         result = engine.calculate_offers(cart_items, retailer)
         return Response(result)
+
+class PublicOfferViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = OfferSerializer
+    permission_classes = [permissions.AllowAny] # Or IsAuthenticated if customer login required
+    
+    def get_queryset(self):
+        retailer_id = self.kwargs.get('retailer_id')
+        if retailer_id:
+            return Offer.objects.filter(
+                retailer_id=retailer_id, 
+                is_active=True,
+                start_date__lte=timezone.now()
+            ).filter(
+                models.Q(end_date__isnull=True) | models.Q(end_date__gte=timezone.now())
+            )
+        return Offer.objects.none()
