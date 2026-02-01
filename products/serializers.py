@@ -213,9 +213,9 @@ class ProductDetailSerializer(serializers.ModelSerializer):
     discounted_price = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
     is_in_stock = serializers.BooleanField(read_only=True)
     savings = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
-    average_rating = serializers.SerializerMethodField()
-    review_count = serializers.SerializerMethodField()
     image = serializers.SerializerMethodField()
+    active_offer_text = serializers.SerializerMethodField()
+    offers = serializers.SerializerMethodField()
     
     class Meta:
         model = Product
@@ -228,7 +228,7 @@ class ProductDetailSerializer(serializers.ModelSerializer):
             'retailer_name', 'retailer_id', 'specifications', 'tags',
             'is_in_stock', 'is_featured', 'is_active', 'is_available', 
             'average_rating', 'review_count', 'created_at', 'updated_at',
-            'product_group'
+            'product_group', 'active_offer_text', 'offers'
         ]
     
     def get_category_name(self, obj):
@@ -344,6 +344,87 @@ class MasterProductSerializer(serializers.ModelSerializer):
                 elif img.image_url:
                     imgs.append(img.image_url)
             return imgs
+        except Exception:
+            return []
+
+    def get_active_offer_text(self, obj):
+        """Get the best active offer name for this product (Optimized)"""
+        try:
+            active_offers = self.context.get('active_offers')
+            if active_offers is None:
+                from offers.models import Offer
+                from django.utils import timezone
+                from django.db.models import Q
+                active_offers = Offer.objects.filter(
+                    retailer=obj.retailer,
+                    is_active=True,
+                    start_date__lte=timezone.now()
+                ).filter(
+                    Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
+                ).order_by('-priority').prefetch_related('targets')
+            
+            for offer in active_offers:
+                targets = offer.targets.all()
+                if not targets: continue
+                is_match = False
+                is_excluded = False
+                for target in targets:
+                    if target.is_excluded:
+                        if target.target_type == 'product' and target.product_id == obj.id: is_excluded = True
+                        elif target.target_type == 'category' and target.category_id == obj.category_id: is_excluded = True
+                        elif target.target_type == 'brand' and target.brand_id == obj.brand_id: is_excluded = True
+                    else:
+                        if target.target_type == 'all_products': is_match = True
+                        elif target.target_type == 'product' and target.product_id == obj.id: is_match = True
+                        elif target.target_type == 'category' and target.category_id == obj.category_id: is_match = True
+                        elif target.target_type == 'brand' and target.brand_id == obj.brand_id: is_match = True
+                if is_match and not is_excluded:
+                    return offer.name
+            return None
+        except Exception:
+            return None
+
+    def get_offers(self, obj):
+        """Get all active offers for this product"""
+        try:
+            active_offers = self.context.get('active_offers')
+            if active_offers is None:
+                from offers.models import Offer
+                from django.utils import timezone
+                from django.db.models import Q
+                active_offers = Offer.objects.filter(
+                    retailer=obj.retailer,
+                    is_active=True,
+                    start_date__lte=timezone.now()
+                ).filter(
+                    Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
+                ).order_by('-priority').prefetch_related('targets')
+            
+            matching_offers = []
+            for offer in active_offers:
+                targets = offer.targets.all()
+                if not targets: continue
+                is_match = False
+                is_excluded = False
+                for target in targets:
+                    if target.is_excluded:
+                        if target.target_type == 'product' and target.product_id == obj.id: is_excluded = True
+                        elif target.target_type == 'category' and target.category_id == obj.category_id: is_excluded = True
+                        elif target.target_type == 'brand' and target.brand_id == obj.brand_id: is_excluded = True
+                    else:
+                        if target.target_type == 'all_products': is_match = True
+                        elif target.target_type == 'product' and target.product_id == obj.id: is_match = True
+                        elif target.target_type == 'category' and target.category_id == obj.category_id: is_match = True
+                        elif target.target_type == 'brand' and target.brand_id == obj.brand_id: is_match = True
+                if is_match and not is_excluded:
+                    matching_offers.append({
+                        'id': offer.id,
+                        'name': offer.name,
+                        'description': offer.description,
+                        'discount_type': offer.discount_type,
+                        'discount_value': str(offer.discount_value) if offer.discount_value else None
+                    })
+            return matching_offers
         except Exception:
             return []
 

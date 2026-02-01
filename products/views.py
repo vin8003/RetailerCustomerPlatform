@@ -306,7 +306,18 @@ def create_product(request):
                 created_by=request.user
             )
 
-            response_serializer = ProductDetailSerializer(product)
+            # Pre-fetch active offers for optimization
+            from offers.models import Offer
+            from django.utils import timezone
+            active_offers = list(Offer.objects.filter(
+                retailer=retailer,
+                is_active=True,
+                start_date__lte=timezone.now()
+            ).filter(
+                Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
+            ).order_by('-priority').prefetch_related('targets'))
+
+            response_serializer = ProductDetailSerializer(product, context={'request': request, 'active_offers': active_offers})
             logger.info(f"Product created: {product.name} by {retailer.shop_name}")
             return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
@@ -349,7 +360,18 @@ def get_product_detail(request, product_id):
         )
         
         product = get_object_or_404(queryset, id=product_id, retailer=retailer)
-        serializer = ProductDetailSerializer(product)
+        # Pre-fetch active offers for optimization
+        from offers.models import Offer
+        from django.utils import timezone
+        active_offers = list(Offer.objects.filter(
+            retailer=retailer,
+            is_active=True,
+            start_date__lte=timezone.now()
+        ).filter(
+            Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
+        ).order_by('-priority').prefetch_related('targets'))
+
+        serializer = ProductDetailSerializer(product, context={'request': request, 'active_offers': active_offers})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     except Exception as e:
@@ -409,7 +431,18 @@ def update_product(request, product_id):
                     created_by=request.user
                 )
 
-            response_serializer = ProductDetailSerializer(product)
+            # Pre-fetch active offers for optimization
+            from offers.models import Offer
+            from django.utils import timezone
+            active_offers = list(Offer.objects.filter(
+                retailer=retailer,
+                is_active=True,
+                start_date__lte=timezone.now()
+            ).filter(
+                Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
+            ).order_by('-priority').prefetch_related('targets'))
+
+            response_serializer = ProductDetailSerializer(product, context={'request': request, 'active_offers': active_offers})
             logger.info(f"Product updated: {product.name} by {retailer.shop_name}")
             return Response(response_serializer.data, status=status.HTTP_200_OK)
 
@@ -813,7 +846,18 @@ def get_product_detail_public(request, retailer_id, product_id):
             is_available=True
         )
 
-        serializer = ProductDetailSerializer(product)
+        # Pre-fetch active offers for optimization
+        from offers.models import Offer
+        from django.utils import timezone
+        active_offers = list(Offer.objects.filter(
+            retailer=retailer,
+            is_active=True,
+            start_date__lte=timezone.now()
+        ).filter(
+            Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
+        ).order_by('-priority').prefetch_related('targets'))
+
+        serializer = ProductDetailSerializer(product, context={'request': request, 'active_offers': active_offers})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     except Exception as e:
