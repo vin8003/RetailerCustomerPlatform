@@ -213,6 +213,8 @@ class ProductDetailSerializer(serializers.ModelSerializer):
     discounted_price = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
     is_in_stock = serializers.BooleanField(read_only=True)
     savings = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    average_rating = serializers.SerializerMethodField()
+    review_count = serializers.SerializerMethodField()
     image = serializers.SerializerMethodField()
     active_offer_text = serializers.SerializerMethodField()
     offers = serializers.SerializerMethodField()
@@ -421,8 +423,8 @@ class MasterProductSerializer(serializers.ModelSerializer):
                         'id': offer.id,
                         'name': offer.name,
                         'description': offer.description,
-                        'discount_type': offer.discount_type,
-                        'discount_value': str(offer.discount_value) if offer.discount_value else None
+                        'offer_type': offer.offer_type,
+                        'value': str(offer.value) if offer.value else None
                     })
             return matching_offers
         except Exception:
