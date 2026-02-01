@@ -138,12 +138,13 @@ class ProductListSerializer(serializers.ModelSerializer):
                 # Fallback for ad-hoc serialization (expensive)
                 from offers.models import Offer
                 from django.utils import timezone
+                from django.db.models import Q
                 active_offers = Offer.objects.filter(
                     retailer=obj.retailer,
                     is_active=True,
                     start_date__lte=timezone.now()
                 ).filter(
-                    models.Q(end_date__isnull=True) | models.Q(end_date__gte=timezone.now())
+                    Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
                 ).order_by('-priority').prefetch_related('targets')
             
             for offer in active_offers:

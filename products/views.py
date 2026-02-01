@@ -186,7 +186,7 @@ def get_retailer_products(request):
             is_active=True,
             start_date__lte=timezone.now()
         ).filter(
-            models.Q(end_date__isnull=True) | models.Q(end_date__gte=timezone.now())
+            Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
         ).order_by('-priority').prefetch_related('targets'))
 
         # Pagination
@@ -584,7 +584,7 @@ def get_retailer_products_public(request, retailer_id):
             is_active=True,
             start_date__lte=timezone.now()
         ).filter(
-            models.Q(end_date__isnull=True) | models.Q(end_date__gte=timezone.now())
+            Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
         ).order_by('-priority').prefetch_related('targets'))
 
         # Pagination
@@ -775,7 +775,7 @@ def get_retailer_featured_products(request, retailer_id):
             is_active=True,
             start_date__lte=timezone.now()
         ).filter(
-            models.Q(end_date__isnull=True) | models.Q(end_date__gte=timezone.now())
+            Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
         ).order_by('-priority').prefetch_related('targets'))
 
         serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
@@ -2306,7 +2306,7 @@ def get_best_selling_products(request, retailer_id):
             is_active=True,
             start_date__lte=timezone.now()
         ).filter(
-            models.Q(end_date__isnull=True) | models.Q(end_date__gte=timezone.now())
+            Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
         ).order_by('-priority').prefetch_related('targets'))
 
         serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
@@ -2358,7 +2358,7 @@ def get_buy_again_products(request, retailer_id):
             is_active=True,
             start_date__lte=timezone.now()
         ).filter(
-            models.Q(end_date__isnull=True) | models.Q(end_date__gte=timezone.now())
+            Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
         ).order_by('-priority').prefetch_related('targets'))
 
         serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
@@ -2425,7 +2425,7 @@ def get_recommended_products(request, retailer_id):
             is_active=True,
             start_date__lte=timezone.now()
         ).filter(
-            models.Q(end_date__isnull=True) | models.Q(end_date__gte=timezone.now())
+            Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
         ).order_by('-priority').prefetch_related('targets'))
 
         serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
