@@ -47,35 +47,31 @@ class OrderListSerializer(serializers.ModelSerializer):
 
     def get_has_customer_feedback(self, obj):
         """Check if order has customer feedback safely"""
+        from django.core.exceptions import ObjectDoesNotExist
+        
         # 1. Use annotation if available
         if hasattr(obj, 'has_feedback_annotated'):
             return obj.has_feedback_annotated
         
-        # 2. Use prefetched object if available
-        if hasattr(obj, 'feedback'):
-            try:
-                return obj.feedback is not None
-            except OrderFeedback.DoesNotExist:
-                return False
-                
-        # 3. Fallback to DB query (should be avoided in lists but safe for fallback)
-        return OrderFeedback.objects.filter(order=obj).exists()
+        # 2. Use access check (covers prefetched and DB fallback)
+        try:
+            return obj.feedback is not None
+        except ObjectDoesNotExist:
+            return False
 
     def get_has_retailer_rating(self, obj):
         """Check if order has retailer rating safely"""
+        from django.core.exceptions import ObjectDoesNotExist
+        
         # 1. Use annotation if available
         if hasattr(obj, 'has_rating_annotated'):
             return obj.has_rating_annotated
             
-        # 2. Use prefetched object if available
-        if hasattr(obj, 'retailer_rating'):
-            try:
-                return obj.retailer_rating is not None
-            except RetailerRating.DoesNotExist:
-                return False
-
-        # 3. Fallback to DB query
-        return RetailerRating.objects.filter(order=obj).exists()
+        # 2. Use access check (covers prefetched and DB fallback)
+        try:
+            return obj.retailer_rating is not None
+        except ObjectDoesNotExist:
+            return False
 
 
 class OrderDetailSerializer(serializers.ModelSerializer):
