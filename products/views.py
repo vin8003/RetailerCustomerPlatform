@@ -76,7 +76,10 @@ def get_retailer_products(request):
         in_stock = request.query_params.get('in_stock')
 
         if category:
-            products = products.filter(category__name__icontains=category)
+            if category.isdigit():
+                products = products.filter(category_id=category)
+            else:
+                products = products.filter(category__name__icontains=category)
 
         if brand:
             products = products.filter(brand__name__icontains=brand)
@@ -160,9 +163,11 @@ def search_products(request):
             )
 
         # Apply category filter if provided
-        category = request.query_params.get('category')
         if category:
-            products = products.filter(category__name__icontains=category)
+            if category.isdigit():
+                products = products.filter(category_id=category)
+            else:
+                products = products.filter(category__name__icontains=category)
 
         # Limit results for search
         limit = int(request.query_params.get('limit', 50))
