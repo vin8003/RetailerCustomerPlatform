@@ -639,7 +639,13 @@ def get_retailer_categories(request, retailer_id):
         for cat_id, count in category_product_map.items():
             current_id = cat_id
             # Traverse up using cached map
+            visited = set()
             while current_id in node_map:
+                if current_id in visited:
+                    logger.warning(f"Cycle detected in category tree at id {current_id}")
+                    break
+                visited.add(current_id)
+                
                 recursive_counts[current_id] = recursive_counts.get(current_id, 0) + count
                 relevant_categories.add(current_id)
                 current_id = node_map[current_id] # Get parent
