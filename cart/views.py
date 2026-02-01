@@ -49,7 +49,9 @@ def get_cart(request):
                 engine = OfferEngine()
                 
                 # Pass cart items directly (Engine expects objects with product/quantity attrs)
-                cart_items = cart.items.select_related('product').all()
+                # Pass cart items directly (Engine expects objects with product/quantity attrs)
+                # Engine needs product category/brand for rules
+                cart_items = cart.items.select_related('product', 'product__category', 'product__brand').all()
 
                 offer_results = engine.calculate_offers(cart_items, retailer)
                 

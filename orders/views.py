@@ -16,11 +16,12 @@ from .serializers import (
     OrderListSerializer, OrderDetailSerializer, OrderCreateSerializer,
     OrderStatusUpdateSerializer, OrderFeedbackSerializer, OrderReturnSerializer,
     OrderStatsSerializer, OrderModificationSerializer, OrderChatMessageSerializer,
-    RetailerRatingSerializer
+    RetailerRatingSerializer, OrderListSerializer
 )
-from retailers.models import RetailerProfile, RetailerReview
+from retailers.models import RetailerProfile, RetailerReview, RetailerConfig, RetailerRewardConfig
 from retailers.serializers import RetailerReviewSerializer
-from customers.models import CustomerAddress
+from customers.models import CustomerAddress, CustomerLoyalty
+from django.db.models import Exists, OuterRef, Prefetch
 from common.notifications import send_push_notification
 
 logger = logging.getLogger(__name__)
@@ -118,7 +119,16 @@ def get_current_orders(request):
         
         # Base queryset with optimizations
         # We annotate items_count to avoid N+1 count queries
-        base_qs = Order.objects.select_related('retailer', 'customer').annotate(items_count_annotated=Count('items'))
+        # Annotate has_feedback and has_rating efficiently
+        
+        has_feedback_subquery = Exists(OrderFeedback.objects.filter(order=OuterRef('pk')))
+        has_rating_subquery = Exists(RetailerRating.objects.filter(order=OuterRef('pk')))
+        
+        base_qs = Order.objects.select_related('retailer', 'customer').annotate(
+            items_count_annotated=Count('items'),
+            has_feedback_annotated=has_feedback_subquery,
+            has_rating_annotated=has_rating_subquery
+        )
 
         if user.user_type == 'customer':
             orders = base_qs.filter(
@@ -182,7 +192,15 @@ def get_order_history(request):
         user = request.user
         
         # Base queryset with optimizations
-        base_qs = Order.objects.select_related('retailer', 'customer').annotate(items_count_annotated=Count('items'))
+        has_feedback_subquery = Exists(OrderFeedback.objects.filter(order=OuterRef('pk')))
+        has_rating_subquery = Exists(RetailerRating.objects.filter(order=OuterRef('pk')))
+        
+        # Base queryset with optimizations
+        base_qs = Order.objects.select_related('retailer', 'customer').annotate(
+            items_count_annotated=Count('items'),
+            has_feedback_annotated=has_feedback_subquery,
+            has_rating_annotated=has_rating_subquery
+        )
 
         if user.user_type == 'customer':
             orders = base_qs.filter(
@@ -567,7 +585,7 @@ def get_order_stats(request):
             'total_products': total_products,
             'average_rating': float(retailer.average_rating),
             'recent_reviews': RetailerReviewSerializer(
-                RetailerReview.objects.filter(retailer=retailer).order_by('-created_at')[:5],
+                RetailerReview.objects.filter(retailer=retailer).select_related('customer').order_by('-created_at')[:5],
                 many=True
             ).data
         }
