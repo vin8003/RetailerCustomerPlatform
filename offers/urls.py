@@ -8,5 +8,5 @@ router.register(r'offers', OfferViewSet, basename='offer')
 
 urlpatterns = [
     path('', include(router.urls)),
-    path('public/retailer/<int:retailer_id>/', PublicOfferViewSet.as_view({'get': 'list'}), name='public-retailer-offers'),
+    path('offers/public/retailer/<int:retailer_id>/', PublicOfferViewSet.as_view({'get': 'list'}), name='public-retailer-offers'),
 ]
