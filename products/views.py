@@ -33,6 +33,39 @@ from common.permissions import IsRetailerOwner
 logger = logging.getLogger(__name__)
 
 
+def get_all_category_ids(category_id):
+    """
+    Get all subcategory ids efficiently using a single DB query
+    """
+    # Fetch all active category relationships in one go
+    # This avoids N+1 recursive DB calls
+    all_cats = list(ProductCategory.objects.filter(is_active=True).values('id', 'parent_id'))
+    
+    # Build adjacency list in memory
+    children_map = {}
+    for cat in all_cats:
+        pid = cat['parent_id']
+        if pid:
+            if pid not in children_map:
+                children_map[pid] = []
+            children_map[pid].append(cat['id'])
+    
+    # BFS to find all descendants
+    target_id = int(category_id)
+    ids_to_collect = {target_id}
+    queue = [target_id]
+    
+    while queue:
+        current_id = queue.pop(0)
+        if current_id in children_map:
+            for child_id in children_map[current_id]:
+                if child_id not in ids_to_collect:
+                    ids_to_collect.add(child_id)
+                    queue.append(child_id)
+                    
+    return list(ids_to_collect)
+
+
 class ProductPagination(PageNumberPagination):
     page_size = 20
     page_size_query_param = 'page_size'
@@ -77,7 +110,8 @@ def get_retailer_products(request):
 
         if category:
             if category.isdigit():
-                products = products.filter(category_id=category)
+                category_ids = get_all_category_ids(category)
+                products = products.filter(category_id__in=category_ids)
             else:
                 products = products.filter(category__name__icontains=category)
 
@@ -165,7 +199,8 @@ def search_products(request):
         # Apply category filter if provided
         if category:
             if category.isdigit():
-                products = products.filter(category_id=category)
+                category_ids = get_all_category_ids(category)
+                products = products.filter(category_id__in=category_ids)
             else:
                 products = products.filter(category__name__icontains=category)
 
@@ -412,7 +447,8 @@ def get_retailer_products_public(request, retailer_id):
 
         if category:
             if category.isdigit():
-                products = products.filter(category_id=category)
+                category_ids = get_all_category_ids(category)
+                products = products.filter(category_id__in=category_ids)
             else:
                 products = products.filter(category__name__icontains=category)
 
@@ -499,7 +535,8 @@ def search_products_public(request, retailer_id):
         category = request.query_params.get('category')
         if category:
             if category.isdigit():
-                products = products.filter(category_id=category)
+                category_ids = get_all_category_ids(category)
+                products = products.filter(category_id__in=category_ids)
             else:
                 products = products.filter(category__name__icontains=category)
 
