@@ -75,6 +75,7 @@ class ProductListSerializer(serializers.ModelSerializer):
     review_count = serializers.SerializerMethodField()
     image = serializers.SerializerMethodField()
     active_offer_text = serializers.SerializerMethodField()
+    is_wishlisted = serializers.SerializerMethodField()
     class Meta:
         model = Product
         fields = [
@@ -84,7 +85,7 @@ class ProductListSerializer(serializers.ModelSerializer):
             'image', 'image_url', 'category_name', 'brand_name', 'retailer_name',
             'is_in_stock', 'is_featured', 'is_active', 'is_available',
             'average_rating', 'review_count', 'created_at', 'product_group',
-            'active_offer_text'
+            'active_offer_text', 'is_wishlisted'
         ]
     
     def get_category_name(self, obj):
@@ -180,6 +181,24 @@ class ProductListSerializer(serializers.ModelSerializer):
         except Exception:
             return None
 
+    def get_is_wishlisted(self, obj):
+        """Check if product is in authenticated user's wishlist"""
+        try:
+            wishlisted_product_ids = self.context.get('wishlisted_product_ids')
+            if wishlisted_product_ids is not None:
+                return obj.id in wishlisted_product_ids
+            
+            request = self.context.get('request')
+            if request and request.user.is_authenticated:
+                from customers.models import CustomerWishlist
+                return CustomerWishlist.objects.filter(
+                    customer=request.user,
+                    product=obj
+                ).exists()
+            return False
+        except Exception:
+            return False
+
 
 class ProductSearchSerializer(serializers.ModelSerializer):
     """
@@ -197,7 +216,6 @@ class ProductSearchSerializer(serializers.ModelSerializer):
         except Exception as e:
             logger.error(f"Error getting search image: {e}")
             return None
-
 
 class ProductDetailSerializer(serializers.ModelSerializer):
     """
@@ -218,6 +236,7 @@ class ProductDetailSerializer(serializers.ModelSerializer):
     image = serializers.SerializerMethodField()
     active_offer_text = serializers.SerializerMethodField()
     offers = serializers.SerializerMethodField()
+    is_wishlisted = serializers.SerializerMethodField()
     
     class Meta:
         model = Product
@@ -230,7 +249,7 @@ class ProductDetailSerializer(serializers.ModelSerializer):
             'retailer_name', 'retailer_id', 'specifications', 'tags',
             'is_in_stock', 'is_featured', 'is_active', 'is_available', 
             'average_rating', 'review_count', 'created_at', 'updated_at',
-            'product_group', 'active_offer_text', 'offers'
+            'product_group', 'active_offer_text', 'offers', 'is_wishlisted'
         ]
     
     def get_category_name(self, obj):
@@ -380,6 +399,24 @@ class ProductDetailSerializer(serializers.ModelSerializer):
             return matching_offers
         except Exception:
             return []
+
+    def get_is_wishlisted(self, obj):
+        """Check if product is in authenticated user's wishlist"""
+        try:
+            wishlisted_product_ids = self.context.get('wishlisted_product_ids')
+            if wishlisted_product_ids is not None:
+                return obj.id in wishlisted_product_ids
+            
+            request = self.context.get('request')
+            if request and request.user.is_authenticated:
+                from customers.models import CustomerWishlist
+                return CustomerWishlist.objects.filter(
+                    customer=request.user,
+                    product=obj
+                ).exists()
+            return False
+        except Exception:
+            return False
 
 
 class MasterProductSerializer(serializers.ModelSerializer):
