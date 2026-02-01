@@ -16,7 +16,7 @@ from .serializers import (
     OrderListSerializer, OrderDetailSerializer, OrderCreateSerializer,
     OrderStatusUpdateSerializer, OrderFeedbackSerializer, OrderReturnSerializer,
     OrderStatsSerializer, OrderModificationSerializer, OrderChatMessageSerializer,
-    RetailerRatingSerializer, OrderListSerializer
+    RetailerRatingSerializer
 )
 from retailers.models import RetailerProfile, RetailerReview, RetailerRewardConfig
 from retailers.serializers import RetailerReviewSerializer

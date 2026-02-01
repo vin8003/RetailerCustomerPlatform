@@ -30,8 +30,8 @@ class OrderListSerializer(serializers.ModelSerializer):
     retailer_name = serializers.CharField(source='retailer.shop_name', read_only=True)
     customer_name = serializers.CharField(source='customer.first_name', read_only=True)
     items_count = serializers.SerializerMethodField()
-    has_customer_feedback = serializers.BooleanField(source='has_feedback_annotated', read_only=True)
-    has_retailer_rating = serializers.BooleanField(source='has_rating_annotated', read_only=True)
+    has_customer_feedback = serializers.SerializerMethodField()
+    has_retailer_rating = serializers.SerializerMethodField()
     
     class Meta:
         model = Order
@@ -44,6 +44,38 @@ class OrderListSerializer(serializers.ModelSerializer):
         """Get number of items in order"""
         # Fallback for when serializer used without annotation
         return getattr(obj, 'items_count_annotated', obj.items.count())
+
+    def get_has_customer_feedback(self, obj):
+        """Check if order has customer feedback safely"""
+        # 1. Use annotation if available
+        if hasattr(obj, 'has_feedback_annotated'):
+            return obj.has_feedback_annotated
+        
+        # 2. Use prefetched object if available
+        if hasattr(obj, 'feedback'):
+            try:
+                return obj.feedback is not None
+            except OrderFeedback.DoesNotExist:
+                return False
+                
+        # 3. Fallback to DB query (should be avoided in lists but safe for fallback)
+        return OrderFeedback.objects.filter(order=obj).exists()
+
+    def get_has_retailer_rating(self, obj):
+        """Check if order has retailer rating safely"""
+        # 1. Use annotation if available
+        if hasattr(obj, 'has_rating_annotated'):
+            return obj.has_rating_annotated
+            
+        # 2. Use prefetched object if available
+        if hasattr(obj, 'retailer_rating'):
+            try:
+                return obj.retailer_rating is not None
+            except RetailerRating.DoesNotExist:
+                return False
+
+        # 3. Fallback to DB query
+        return RetailerRating.objects.filter(order=obj).exists()
 
 
 class OrderDetailSerializer(serializers.ModelSerializer):
