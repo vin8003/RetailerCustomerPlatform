@@ -35,23 +35,17 @@ logger = logging.getLogger(__name__)
 
 def get_all_category_ids(category_id):
     """
-    Get all subcategory ids efficiently using a single DB query
+    Get all subcategory ids efficiently using cached tree
     """
-    # Fetch all active category relationships in one go
-    # This avoids N+1 recursive DB calls
-    all_cats = list(ProductCategory.objects.filter(is_active=True).values('id', 'parent_id'))
-    
-    # Build adjacency list in memory
-    children_map = {}
-    for cat in all_cats:
-        pid = cat['parent_id']
-        if pid:
-            if pid not in children_map:
-                children_map[pid] = []
-            children_map[pid].append(cat['id'])
+    tree = get_cached_category_tree()
+    children_map = tree['children_map']
     
     # BFS to find all descendants
-    target_id = int(category_id)
+    try:
+        target_id = int(category_id)
+    except (ValueError, TypeError):
+        return []
+
     ids_to_collect = {target_id}
     queue = [target_id]
     
@@ -588,45 +582,45 @@ def get_retailer_categories(request, retailer_id):
         if not used_category_ids:
             return Response([], status=status.HTTP_200_OK)
 
-        # 2. Fetch full category tree (id, parent_id)
-        # We need the tree structure to propagate counts
-        all_categories = ProductCategory.objects.filter(is_active=True).values('id', 'parent_id')
-        
-        # Build tree in memory
-        node_map = {cat['id']: {'parent_id': cat['parent_id'], 'recursive_count': 0} for cat in all_categories}
-        
+        # 2. Use Cached Tree Structure to calculate hierarchy
+        # Instead of fetching full tree every time, use the cached parent map
+        tree = get_cached_category_tree()
+        node_map = tree['node_map'] # id -> parent_id
+
         # 3. Propagate counts
+        # We also need to fetch details (name, icon) ONLY for relevant categories, not all
+        
+        # First, calculate recursive counts and find all relevant ancestors
+        recursive_counts = {} # id -> count
         relevant_categories = set()
         
         for cat_id, count in category_product_map.items():
             current_id = cat_id
+            # Traverse up using cached map
             while current_id in node_map:
-                node_map[current_id]['recursive_count'] += count
+                recursive_counts[current_id] = recursive_counts.get(current_id, 0) + count
                 relevant_categories.add(current_id)
-                current_id = node_map[current_id]['parent_id']
+                current_id = node_map[current_id] # Get parent
                 if current_id is None:
                     break
         
-        # 4. Filter for the requested level
+        # 4. Filter for logic
         target_ids = []
-        count_map = {} # id -> recursive_count
-
-        for cat_id, node in node_map.items():
-            if cat_id not in relevant_categories:
-                continue
-            
-            if node['parent_id'] == requested_parent_id:
+        
+        # We only care about categories that match `requested_parent_id`
+        for cat_id in relevant_categories:
+            parent_id = node_map.get(cat_id)
+            if parent_id == requested_parent_id:
                 target_ids.append(cat_id)
-                count_map[cat_id] = node['recursive_count']
 
-        # 5. Fetch Objects and Serialize
+        # 5. Fetch ONLY the target category objects (much smaller query)
         target_categories = ProductCategory.objects.filter(id__in=target_ids).order_by('name')
         serializer = ProductCategorySerializer(target_categories, many=True, context={'request': request})
         
         data = serializer.data
         # Inject recursive counts
         for item in data:
-            item['product_count'] = count_map.get(item['id'], 0)
+            item['product_count'] = recursive_counts.get(item['id'], 0)
         
         return Response(data, status=status.HTTP_200_OK)
 
