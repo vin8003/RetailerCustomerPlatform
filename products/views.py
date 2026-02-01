@@ -70,8 +70,8 @@ def get_cached_category_tree():
             'node_map': node_map,
             'children_map': children_map
         }
-        # Cache for 15 minutes
-        cache.set(cache_key, tree, 900)
+        # Cache indefinitely (None), signals will handle invalidation
+        cache.set(cache_key, tree, None)
     
     return tree
 

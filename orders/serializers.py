@@ -30,8 +30,8 @@ class OrderListSerializer(serializers.ModelSerializer):
     retailer_name = serializers.CharField(source='retailer.shop_name', read_only=True)
     customer_name = serializers.CharField(source='customer.first_name', read_only=True)
     items_count = serializers.SerializerMethodField()
-    has_customer_feedback = serializers.SerializerMethodField()
-    has_retailer_rating = serializers.SerializerMethodField()
+    has_customer_feedback = serializers.BooleanField(source='has_feedback_annotated', read_only=True)
+    has_retailer_rating = serializers.BooleanField(source='has_rating_annotated', read_only=True)
     
     class Meta:
         model = Order
@@ -42,13 +42,8 @@ class OrderListSerializer(serializers.ModelSerializer):
     
     def get_items_count(self, obj):
         """Get number of items in order"""
+        # Fallback for when serializer used without annotation
         return getattr(obj, 'items_count_annotated', obj.items.count())
-
-    def get_has_customer_feedback(self, obj):
-        return hasattr(obj, 'feedback')
-
-    def get_has_retailer_rating(self, obj):
-        return hasattr(obj, 'retailer_rating')
 
 
 class OrderDetailSerializer(serializers.ModelSerializer):
