@@ -560,33 +560,82 @@ def search_products_public(request, retailer_id):
 def get_retailer_categories(request, retailer_id):
     """
     Get categories that have products for a specific retailer (public endpoint).
-    Returns only categories where the retailer has active, available products.
+    Supports hierarchical fetching:
+    - If parent_id is not provided, returns root categories (that have active products in themselves or descendants).
+    - If parent_id IS provided, returns direct children of that parent.
+    Includes recursive product counts.
     """
     try:
         retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        requested_parent_id = request.query_params.get('parent_id')
+        if requested_parent_id == 'null' or requested_parent_id == '':
+            requested_parent_id = None
+        else:
+            requested_parent_id = int(requested_parent_id) if requested_parent_id else None
 
-        # Get distinct category IDs from retailer's active products
-        category_ids = Product.objects.filter(
+        # 1. Get raw counts for all categories that have products for this retailer
+        # This gives us {category_id: direct_product_count}
+        raw_counts_qs = Product.objects.filter(
             retailer=retailer,
             is_active=True,
             is_available=True,
             category__isnull=False
-        ).values_list('category_id', flat=True).distinct()
+        ).values('category_id').annotate(count=Count('id'))
+        
+        category_product_map = {item['category_id']: item['count'] for item in raw_counts_qs}
+        used_category_ids = set(category_product_map.keys())
 
-        # Get categories with product count for this retailer
-        categories = ProductCategory.objects.filter(
-            id__in=category_ids,
-            is_active=True
-        ).annotate(
-            product_count=Count('products', filter=Q(
-                products__retailer=retailer,
-                products__is_active=True,
-                products__is_available=True
-            ))
-        ).order_by('name')
+        if not used_category_ids:
+            return Response([], status=status.HTTP_200_OK)
 
-        serializer = ProductCategorySerializer(categories, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        # 2. Fetch full category tree (id, parent_id, name, etc.)
+        # We need the whole tree to propagate counts and visibility up
+        all_categories = ProductCategory.objects.filter(is_active=True).values(
+            'id', 'name', 'parent_id', 'icon', 'description'
+        )
+        
+        # Build tree in memory
+        # node_map: id -> category_data
+        node_map = {cat['id']: {**cat, 'recursive_count': 0, 'children': []} for cat in all_categories}
+        
+        # 3. Propagate counts and build hierarchy
+        # We need to process from bottom up for counts, or just iterate and propagate
+        # A simple way for counts: for each used_category, add its count to itself and all ancestors
+        
+        relevant_categories = set() # Categories that should be visible (have products or have descendants with products)
+
+        for cat_id, count in category_product_map.items():
+            current_id = cat_id
+            while current_id in node_map:
+                node_map[current_id]['recursive_count'] += count
+                relevant_categories.add(current_id)
+                current_id = node_map[current_id]['parent_id']
+                if current_id is None:
+                    break
+        
+        # 4. Filter for the requested level
+        result = []
+        for cat_id, node in node_map.items():
+            # Must be relevant (have products inside)
+            if cat_id not in relevant_categories:
+                continue
+                
+            # Must match the requested parent
+            if node['parent_id'] == requested_parent_id:
+                # Format for response
+                result.append({
+                    'id': node['id'],
+                    'name': node['name'],
+                    'description': node['description'],
+                    'icon': node['icon'],
+                    'parent': node['parent_id'],
+                    'product_count': node['recursive_count']
+                })
+
+        # Sort by name
+        result.sort(key=lambda x: x['name'])
+        
+        return Response(result, status=status.HTTP_200_OK)
 
     except Exception as e:
         logger.error(f"Error getting retailer categories: {str(e)}")
