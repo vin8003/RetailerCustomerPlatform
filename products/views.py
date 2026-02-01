@@ -588,22 +588,16 @@ def get_retailer_categories(request, retailer_id):
         if not used_category_ids:
             return Response([], status=status.HTTP_200_OK)
 
-        # 2. Fetch full category tree (id, parent_id, name, etc.)
-        # We need the whole tree to propagate counts and visibility up
-        all_categories = ProductCategory.objects.filter(is_active=True).values(
-            'id', 'name', 'parent_id', 'icon', 'description'
-        )
+        # 2. Fetch full category tree (id, parent_id)
+        # We need the tree structure to propagate counts
+        all_categories = ProductCategory.objects.filter(is_active=True).values('id', 'parent_id')
         
         # Build tree in memory
-        # node_map: id -> category_data
-        node_map = {cat['id']: {**cat, 'recursive_count': 0, 'children': []} for cat in all_categories}
+        node_map = {cat['id']: {'parent_id': cat['parent_id'], 'recursive_count': 0} for cat in all_categories}
         
-        # 3. Propagate counts and build hierarchy
-        # We need to process from bottom up for counts, or just iterate and propagate
-        # A simple way for counts: for each used_category, add its count to itself and all ancestors
+        # 3. Propagate counts
+        relevant_categories = set()
         
-        relevant_categories = set() # Categories that should be visible (have products or have descendants with products)
-
         for cat_id, count in category_product_map.items():
             current_id = cat_id
             while current_id in node_map:
@@ -614,28 +608,27 @@ def get_retailer_categories(request, retailer_id):
                     break
         
         # 4. Filter for the requested level
-        result = []
+        target_ids = []
+        count_map = {} # id -> recursive_count
+
         for cat_id, node in node_map.items():
-            # Must be relevant (have products inside)
             if cat_id not in relevant_categories:
                 continue
-                
-            # Must match the requested parent
+            
             if node['parent_id'] == requested_parent_id:
-                # Format for response
-                result.append({
-                    'id': node['id'],
-                    'name': node['name'],
-                    'description': node['description'],
-                    'icon': node['icon'],
-                    'parent': node['parent_id'],
-                    'product_count': node['recursive_count']
-                })
+                target_ids.append(cat_id)
+                count_map[cat_id] = node['recursive_count']
 
-        # Sort by name
-        result.sort(key=lambda x: x['name'])
+        # 5. Fetch Objects and Serialize
+        target_categories = ProductCategory.objects.filter(id__in=target_ids).order_by('name')
+        serializer = ProductCategorySerializer(target_categories, many=True, context={'request': request})
         
-        return Response(result, status=status.HTTP_200_OK)
+        data = serializer.data
+        # Inject recursive counts
+        for item in data:
+            item['product_count'] = count_map.get(item['id'], 0)
+        
+        return Response(data, status=status.HTTP_200_OK)
 
     except Exception as e:
         logger.error(f"Error getting retailer categories: {str(e)}")
