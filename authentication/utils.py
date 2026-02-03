@@ -4,6 +4,7 @@ import requests
 from datetime import datetime, timedelta
 from django.conf import settings
 from django.core.cache import cache
+from django.core.mail import send_mail
 import logging
 
 import logging
@@ -194,6 +195,39 @@ def send_sms_otp(phone_number, otp_code):
 
     except Exception as e:
         logger.error(f"Error initiating SMS thread: {str(e)}")
+        return False
+
+
+def send_email_otp(email, otp_code, purpose):
+    """
+    Send OTP via email using configured SMTP credentials.
+    """
+    try:
+        subject_map = {
+            'signup': 'Verify your email address',
+            'password_reset': 'Reset your password',
+        }
+        subject = subject_map.get(purpose, 'Your verification code')
+        message = (
+            f"Your OTP code is {otp_code}. "
+            "It is valid for 5 minutes. Do not share this code."
+        )
+
+        if not settings.EMAIL_HOST_USER:
+            logger.error("Email host user not found in settings")
+            return False
+
+        send_mail(
+            subject=subject,
+            message=message,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[email],
+            fail_silently=False,
+        )
+        logger.info(f"Email OTP sent to {email} for {purpose}")
+        return True
+    except Exception as e:
+        logger.error(f"Error sending email OTP: {str(e)}")
         return False
 
 
