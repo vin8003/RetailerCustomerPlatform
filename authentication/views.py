@@ -3,23 +3,23 @@ from rest_framework.decorators import api_view, permission_classes, throttle_cla
 from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle, AnonRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
-from django.contrib.auth import authenticate
 from django.utils import timezone
 from django.core.cache import cache
 from django.conf import settings
 import logging
 
-from .models import User, OTPVerification
+from .models import User, OTPVerification, EmailOTPVerification
 from fcm_django.models import FCMDevice
 from retailers.models import RetailerProfile, RetailerOperatingHours
 from .serializers import (
     UserRegistrationSerializer, UserLoginSerializer, OTPRequestSerializer,
-    OTPVerificationSerializer, UserProfileSerializer, TokenSerializer,
-    PasswordChangeSerializer, RequestPhoneVerificationSerializer,
-    ForgotPasswordSerializer, ResetPasswordConfirmSerializer
+    OTPVerificationSerializer, UserProfileSerializer,
+    PasswordChangeSerializer,
+    ForgotPasswordSerializer, ResetPasswordConfirmSerializer,
+    EmailOTPRequestSerializer, EmailOTPVerificationSerializer,
+    EmailPasswordResetRequestSerializer, EmailPasswordResetConfirmSerializer
 )
-from .utils import generate_otp, send_sms_otp, verify_otp_helper, verify_firebase_id_token
+from .utils import generate_otp, send_sms_otp, send_email_otp, verify_otp_helper, verify_firebase_id_token
 
 logger = logging.getLogger(__name__)
 
@@ -32,51 +32,179 @@ class OTPThrottle(AnonRateThrottle):
     scope = 'otp'
 
 
+def _create_retailer_profile(user):
+    """
+    Create retailer profile and default operating hours.
+    """
+    profile = RetailerProfile.objects.create(
+        user=user,
+        shop_name=f"{user.first_name or user.username}'s Shop",
+        shop_description='',
+        business_type='general',
+        address_line1='',
+        city='',
+        state='',
+        pincode='000000',
+        contact_phone=user.phone_number or '',
+        is_active=False,
+    )
+
+    days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+    for day in days:
+        RetailerOperatingHours.objects.create(
+            retailer=profile,
+            day_of_week=day,
+            is_open=True,
+            opening_time='09:00',
+            closing_time='21:00'
+        )
+
+    return profile
+
+
 @api_view(['POST'])
 @permission_classes([permissions.AllowAny])
-@throttle_classes([LoginThrottle])
-def retailer_signup(request):
+@throttle_classes([OTPThrottle])
+def request_email_verification(request):
     """
-    Register a new retailer user
+    Request OTP for email verification (signup flow)
     """
     try:
-        data = request.data.copy()
-        data['user_type'] = 'retailer'
-
-        serializer = UserRegistrationSerializer(data=data)
+        serializer = EmailOTPRequestSerializer(data=request.data)
         if serializer.is_valid():
-            user = serializer.save()
+            email = serializer.validated_data['email'].lower()
 
-            # Create RetailerProfile with default values
-            profile = RetailerProfile.objects.create(
-                user=user,
-                shop_name=f"{user.first_name or user.username}'s Shop",
-                shop_description='',
-                business_type='general',
-                address_line1='',
-                city='',
-                state='',
-                pincode='000000',
-                contact_phone=user.phone_number or '',
-                is_active=False,  # Inactive until profile is completed
-            )
-
-            # Create default operating hours (Monday to Sunday, 9 AM to 9 PM)
-            days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
-            for day in days:
-                RetailerOperatingHours.objects.create(
-                    retailer=profile,
-                    day_of_week=day,
-                    is_open=True,
-                    opening_time='09:00',
-                    closing_time='21:00'
+            cache_key = f"email_otp_requests_{email}"
+            requests = cache.get(cache_key, 0)
+            if requests >= 3:
+                return Response(
+                    {'error': 'Too many OTP requests. Please try again later.'},
+                    status=status.HTTP_429_TOO_MANY_REQUESTS
                 )
 
-            # Generate JWT tokens
+            otp_code, secret_key = generate_otp()
+
+            EmailOTPVerification.objects.filter(
+                email=email,
+                purpose=EmailOTPVerification.PURPOSE_SIGNUP
+            ).delete()
+
+            EmailOTPVerification.objects.create(
+                email=email,
+                otp_code=otp_code,
+                secret_key=secret_key,
+                purpose=EmailOTPVerification.PURPOSE_SIGNUP,
+                expires_at=timezone.now() + timezone.timedelta(seconds=settings.OTP_EXPIRY_TIME)
+            )
+
+            signup_payload = serializer.validated_data.copy()
+            signup_payload['email'] = email
+            cache.set(
+                f"signup_payload_{email}",
+                signup_payload,
+                settings.OTP_EXPIRY_TIME
+            )
+
+            email_sent = send_email_otp(email, otp_code, EmailOTPVerification.PURPOSE_SIGNUP)
+
+            if email_sent:
+                cache.set(cache_key, requests + 1, 900)
+                return Response({
+                    'message': 'OTP sent successfully',
+                    'email': email,
+                    'expires_in': settings.OTP_EXPIRY_TIME
+                }, status=status.HTTP_200_OK)
+
+            return Response(
+                {'error': 'Failed to send OTP'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    except Exception as e:
+        logger.error(f"Error in request_email_verification: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+@throttle_classes([OTPThrottle])
+def verify_email_otp(request):
+    """
+    Verify email OTP and complete signup
+    """
+    try:
+        serializer = EmailOTPVerificationSerializer(data=request.data)
+        if serializer.is_valid():
+            email = serializer.validated_data['email'].lower()
+            otp_code = serializer.validated_data['otp_code']
+
+            try:
+                otp_verification = EmailOTPVerification.objects.get(
+                    email=email,
+                    purpose=EmailOTPVerification.PURPOSE_SIGNUP,
+                    is_verified=False
+                )
+            except EmailOTPVerification.DoesNotExist:
+                return Response(
+                    {'error': 'Invalid OTP request'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if otp_verification.is_expired():
+                return Response(
+                    {'error': 'OTP has expired'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if not otp_verification.can_retry():
+                return Response(
+                    {'error': 'Maximum OTP attempts exceeded'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if str(otp_verification.otp_code) != str(otp_code):
+                otp_verification.attempts += 1
+                otp_verification.save()
+                return Response(
+                    {'error': 'Invalid OTP'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            signup_payload = cache.get(f"signup_payload_{email}")
+            if not signup_payload:
+                return Response(
+                    {'error': 'Signup data expired. Please request a new OTP.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            registration_serializer = UserRegistrationSerializer(data=signup_payload)
+            if not registration_serializer.is_valid():
+                return Response(registration_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+            user = registration_serializer.save()
+            user.is_active = True
+            user.is_email_verified = True
+            if user.user_type == 'customer':
+                user.is_phone_verified = False
+            user.save()
+
+            if user.user_type == 'retailer':
+                _create_retailer_profile(user)
+
+            otp_verification.is_verified = True
+            otp_verification.user = user
+            otp_verification.save()
+            cache.delete(f"signup_payload_{email}")
+
             refresh = RefreshToken.for_user(user)
 
             response_data = {
-                'message': 'Retailer registered successfully',
+                'message': 'Email verification successful. Signup completed.',
                 'user': UserProfileSerializer(user).data,
                 'tokens': {
                     'access': str(refresh.access_token),
@@ -84,17 +212,150 @@ def retailer_signup(request):
                 }
             }
 
-            logger.info(f"New retailer registered: {user.username}")
             return Response(response_data, status=status.HTTP_201_CREATED)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     except Exception as e:
-        logger.error(f"Error in retailer signup: {str(e)}")
+        logger.error(f"Error in verify_email_otp: {str(e)}")
         return Response(
             {'error': 'Internal server error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+@throttle_classes([OTPThrottle])
+def forgot_password_email(request):
+    """
+    Request password reset OTP via email
+    """
+    try:
+        serializer = EmailPasswordResetRequestSerializer(data=request.data)
+        if serializer.is_valid():
+            email = serializer.validated_data['email'].lower()
+            user = User.objects.get(email=email)
+
+            otp_code, secret_key = generate_otp()
+
+            EmailOTPVerification.objects.filter(
+                email=email,
+                purpose=EmailOTPVerification.PURPOSE_PASSWORD_RESET
+            ).delete()
+
+            EmailOTPVerification.objects.create(
+                user=user,
+                email=email,
+                otp_code=otp_code,
+                secret_key=secret_key,
+                purpose=EmailOTPVerification.PURPOSE_PASSWORD_RESET,
+                expires_at=timezone.now() + timezone.timedelta(seconds=settings.OTP_EXPIRY_TIME)
+            )
+
+            email_sent = send_email_otp(email, otp_code, EmailOTPVerification.PURPOSE_PASSWORD_RESET)
+
+            if email_sent:
+                return Response({
+                    'message': 'OTP sent successfully',
+                    'email': email,
+                    'expires_in': settings.OTP_EXPIRY_TIME
+                }, status=status.HTTP_200_OK)
+
+            return Response(
+                {'error': 'Failed to send OTP'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    except Exception as e:
+        logger.error(f"Error in forgot_password_email: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+@throttle_classes([OTPThrottle])
+def reset_password_email(request):
+    """
+    Verify email OTP and reset password
+    """
+    try:
+        serializer = EmailPasswordResetConfirmSerializer(data=request.data)
+        if serializer.is_valid():
+            email = serializer.validated_data['email'].lower()
+            otp_code = serializer.validated_data['otp_code']
+            new_password = serializer.validated_data['new_password']
+
+            try:
+                otp_verification = EmailOTPVerification.objects.get(
+                    email=email,
+                    purpose=EmailOTPVerification.PURPOSE_PASSWORD_RESET,
+                    is_verified=False
+                )
+            except EmailOTPVerification.DoesNotExist:
+                return Response(
+                    {'error': 'Invalid or expired OTP request'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if otp_verification.is_expired():
+                return Response(
+                    {'error': 'OTP has expired'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if not otp_verification.can_retry():
+                return Response(
+                    {'error': 'Maximum OTP attempts exceeded'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if str(otp_verification.otp_code) != str(otp_code):
+                otp_verification.attempts += 1
+                otp_verification.save()
+                return Response(
+                    {'error': 'Invalid OTP'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            user = otp_verification.user or User.objects.get(email=email)
+            user.set_password(new_password)
+            user.save()
+
+            otp_verification.is_verified = True
+            otp_verification.save()
+
+            return Response(
+                {'message': 'Password reset successfully. Please login with new password.'},
+                status=status.HTTP_200_OK
+            )
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    except Exception as e:
+        logger.error(f"Error in reset_password_email: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+@throttle_classes([LoginThrottle])
+def retailer_signup(request):
+    """
+    Register a new retailer user
+    """
+    return Response(
+        {'error': 'Email verification is required before signup. Use the email verification APIs.'},
+        status=status.HTTP_400_BAD_REQUEST
+    )
 
 
 @api_view(['POST'])
@@ -147,42 +408,10 @@ def customer_signup(request):
     """
     Register a new customer user with password
     """
-    try:
-        data = request.data.copy()
-        data['user_type'] = 'customer'
-
-        serializer = UserRegistrationSerializer(data=data)
-        if serializer.is_valid():
-            user = serializer.save()
-            
-            # Customer is active but phone not verified
-            user.is_active = True
-            user.is_phone_verified = False
-            user.save()
-
-            # Generate JWT tokens
-            refresh = RefreshToken.for_user(user)
-
-            response_data = {
-                'message': 'Customer registered successfully. Please verify your phone number.',
-                'user': UserProfileSerializer(user).data,
-                'tokens': {
-                    'access': str(refresh.access_token),
-                    'refresh': str(refresh),
-                }
-            }
-
-            logger.info(f"New customer registered: {user.username}")
-            return Response(response_data, status=status.HTTP_201_CREATED)
-
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    except Exception as e:
-        logger.error(f"Error in customer signup: {str(e)}")
-        return Response(
-            {'error': 'Internal server error'},
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
+    return Response(
+        {'error': 'Email verification is required before signup. Use the email verification APIs.'},
+        status=status.HTTP_400_BAD_REQUEST
+    )
 
 
 @api_view(['POST'])

@@ -13,6 +13,8 @@ urlpatterns = [
     path('customer/verify-otp/', views.verify_otp, name='verify_otp'),
     path('customer/resend-otp/', views.resend_otp, name='resend_otp'),
     path('customer/request-verification/', views.request_phone_verification, name='request_phone_verification'),
+    path('email/request-verification/', views.request_email_verification, name='request_email_verification'),
+    path('email/verify-otp/', views.verify_email_otp, name='verify_email_otp'),
 
     # Common authentication
     path('profile/', views.get_profile, name='get_profile'),
@@ -28,4 +30,6 @@ urlpatterns = [
     # Password Reset
     path('password/forgot/', views.forgot_password, name='forgot_password'),
     path('password/reset/', views.reset_password, name='reset_password'),
+    path('password/email/forgot/', views.forgot_password_email, name='forgot_password_email'),
+    path('password/email/reset/', views.reset_password_email, name='reset_password_email'),
 ]

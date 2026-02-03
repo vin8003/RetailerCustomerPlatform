@@ -2,7 +2,7 @@ from rest_framework import serializers
 from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
 from rest_framework_simplejwt.tokens import RefreshToken
-from .models import User, OTPVerification
+from .models import User
 
 
 class UserRegistrationSerializer(serializers.ModelSerializer):
@@ -12,6 +12,7 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, validators=[validate_password])
     password_confirm = serializers.CharField(write_only=True)
     
+    email = serializers.EmailField(required=True)
     phone_number = serializers.CharField(max_length=15, required=False)
 
     class Meta:
@@ -21,6 +22,10 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         if attrs['password'] != attrs['password_confirm']:
             raise serializers.ValidationError({"password": "Passwords don't match"})
+
+        email = attrs.get('email')
+        if email and User.objects.filter(email=email).exists():
+            raise serializers.ValidationError({"email": "Email already registered"})
         
         phone_number = attrs.get('phone_number')
         if phone_number and User.objects.filter(phone_number=phone_number).exists():
@@ -134,9 +139,9 @@ class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ['id', 'username', 'email', 'first_name', 'last_name', 
-                 'phone_number', 'user_type', 'is_phone_verified', 'created_at',
+                 'phone_number', 'user_type', 'is_phone_verified', 'is_email_verified', 'created_at',
                  'shop_name', 'shop_image']
-        read_only_fields = ['id', 'username', 'user_type', 'is_phone_verified', 'created_at']
+        read_only_fields = ['id', 'username', 'user_type', 'is_phone_verified', 'is_email_verified', 'created_at']
 
     def get_shop_name(self, obj):
         if obj.user_type == 'retailer' and hasattr(obj, 'retailer_profile'):
@@ -226,3 +231,73 @@ class ResetPasswordConfirmSerializer(serializers.Serializer):
             
         return attrs
 
+
+class EmailOTPRequestSerializer(serializers.Serializer):
+    """
+    Serializer for requesting email OTP for signup
+    """
+    username = serializers.CharField(max_length=150)
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True, validators=[validate_password])
+    password_confirm = serializers.CharField(write_only=True)
+    user_type = serializers.ChoiceField(choices=User.USER_TYPE_CHOICES)
+    phone_number = serializers.CharField(max_length=15, required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        if attrs['password'] != attrs['password_confirm']:
+            raise serializers.ValidationError({"password": "Passwords don't match"})
+
+        email = attrs.get('email')
+        if email and User.objects.filter(email=email).exists():
+            raise serializers.ValidationError({"email": "Email already registered"})
+
+        phone_number = attrs.get('phone_number')
+        if phone_number and User.objects.filter(phone_number=phone_number).exists():
+            raise serializers.ValidationError({"phone_number": "Phone number already registered"})
+
+        return attrs
+
+
+class EmailOTPVerificationSerializer(serializers.Serializer):
+    """
+    Serializer for verifying email OTP for signup
+    """
+    email = serializers.EmailField()
+    otp_code = serializers.CharField(max_length=6)
+
+    def validate_otp_code(self, value):
+        if value and (not value.isdigit() or len(value) != 6):
+            raise serializers.ValidationError("OTP must be 6 digits")
+        return value
+
+
+class EmailPasswordResetRequestSerializer(serializers.Serializer):
+    """
+    Serializer for email password reset request
+    """
+    email = serializers.EmailField()
+
+    def validate_email(self, value):
+        if not User.objects.filter(email=value).exists():
+            raise serializers.ValidationError("No account found with this email.")
+        return value
+
+
+class EmailPasswordResetConfirmSerializer(serializers.Serializer):
+    """
+    Serializer for email password reset confirmation
+    """
+    email = serializers.EmailField()
+    otp_code = serializers.CharField(max_length=6)
+    new_password = serializers.CharField(write_only=True, validators=[validate_password])
+    confirm_password = serializers.CharField(write_only=True)
+
+    def validate(self, attrs):
+        if attrs['new_password'] != attrs['confirm_password']:
+            raise serializers.ValidationError({"new_password": "Passwords don't match"})
+        return attrs
+
+    def validate_otp_code(self, value):
+        if value and (not value.isdigit() or len(value) != 6):
+            raise serializers.ValidationError("OTP must be 6 digits")
+        return value
