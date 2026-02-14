@@ -155,13 +155,19 @@ def add_to_cart(request):
                                 is_match = True
                     
                     if is_match and not is_excluded:
-                        # Logic: If item quantity equals Buy Quantity, add Get Quantity
-                        # e.g., Buy 1 Get 2. If Qty matches 1, make it 3.
+                        # Logic: If item quantity reaches Buy Quantity multiple, add Get Quantity
+                        # e.g., Buy 2 Get 2 (Group 4).
+                        # Qty 2 -> Remainder 2 >= 2. Add 2 -> Qty 4.
+                        # Qty 6 -> Remainder 2 >= 2. Add 2 -> Qty 8.
                         if offer.buy_quantity and offer.get_quantity:
-                            if cart_item.quantity == offer.buy_quantity:
-                                cart_item.quantity += offer.get_quantity
+                            group_size = offer.buy_quantity + offer.get_quantity
+                            remainder = cart_item.quantity % group_size
+                            
+                            if remainder >= offer.buy_quantity:
+                                needed = group_size - remainder
+                                cart_item.quantity += needed
                                 cart_item.save()
-                                logger.info(f"Auto-added {offer.get_quantity} free items for offer {offer.name} to product {product.name}")
+                                logger.info(f"Auto-added {needed} free items for offer {offer.name} to product {product.name} (Total: {cart_item.quantity})")
                                 break # Apply top priority offer only
             
             except Exception as e:

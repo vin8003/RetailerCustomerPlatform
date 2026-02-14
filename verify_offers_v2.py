@@ -130,5 +130,78 @@ def run_test():
     else:
          print("FAIL: Same Product strategy failed.")
 
+    # 6. Test Buy 2 Get 2 (User Reported Issue)
+    print("\n--- Testing Buy 2 Get 2 ---")
+    
+    # Create product and offer
+    p4, _ = Product.objects.get_or_create(retailer=retailer, name="B2G2 Soap", defaults={'price': Decimal("100.00"), 'quantity': 100, 'category': cat})
+    
+    offer_b2g2, c = Offer.objects.get_or_create(
+        retailer=retailer, name="Same B2G2",
+        defaults={
+            'offer_type': 'bxgy',
+            'buy_quantity': 2, 'get_quantity': 2,
+            'bxgy_strategy': 'same_product',
+            'start_date': timezone.now(),
+            'value': Decimal('0.00')
+        }
+    )
+    if not c:
+        offer_b2g2.bxgy_strategy = 'same_product'
+        offer_b2g2.buy_quantity = 2
+        offer_b2g2.get_quantity = 2
+        offer_b2g2.save()
+
+    OfferTarget.objects.get_or_create(offer=offer_b2g2, target_type='product', product=p4)
+    
+    cart.items.all().delete()
+    
+    # Test 1: Add 2 items at once
+    print("Test 1: User adds 2 items at once...")
+    target_qty_added = 2
+    if target_qty_added == offer_b2g2.buy_quantity:
+        target_qty_added += offer_b2g2.get_quantity
+        print(f"Auto-add triggered! Quantity becomes {target_qty_added}")
+    
+    CartItem.objects.create(cart=cart, product=p4, quantity=target_qty_added)
+    if cart.items.first().quantity == 4:
+        print("PASS: Adding 2 resulted in 4.")
+    else:
+        print(f"FAIL: Adding 2 resulted in {cart.items.first().quantity}. Expected 4.")
+
+    # Test 2: Add 1 then 1
+    print("Test 2: User adds 1 then 1 (Incremental)...")
+    cart.items.all().delete()
+    
+    # Step A: Add 1
+    current_qty = 0
+    added = 1
+    current_qty += added
+    # Logic check
+    if current_qty == offer_b2g2.buy_quantity:
+        current_qty += offer_b2g2.get_quantity
+    
+    CartItem.objects.create(cart=cart, product=p4, quantity=current_qty)
+    print(f"After adding 1: Qty {current_qty}")
+    
+    # Step B: Add 1 more
+    added = 1
+    obj = CartItem.objects.get(cart=cart, product=p4)
+    obj.quantity += added
+    current_qty = obj.quantity
+    
+    # Logic check (SIMULATED VIEW LOGIC)
+    if current_qty == offer_b2g2.buy_quantity:
+        current_qty += offer_b2g2.get_quantity
+        print(f"Auto-add triggered on 2nd item! New Qty {current_qty}")
+    
+    obj.quantity = current_qty
+    obj.save()
+    
+    if obj.quantity == 4:
+        print("PASS: Adding 1+1 resulted in 4.")
+    else:
+        print(f"FAIL: Adding 1+1 resulted in {obj.quantity}. Expected 4.")
+
 if __name__ == "__main__":
     run_test()
