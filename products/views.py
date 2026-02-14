@@ -124,16 +124,17 @@ def smart_product_search(queryset, search_query):
     # We use Coalesce to handle potential NULLs (e.g. brand, description, product_group)
     # Cast tags (JSONField) to TextField for TrigramSimilarity
     # Use bidirectional TrigramWordSimilarity for name to handle:
-    # 1. Query inside Name ("apple" -> "green apple")
-    # 2. Name inside Query ("shop easy arhar" -> "arhar")
+    # 1. Query inside Name ("apple" -> "green apple") -> TrigramWordSimilarity(query, 'name')
+    # 2. Name inside Query ("shop easy arhar" -> "arhar") -> TrigramWordSimilarity('name', query)
+    # IMPORTANT: When passing a string literal as the second argument, it MUST be wrapped in Value()
     similarity = (
         Greatest(
             TrigramWordSimilarity(query, 'name'),
-            TrigramWordSimilarity('name', query)
+            TrigramWordSimilarity('name', Value(query))
         ) * 0.4 +
         Greatest(
             TrigramWordSimilarity(query, 'category__name'),
-            TrigramWordSimilarity('category__name', query)
+            TrigramWordSimilarity('category__name', Value(query))
         ) * 0.2 +
         Coalesce(TrigramWordSimilarity(query, Cast('tags', TextField())), Value(0.0)) * 0.15 +
         TrigramWordSimilarity(query, 'description') * 0.1 +
