@@ -270,7 +270,16 @@ class OfferEngine:
         """
         Apply Buy X Get Y Free logic
         """
-        # 1. Collect all eligible units
+        
+        # Check strategy
+        # 'mixed' = Pool all items (default legacy behavior).
+        # 'same_product' = Apply logic per product group.
+        bxgy_strategy = getattr(offer, 'bxgy_strategy', 'mixed')
+
+        if bxgy_strategy == 'same_product':
+             return self._apply_bxgy_same_product(offer, item_context, eligible_indices)
+
+        # 1. Collect all eligible units (Mixed Strategy)
         # We might have multiple cart items matching (e.g. 2 different soaps)
         # BXGY usually works on pool of items. "Buy 2 soaps get 1 free" (cheapest free)
         
@@ -349,6 +358,79 @@ class OfferEngine:
             if not offer.is_stackable:
                 item_data['is_exclusive'] = True
 
+        return total_savings
+
+    def _apply_bxgy_same_product(self, offer, item_context, eligible_indices):
+        """
+        Apply Buy X Get Y Free logic per product
+        """
+        total_savings = Decimal(0)
+        
+        # Group indices by product_id
+        product_groups = {}
+        for idx in eligible_indices:
+            item_data = item_context[idx]
+            pid = item_data['item'].product.id
+            if pid not in product_groups:
+                product_groups[pid] = []
+            product_groups[pid].append(idx)
+            
+        x = offer.buy_quantity
+        y = offer.get_quantity
+        group_size = x + y
+
+        for pid, indices in product_groups.items():
+            # Usually only one line item per product, but handle multiple just in case
+            total_qty = sum(item_context[idx]['quantity'] for idx in indices)
+            
+            num_free = (total_qty // group_size) * y
+            if num_free <= 0:
+                continue
+                
+            # Distribute savings
+            # Since it's the SAME product, price is uniform (usually).
+            # If not (e.g. variants with diff prices?), we should sort cheapest first.
+            # Assuming uniform price for same product ID.
+            
+            # We need to discount 'num_free' units.
+            
+            # Expand units again (local to this product) to handle partials
+            units = []
+            for idx in indices:
+                item_data = item_context[idx]
+                for _ in range(item_data['quantity']):
+                    units.append({
+                        'price': item_data['current_price'],
+                        'parent_idx': idx
+                    })
+            
+            # Sort cheap to expensive (standard cheapest free logic, though prices likely same)
+            units.sort(key=lambda u: u['price'])
+            
+            items_discounted = 0
+            for i in range(num_free):
+                if i >= len(units): break
+                
+                unit = units[i]
+                price = unit['price']
+                idx = unit['parent_idx']
+                
+                total_savings += price
+                
+                # Apply to item context
+                item_data = item_context[idx]
+                discount_per_unit = price / item_data['quantity']
+                item_data['current_price'] -= discount_per_unit
+                item_data['savings'] += discount_per_unit
+                
+                # Tag offer if not already tagged for this item? 
+                # (might be tagged multiple times if multiple free units in same line)
+                if offer.name not in item_data['applied_offers']:
+                    item_data['applied_offers'].append(offer.name)
+                
+                if not offer.is_stackable:
+                    item_data['is_exclusive'] = True
+                    
         return total_savings
 
     def _apply_flat_amount(self, offer, item_context, eligible_indices):
