@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Q, Avg, Count, Sum, Max
 from django.db.models import Q, Avg, Count, Sum, Max, F, Value, Case, When, FloatField
-from django.db.models.functions import Coalesce
+from django.db.models.functions import Coalesce, Greatest
 from django.contrib.postgres.search import TrigramSimilarity, TrigramWordSimilarity
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -123,10 +123,18 @@ def smart_product_search(queryset, search_query):
     # STEP 2: Annotate similarity
     # We use Coalesce to handle potential NULLs (e.g. brand, description, product_group)
     # Cast tags (JSONField) to TextField for TrigramSimilarity
-    # Use TrigramWordSimilarity for better matching of short queries against long text (e.g. "kisssan" vs "KISSAN KETCHUP")
+    # Use bidirectional TrigramWordSimilarity for name to handle:
+    # 1. Query inside Name ("apple" -> "green apple")
+    # 2. Name inside Query ("shop easy arhar" -> "arhar")
     similarity = (
-        TrigramWordSimilarity(query, 'name') * 0.4 +
-        TrigramWordSimilarity(query, 'category__name') * 0.2 +
+        Greatest(
+            TrigramWordSimilarity(query, 'name'),
+            TrigramWordSimilarity('name', query)
+        ) * 0.4 +
+        Greatest(
+            TrigramWordSimilarity(query, 'category__name'),
+            TrigramWordSimilarity('category__name', query)
+        ) * 0.2 +
         Coalesce(TrigramWordSimilarity(query, Cast('tags', TextField())), Value(0.0)) * 0.15 +
         TrigramWordSimilarity(query, 'description') * 0.1 +
         Coalesce(TrigramWordSimilarity(query, 'product_group'), Value(0.0)) * 0.1 +
