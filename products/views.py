@@ -3,9 +3,9 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Q, Avg, Count, Sum, Max
-from django.db.models import Q, Avg, Count, Sum, Max, F, Value, Case, When, FloatField
-from django.db.models.functions import Coalesce, Greatest
-from django.contrib.postgres.search import TrigramSimilarity, TrigramWordSimilarity
+from django.db.models import Q, Avg, Count, Sum, Max, F, Value, Case, When, FloatField, TextField, IntegerField
+from django.db.models.functions import Coalesce, Greatest, Cast
+from django.contrib.postgres.search import SearchVector, SearchQuery, SearchRank
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 import logging
@@ -106,55 +106,79 @@ def get_all_category_ids(category_id):
 
 def smart_product_search(queryset, search_query):
     """
-    Enhanced search using TrigramSimilarity with weighted scoring.
+    Hybrid Smart Search optimized for grocery data.
+    
+    Strategy:
+    1. Exact/Startswith Match (Highest Priority)
+    2. Full-Text Search (Ranked via Weights A-D)
+    3. Fallback to simple icontains
+    
+    Weights:
+    - A: Name
+    - B: Category Name
+    - C: Tags, Product Group
+    - D: Description
+    
+    Performance:
+    - Uses efficient Postgres SearchVector.
+    - Recommended Index: GinIndex(SearchVector('name', 'category__name', ...))
     """
-    from django.db.models.functions import Coalesce, Cast
-    from django.db.models import Value, TextField
-
     if not search_query:
         return queryset
 
     # STEP 1: Normalize input
     query = " ".join(search_query.lower().split())
-    
     if not query:
         return queryset
 
-    # STEP 2: Annotate similarity
-    # We use Coalesce to handle potential NULLs (e.g. brand, description, product_group)
-    # Cast tags (JSONField) to TextField for TrigramSimilarity
-    # Use bidirectional TrigramWordSimilarity for name to handle:
-    # 1. Query inside Name ("apple" -> "green apple") -> TrigramWordSimilarity(query, 'name')
-    # 2. Name inside Query ("shop easy arhar" -> "arhar") -> TrigramWordSimilarity('name', query)
-    # IMPORTANT: When passing a string literal as the second argument, it MUST be wrapped in Value()
-    similarity = (
-        Greatest(
-            TrigramWordSimilarity(query, 'name'),
-            TrigramWordSimilarity('name', Value(query))
-        ) * 0.4 +
-        Greatest(
-            TrigramWordSimilarity(query, 'category__name'),
-            TrigramWordSimilarity('category__name', Value(query))
-        ) * 0.2 +
-        Coalesce(TrigramWordSimilarity(query, Cast('tags', TextField())), Value(0.0)) * 0.15 +
-        TrigramWordSimilarity(query, 'description') * 0.1 +
-        Coalesce(TrigramWordSimilarity(query, 'product_group'), Value(0.0)) * 0.1 +
-        Coalesce(TrigramWordSimilarity(query, 'brand__name'), Value(0.0)) * 0.05
+    # STEP 2 & 3: Primary Search (FTS) & Exact Match Boost
+    # Define Weighted Search Vector
+    vector = (
+        SearchVector('name', weight='A') +
+        SearchVector('category__name', weight='B') +
+        SearchVector(Cast('tags', TextField()), weight='C') +
+        SearchVector('product_group', weight='C') +
+        SearchVector('description', weight='D')
     )
+    
+    search_query_obj = SearchQuery(query)
 
-    # STEP 3: Combine and Filter
+    # Annotate with Rank and Exact Boosts
     qs_smart = queryset.annotate(
-        similarity_score=similarity
+        rank_score=SearchRank(vector, search_query_obj),
+        is_barcode=Case(
+            When(barcode__icontains=query, then=Value(1)),
+            default=Value(0),
+            output_field=IntegerField(),
+        ),
+        is_exact=Case(
+            When(name__iexact=query, then=Value(1)),
+            default=Value(0),
+            output_field=IntegerField(),
+        ),
+        is_startswith=Case(
+            When(name__istartswith=query, then=Value(1)),
+            default=Value(0),
+            output_field=IntegerField(),
+        )
     ).filter(
-        Q(similarity_score__gt=0.3) |
-        Q(barcode__icontains=query)
+        Q(rank_score__gt=0) |
+        Q(is_barcode=1)
     )
 
-    # STEP 4: Order by
-    qs_smart = qs_smart.order_by('-similarity_score', 'name')
+    # STEP 5: Ordering
+    # Priority: Barcode > Exact > Startswith > Rank > Name
+    qs_smart = qs_smart.order_by(
+        '-is_barcode',
+        '-is_exact',
+        '-is_startswith',
+        '-rank_score',
+        'name'
+    )
 
-    # STEP 5: Fallback if no results found
+    # STEP 6: Fallback logic
     if not qs_smart.exists():
+        # Fallback to original icontains logic
         return queryset.filter(
             Q(name__icontains=query) |
             Q(description__icontains=query) |

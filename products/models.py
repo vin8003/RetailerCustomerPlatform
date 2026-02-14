@@ -2,6 +2,8 @@ from django.db import models
 from django.conf import settings
 from django.core.validators import MinValueValidator, MaxValueValidator
 from decimal import Decimal
+from django.contrib.postgres.indexes import GinIndex
+from django.contrib.postgres.search import SearchVector
 from common.utils import generate_upload_path, resize_image
 
 
@@ -232,6 +234,10 @@ class Product(models.Model):
             models.Index(fields=['price']),
             models.Index(fields=['created_at']),
             models.Index(fields=['is_featured']),
+            GinIndex(
+                SearchVector('name', 'product_group', 'description', 'tags'),
+                name='product_search_vector_idx'
+            ),
         ]
         unique_together = ['retailer', 'name']
     
