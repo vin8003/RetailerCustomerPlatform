@@ -67,6 +67,17 @@ class Offer(models.Model):
     get_quantity = models.PositiveIntegerField(null=True, blank=True, help_text="Get Y")
     is_cheapest_free = models.BooleanField(default=True, help_text="If mixing items, cheapest is free")
     
+    BXGY_STRATEGY_CHOICES = [
+        ('mixed', 'Mix and Match (Any eligible product)'),
+        ('same_product', 'Same Product (Buy X of A, Get Y of A)'),
+    ]
+    bxgy_strategy = models.CharField(
+        max_length=20, 
+        choices=BXGY_STRATEGY_CHOICES, 
+        default='mixed',
+        help_text="How items are grouped for Buy X Get Y"
+    )
+    
     # Tiered Specifics
     tiered_min_quantity = models.PositiveIntegerField(null=True, blank=True)
     

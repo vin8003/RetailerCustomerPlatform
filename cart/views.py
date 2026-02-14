@@ -108,6 +108,65 @@ def add_to_cart(request):
         if serializer.is_valid():
             cart_item = serializer.save()
             
+            # Auto-add free items for Same Product BXGY (User Request: "1 add krne pe 2 auto add ho")
+            try:
+                from offers.models import Offer
+                from django.utils import timezone
+                from django.db.models import Q
+                
+                now = timezone.now()
+                # Find active Same Product BXGY offers
+                active_offers = Offer.objects.filter(
+                    retailer=cart_item.cart.retailer,
+                    offer_type='bxgy',
+                    bxgy_strategy='same_product',
+                    is_active=True,
+                    start_date__lte=now
+                ).filter(
+                    Q(end_date__isnull=True) | Q(end_date__gte=now)
+                ).order_by('-priority')
+                
+                product = cart_item.product
+                
+                for offer in active_offers:
+                    targets = offer.targets.all()
+                    if not targets:
+                        continue
+                        
+                    is_match = False
+                    is_excluded = False
+                    
+                    for target in targets:
+                        if target.is_excluded:
+                            if target.target_type == 'product' and target.product_id == product.id:
+                                is_excluded = True
+                            elif target.target_type == 'category' and target.category_id == product.category_id:
+                                is_excluded = True
+                            elif target.target_type == 'brand' and target.brand_id == product.brand_id:
+                                is_excluded = True
+                        else:
+                            if target.target_type == 'all_products':
+                                is_match = True
+                            elif target.target_type == 'product' and target.product_id == product.id:
+                                is_match = True
+                            elif target.target_type == 'category' and target.category_id == product.category_id:
+                                is_match = True
+                            elif target.target_type == 'brand' and target.brand_id == product.brand_id:
+                                is_match = True
+                    
+                    if is_match and not is_excluded:
+                        # Logic: If item quantity equals Buy Quantity, add Get Quantity
+                        # e.g., Buy 1 Get 2. If Qty matches 1, make it 3.
+                        if offer.buy_quantity and offer.get_quantity:
+                            if cart_item.quantity == offer.buy_quantity:
+                                cart_item.quantity += offer.get_quantity
+                                cart_item.save()
+                                logger.info(f"Auto-added {offer.get_quantity} free items for offer {offer.name} to product {product.name}")
+                                break # Apply top priority offer only
+            
+            except Exception as e:
+                logger.error(f"Error processing auto-add offers: {str(e)}")
+
             # Return updated cart
             cart = cart_item.cart
             cart_serializer = CartSerializer(cart)
