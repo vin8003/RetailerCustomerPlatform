@@ -3,7 +3,9 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Q, Avg, Count, Sum, Max
+from django.db.models import Q, Avg, Count, Sum, Max, F, Value, Case, When, FloatField
 from django.db.models.functions import Coalesce
+from django.contrib.postgres.search import TrigramSimilarity
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 import logging
@@ -102,6 +104,77 @@ def get_all_category_ids(category_id):
     return list(ids_to_collect)
 
 
+def smart_product_search(queryset, search_query):
+    """
+    Enhanced search using TrigramSimilarity with weighted scoring.
+    
+    Weights:
+    - name: 0.4
+    - category__name: 0.2
+    - tags: 0.15
+    - description: 0.1
+    - product_group: 0.1
+    - brand: 0.05
+    
+    Logic:
+    1. Normalize query
+    2. Annotate similarity
+    3. Filter > 0.3 OR barcode match
+    4. Fallback to icontains if no results
+    
+    Performance Impact:
+    - Trigram queries are more expensive than simple icontains.
+    - Annotating every row can be slow on large datasets.
+    - Recommended: Add GinIndex(OpClass(name, name='gin_trgm_ops')) on searched fields.
+    """
+    if not search_query:
+        return queryset
+
+    # STEP 1: Normalize input
+    query = " ".join(search_query.lower().split())
+    
+    if not query:
+        return queryset
+
+    # STEP 2: Annotate similarity
+    # We use Coalesce to handle potential NULLs (e.g. brand, description)
+    similarity = (
+        TrigramSimilarity('name', query) * 0.4 +
+        TrigramSimilarity('category__name', query) * 0.2 +
+        TrigramSimilarity('tags', query) * 0.15 +
+        TrigramSimilarity('description', query) * 0.1 +
+        TrigramSimilarity('product_group', query) * 0.1 +
+        Coalesce(TrigramSimilarity('brand__name', query), Value(0.0)) * 0.05
+    )
+
+    # STEP 3: Combine and Filter
+    # Barcode remains exact/partial match (not weighted)
+    qs_smart = queryset.annotate(
+        similarity_score=similarity
+    ).filter(
+        Q(similarity_score__gt=0.3) |
+        Q(barcode__icontains=query)
+    )
+
+    # STEP 4: Order by
+    qs_smart = qs_smart.order_by('-similarity_score', 'name')
+
+    # STEP 5: Fallback if no results found
+    # We use exists() to check. Note: This causes a query.
+    if not qs_smart.exists():
+        # Fallback to original icontains logic
+        return queryset.filter(
+            Q(name__icontains=query) |
+            Q(description__icontains=query) |
+            Q(tags__icontains=query) |
+            Q(category__name__icontains=query) |
+            Q(product_group__icontains=query) |
+            Q(barcode__icontains=query)
+        )
+    
+    return qs_smart
+
+
 class ProductPagination(PageNumberPagination):
     page_size = 20
     page_size_query_param = 'page_size'
@@ -172,11 +245,7 @@ def get_retailer_products(request):
         # Search functionality
         search = request.query_params.get('search')
         if search:
-            products = products.filter(
-                Q(name__icontains=search) |
-                Q(description__icontains=search) |
-                Q(tags__icontains=search)
-            )
+            products = smart_product_search(products, search)
 
         # Pre-fetch active offers for N+1 optimization in serializer
         from offers.models import Offer
@@ -234,14 +303,7 @@ def search_products(request):
         # Apply search
         search = request.query_params.get('search')
         if search:
-            products = products.filter(
-                Q(name__icontains=search) |
-                Q(description__icontains=search) |
-                Q(tags__icontains=search) |
-                Q(category__name__icontains=search) |
-                Q(product_group__icontains=search) |
-                Q(barcode__icontains=search)
-            )
+            products = smart_product_search(products, search)
 
         # Apply category filter if provided
         if category:
@@ -596,13 +658,7 @@ def get_retailer_products_public(request, retailer_id):
         # Search functionality
         search = request.query_params.get('search')
         if search:
-            products = products.filter(
-                Q(name__icontains=search) |
-                Q(description__icontains=search) |
-                Q(tags__icontains=search) |
-                Q(category__name__icontains=search) |
-                Q(product_group__icontains=search)
-            )
+            products = smart_product_search(products, search)
 
         # Ordering
         ordering = request.query_params.get('ordering', '-created_at')
@@ -657,13 +713,7 @@ def search_products_public(request, retailer_id):
         # Apply search
         search = request.query_params.get('search')
         if search:
-            products = products.filter(
-                Q(name__icontains=search) |
-                Q(description__icontains=search) |
-                Q(tags__icontains=search) |
-                Q(category__name__icontains=search) |
-                Q(product_group__icontains=search)
-            )
+            products = smart_product_search(products, search)
 
         # Apply category filter if provided
         category = request.query_params.get('category')
