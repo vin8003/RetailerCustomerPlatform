@@ -107,26 +107,10 @@ def get_all_category_ids(category_id):
 def smart_product_search(queryset, search_query):
     """
     Enhanced search using TrigramSimilarity with weighted scoring.
-    
-    Weights:
-    - name: 0.4
-    - category__name: 0.2
-    - tags: 0.15
-    - description: 0.1
-    - product_group: 0.1
-    - brand: 0.05
-    
-    Logic:
-    1. Normalize query
-    2. Annotate similarity
-    3. Filter > 0.3 OR barcode match
-    4. Fallback to icontains if no results
-    
-    Performance Impact:
-    - Trigram queries are more expensive than simple icontains.
-    - Annotating every row can be slow on large datasets.
-    - Recommended: Add GinIndex(OpClass(name, name='gin_trgm_ops')) on searched fields.
     """
+    from django.db.models.functions import Coalesce, Cast
+    from django.db.models import Value, TextField
+
     if not search_query:
         return queryset
 
@@ -137,18 +121,18 @@ def smart_product_search(queryset, search_query):
         return queryset
 
     # STEP 2: Annotate similarity
-    # We use Coalesce to handle potential NULLs (e.g. brand, description)
+    # We use Coalesce to handle potential NULLs (e.g. brand, description, product_group)
+    # Cast tags (JSONField) to TextField for TrigramSimilarity
     similarity = (
         TrigramSimilarity('name', query) * 0.4 +
         TrigramSimilarity('category__name', query) * 0.2 +
-        TrigramSimilarity('tags', query) * 0.15 +
+        Coalesce(TrigramSimilarity(Cast('tags', TextField()), query), Value(0.0)) * 0.15 +
         TrigramSimilarity('description', query) * 0.1 +
-        TrigramSimilarity('product_group', query) * 0.1 +
+        Coalesce(TrigramSimilarity('product_group', query), Value(0.0)) * 0.1 +
         Coalesce(TrigramSimilarity('brand__name', query), Value(0.0)) * 0.05
     )
 
     # STEP 3: Combine and Filter
-    # Barcode remains exact/partial match (not weighted)
     qs_smart = queryset.annotate(
         similarity_score=similarity
     ).filter(
@@ -160,9 +144,7 @@ def smart_product_search(queryset, search_query):
     qs_smart = qs_smart.order_by('-similarity_score', 'name')
 
     # STEP 5: Fallback if no results found
-    # We use exists() to check. Note: This causes a query.
     if not qs_smart.exists():
-        # Fallback to original icontains logic
         return queryset.filter(
             Q(name__icontains=query) |
             Q(description__icontains=query) |
