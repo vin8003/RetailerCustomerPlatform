@@ -108,70 +108,8 @@ def add_to_cart(request):
         if serializer.is_valid():
             cart_item = serializer.save()
             
-            # Auto-add free items for Same Product BXGY (User Request: "1 add krne pe 2 auto add ho")
-            try:
-                from offers.models import Offer
-                from django.utils import timezone
-                from django.db.models import Q
-                
-                now = timezone.now()
-                # Find active Same Product BXGY offers
-                active_offers = Offer.objects.filter(
-                    retailer=cart_item.cart.retailer,
-                    offer_type='bxgy',
-                    bxgy_strategy='same_product',
-                    is_active=True,
-                    start_date__lte=now
-                ).filter(
-                    Q(end_date__isnull=True) | Q(end_date__gte=now)
-                ).order_by('-priority')
-                
-                product = cart_item.product
-                
-                for offer in active_offers:
-                    targets = offer.targets.all()
-                    if not targets:
-                        continue
-                        
-                    is_match = False
-                    is_excluded = False
-                    
-                    for target in targets:
-                        if target.is_excluded:
-                            if target.target_type == 'product' and target.product_id == product.id:
-                                is_excluded = True
-                            elif target.target_type == 'category' and target.category_id == product.category_id:
-                                is_excluded = True
-                            elif target.target_type == 'brand' and target.brand_id == product.brand_id:
-                                is_excluded = True
-                        else:
-                            if target.target_type == 'all_products':
-                                is_match = True
-                            elif target.target_type == 'product' and target.product_id == product.id:
-                                is_match = True
-                            elif target.target_type == 'category' and target.category_id == product.category_id:
-                                is_match = True
-                            elif target.target_type == 'brand' and target.brand_id == product.brand_id:
-                                is_match = True
-                    
-                    if is_match and not is_excluded:
-                        # Logic: If item quantity reaches Buy Quantity multiple, add Get Quantity
-                        # e.g., Buy 2 Get 2 (Group 4).
-                        # Qty 2 -> Remainder 2 >= 2. Add 2 -> Qty 4.
-                        # Qty 6 -> Remainder 2 >= 2. Add 2 -> Qty 8.
-                        if offer.buy_quantity and offer.get_quantity:
-                            group_size = offer.buy_quantity + offer.get_quantity
-                            remainder = cart_item.quantity % group_size
-                            
-                            if remainder >= offer.buy_quantity:
-                                needed = group_size - remainder
-                                cart_item.quantity += needed
-                                cart_item.save()
-                                logger.info(f"Auto-added {needed} free items for offer {offer.name} to product {product.name} (Total: {cart_item.quantity})")
-                                break # Apply top priority offer only
-            
-            except Exception as e:
-                logger.error(f"Error processing auto-add offers: {str(e)}")
+            # Auto-add free items for Same Product BXGY
+            _apply_same_product_auto_add(cart_item, request.user)
 
             # Return updated cart
             cart = cart_item.cart
@@ -217,6 +155,9 @@ def update_cart_item(request, item_id):
         
         if serializer.is_valid():
             cart_item = serializer.save()
+            
+            # Apply Same Product Auto-Add Logic
+            _apply_same_product_auto_add(cart_item, request.user)
             
             # Return updated cart
             cart = cart_item.cart
@@ -543,3 +484,73 @@ def get_cart_count(request):
             {'error': 'Internal server error'}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+def _apply_same_product_auto_add(cart_item, user):
+    """
+    Helper function to apply 'Same Product' Buy X Get Y logic.
+    Automatically adds free items if the quantity threshold is met.
+    """
+    try:
+        from offers.models import Offer
+        from django.utils import timezone
+        from django.db.models import Q
+        
+        now = timezone.now()
+        # Find active Same Product BXGY offers
+        active_offers = Offer.objects.filter(
+            retailer=cart_item.cart.retailer,
+            offer_type='bxgy',
+            bxgy_strategy='same_product',
+            is_active=True,
+            start_date__lte=now
+        ).filter(
+            Q(end_date__isnull=True) | Q(end_date__gte=now)
+        ).order_by('-priority')
+        
+        product = cart_item.product
+        
+        for offer in active_offers:
+            targets = offer.targets.all()
+            if not targets:
+                continue
+                
+            is_match = False
+            is_excluded = False
+            
+            for target in targets:
+                if target.is_excluded:
+                    if target.target_type == 'product' and target.product_id == product.id:
+                        is_excluded = True
+                    elif target.target_type == 'category' and target.category_id == product.category_id:
+                        is_excluded = True
+                    elif target.target_type == 'brand' and target.brand_id == product.brand_id:
+                        is_excluded = True
+                else:
+                    if target.target_type == 'all_products':
+                        is_match = True
+                    elif target.target_type == 'product' and target.product_id == product.id:
+                        is_match = True
+                    elif target.target_type == 'category' and target.category_id == product.category_id:
+                        is_match = True
+                    elif target.target_type == 'brand' and target.brand_id == product.brand_id:
+                        is_match = True
+            
+            if is_match and not is_excluded:
+                # Logic: If item quantity reaches Buy Quantity multiple, add Get Quantity
+                # e.g., Buy 2 Get 2 (Group 4).
+                # Qty 2 -> Remainder 2 >= 2. Add 2 -> Qty 4.
+                # Qty 6 -> Remainder 2 >= 2. Add 2 -> Qty 8.
+                if offer.buy_quantity and offer.get_quantity:
+                    group_size = offer.buy_quantity + offer.get_quantity
+                    remainder = cart_item.quantity % group_size
+                    
+                    if remainder >= offer.buy_quantity:
+                        needed = group_size - remainder
+                        cart_item.quantity += needed
+                        cart_item.save()
+                        logger.info(f"Auto-added {needed} free items for offer {offer.name} to product {product.name} (Total: {cart_item.quantity})")
+                        break # Apply top priority offer only
+    
+    except Exception as e:
+        logger.error(f"Error processing auto-add offers: {str(e)}")

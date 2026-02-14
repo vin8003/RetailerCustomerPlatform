@@ -203,5 +203,35 @@ def run_test():
     else:
         print(f"FAIL: Adding 1+1 resulted in {obj.quantity}. Expected 4.")
 
+    # Test 3: Explicit Update via API Simulation
+    # Simulate what happens when user clicks "+" button in UI (PUT/PATCH to update_cart_item)
+    print("\nTest 3: User updates quantity via Update API (Simulated)...")
+    cart.items.all().delete()
+    
+    # Start with 1
+    item = CartItem.objects.create(cart=cart, product=p4, quantity=1)
+    print(f"Initial Qty: {item.quantity}")
+    
+    # Simulate Update: User ensures they want 2.
+    # In the view 'update_cart_item', the serializer update is called.
+    # We need to verify if that view has the logic.
+    # Since we can't easily call the view directly here without RequestFactory, 
+    # we will mimic the view's current behavior: simple save.
+    
+    print("Simulating Update View behavior (Simple Save)...")
+    item.quantity = 2
+    item.save()
+    
+    # Simulate the View Logic: Call the helper function explicitly
+    from cart.views import _apply_same_product_auto_add
+    _apply_same_product_auto_add(item, retailer.user) # Mock user
+    
+    # Check if auto-add happened
+    item.refresh_from_db()
+    if item.quantity == 4:
+         print("PASS: Update triggered auto-add.")
+    else:
+         print(f"FAIL: Update resulted in {item.quantity}. Expected 4 (Auto-add missing in Update logic).")
+
 if __name__ == "__main__":
     run_test()
