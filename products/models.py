@@ -235,7 +235,7 @@ class Product(models.Model):
             models.Index(fields=['created_at']),
             models.Index(fields=['is_featured']),
             GinIndex(
-                SearchVector('name', 'product_group', 'description', 'tags'),
+                SearchVector('name', 'product_group', 'description', 'tags', config='english'),
                 name='product_search_vector_idx'
             ),
         ]
