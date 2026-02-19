@@ -5,6 +5,8 @@ from rest_framework.pagination import PageNumberPagination
 from django.db.models import Count, Sum, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.core.mail import send_mail
+from django.conf import settings
 from datetime import timedelta
 import logging
 
@@ -1015,4 +1017,44 @@ def toggle_blacklist(request):
             {'error': 'Internal server error'}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def send_feedback(request):
+    """
+    Send feedback email
+    """
+    try:
+        user = request.user
+        data = request.data
+        retailer_id = data.get('retailer_id', 'N/A')
+        message = data.get('message')
+        
+        if not message:
+             return Response({'error': 'Message is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        subject = f"New Feedback from {user.first_name} {user.last_name}"
+        email_body = f"""
+        Customer Name: {user.first_name} {user.last_name}
+        Customer Email: {user.email}
+        Retailer ID: {retailer_id}
+        Date & Time: {timezone.now()}
+        
+        Feedback:
+        {message}
+        """
+        
+        send_mail(
+            subject,
+            email_body,
+            settings.DEFAULT_FROM_EMAIL,
+            ['ordereasy.win@gmail.com'],
+            fail_silently=False,
+        )
+        
+        return Response({'message': 'Feedback sent successfully'}, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error sending feedback: {str(e)}")
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 

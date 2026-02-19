@@ -36,5 +36,6 @@ urlpatterns = [
     
     # Referral
     path('referral/apply/', views.apply_referral_code, name='apply_referral_code'),
-    path('referral/stats/', views.get_referral_stats, name='get_referral_stats'),
+    # Feedback
+    path('feedback/', views.send_feedback, name='send_feedback'),
 ]
