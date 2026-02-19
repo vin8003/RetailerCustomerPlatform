@@ -830,6 +830,16 @@ def send_order_message(request, order_id):
         
         # Send notification to recipient
         if recipient:
+            # Create persistent notification for Customer
+            if hasattr(recipient, 'customer_profile'): # Check if recipient is a customer
+                from customers.models import CustomerNotification
+                CustomerNotification.objects.create(
+                    customer=recipient,
+                    notification_type='order_update',
+                    title=f"New Message: Order #{order.order_number}",
+                    message=f"New message from {user.first_name or user.username}: {message_text[:50]}{'...' if len(message_text) > 50 else ''}"
+                )
+
             send_push_notification(
                 user=recipient,
                 title=f"Message from {user.first_name or user.username}",
@@ -912,6 +922,20 @@ def mark_chat_read(request, order_id):
             
         # Mark all messages NOT sent by me as read
         order.chat_messages.exclude(sender=user).filter(is_read=False).update(is_read=True)
+
+        # Also mark related persistent notifications as read for Customer
+        if user.user_type == 'customer':
+            from customers.models import CustomerNotification
+            # Try to match notifications related to this order. 
+            # Title format: "New Message: Order #{order.order_number}"
+            # or "Order #{self.order_number} Update"
+            
+            # Use icontains for broader matching
+            CustomerNotification.objects.filter(
+                customer=user, 
+                title__icontains=order.order_number,
+                is_read=False
+            ).update(is_read=True)
         
         return Response({'status': 'ok'})
         
