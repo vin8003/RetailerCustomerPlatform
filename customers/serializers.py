@@ -112,12 +112,31 @@ class CustomerNotificationSerializer(serializers.ModelSerializer):
     """
     Serializer for customer notifications
     """
+    order_id = serializers.SerializerMethodField()
+    order_number = serializers.SerializerMethodField()
+
     class Meta:
         model = CustomerNotification
         fields = [
-            'id', 'notification_type', 'title', 'message', 'is_read', 'created_at'
+            'id', 'notification_type', 'title', 'message', 'is_read', 'created_at',
+            'order_id', 'order_number'
         ]
         read_only_fields = ['id', 'created_at']
+
+    def get_order_number(self, obj):
+        import re
+        # Extract order number from title (e.g. "Order #ORD-123...")
+        match = re.search(r'Order #([A-Za-z0-9-]+)', obj.title)
+        return match.group(1) if match else None
+
+    def get_order_id(self, obj):
+        order_number = self.get_order_number(obj)
+        if order_number:
+            from orders.models import Order
+            # efficient lookup
+            order = Order.objects.filter(order_number=order_number, customer=obj.customer).values('id').first()
+            return order['id'] if order else None
+        return None
 
 
 class CustomerDashboardSerializer(serializers.Serializer):
