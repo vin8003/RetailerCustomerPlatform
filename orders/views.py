@@ -570,6 +570,19 @@ def get_order_stats(request):
                 'created_at': order.created_at
             })
         
+        recent_feedbacks = OrderFeedback.objects.filter(
+            order__retailer=retailer
+        ).select_related('customer').order_by('-created_at')[:5]
+        
+        recent_reviews_data = []
+        for feedback in recent_feedbacks:
+            recent_reviews_data.append({
+                'rating': feedback.overall_rating,
+                'customer_name': feedback.customer.first_name or feedback.customer.username,
+                'comment': feedback.comment,
+                'created_at': feedback.created_at
+            })
+            
         stats_data = {
             'total_orders': stats['total_orders'] or 0,
             'pending_orders': stats['pending_orders'] or 0,
@@ -584,16 +597,64 @@ def get_order_stats(request):
             'recent_orders': recent_orders_data,
             'total_products': total_products,
             'average_rating': float(retailer.average_rating),
-            'recent_reviews': RetailerReviewSerializer(
-                RetailerReview.objects.filter(retailer=retailer).select_related('customer').order_by('-created_at')[:5],
-                many=True
-            ).data
+            'recent_reviews': recent_reviews_data
         }
         
         serializer = OrderStatsSerializer(stats_data)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     except Exception as e:
+        return Response(
+            {'error': 'Internal server error'}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def get_retailer_reviews(request):
+    """
+    Get all customer reviews/feedback for a retailer
+    """
+    try:
+        if request.user.user_type != 'retailer':
+            return Response(
+                {'error': 'Only retailers can access reviews'}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        try:
+            retailer = RetailerProfile.objects.get(user=request.user)
+        except RetailerProfile.DoesNotExist:
+            return Response(
+                {'error': 'Retailer profile not found'}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        reviews = OrderFeedback.objects.filter(
+            order__retailer=retailer
+        ).select_related('customer', 'order').order_by('-created_at')
+        
+        # Pagination
+        paginator = PageNumberPagination()
+        paginator.page_size = 20
+        paginated_reviews = paginator.paginate_queryset(reviews, request)
+        
+        data = []
+        for feedback in paginated_reviews:
+            data.append({
+                'id': feedback.id,
+                'order_number': feedback.order.order_number,
+                'rating': feedback.overall_rating,
+                'customer_name': feedback.customer.first_name or feedback.customer.username,
+                'comment': feedback.comment,
+                'created_at': feedback.created_at
+            })
+            
+        return paginator.get_paginated_response(data)
+    
+    except Exception as e:
+        logger.error(f"Error getting retailer reviews: {str(e)}")
         return Response(
             {'error': 'Internal server error'}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR

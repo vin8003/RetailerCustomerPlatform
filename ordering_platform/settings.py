@@ -91,7 +91,7 @@ WSGI_APPLICATION = 'ordering_platform.wsgi.application'
 # https://docs.djangoproject.com/en/stable/ref/settings/#databases
 import dj_database_url
 
-# use sqlite
+# Use DATABASE_URL from environment, fallback to sqlite
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
@@ -102,6 +102,7 @@ DATABASES = {
         'PORT': '5432',
         'CONN_MAX_AGE': 600,
     }
+
 }
 
 

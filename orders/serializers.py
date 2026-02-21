@@ -32,12 +32,13 @@ class OrderListSerializer(serializers.ModelSerializer):
     items_count = serializers.SerializerMethodField()
     has_customer_feedback = serializers.SerializerMethodField()
     has_retailer_rating = serializers.SerializerMethodField()
+    feedback = serializers.SerializerMethodField()
     
     class Meta:
         model = Order
         fields = [
             'id', 'order_number', 'retailer', 'retailer_name', 'customer_name', 'delivery_mode', 'payment_mode',
-            'status', 'total_amount', 'items_count', 'created_at', 'updated_at', 'has_customer_feedback', 'has_retailer_rating'
+            'status', 'total_amount', 'items_count', 'created_at', 'updated_at', 'has_customer_feedback', 'has_retailer_rating', 'feedback'
         ]
     
     def get_items_count(self, obj):
@@ -73,6 +74,19 @@ class OrderListSerializer(serializers.ModelSerializer):
         except ObjectDoesNotExist:
             return False
 
+    def get_feedback(self, obj):
+        from django.core.exceptions import ObjectDoesNotExist
+        try:
+            if obj.feedback:
+                return {
+                    'overall_rating': obj.feedback.overall_rating,
+                    'comment': obj.feedback.comment,
+                    'created_at': obj.feedback.created_at
+                }
+        except ObjectDoesNotExist:
+            pass
+        return None
+
 
 class OrderDetailSerializer(serializers.ModelSerializer):
     """
@@ -93,6 +107,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     unread_messages_count = serializers.SerializerMethodField()
     has_customer_feedback = serializers.SerializerMethodField()
     has_retailer_rating = serializers.SerializerMethodField()
+    feedback = serializers.SerializerMethodField()
     
     applied_offers = serializers.SerializerMethodField()
     
@@ -107,7 +122,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'delivery_latitude', 'delivery_longitude',
             'items', 'applied_offers', 'created_at', 'updated_at', 'confirmed_at', 'delivered_at',
             'cancelled_at', 'unread_messages_count',
-            'has_customer_feedback', 'has_retailer_rating'
+            'has_customer_feedback', 'has_retailer_rating', 'feedback'
         ]
     
     def get_applied_offers(self, obj):
@@ -128,6 +143,15 @@ class OrderDetailSerializer(serializers.ModelSerializer):
         
         # Count messages NOT sent by me and NOT read
         return obj.chat_messages.exclude(sender=request.user).filter(is_read=False).count()
+
+    def get_feedback(self, obj):
+        if hasattr(obj, 'feedback'):
+            return {
+                'overall_rating': obj.feedback.overall_rating,
+                'comment': obj.feedback.comment,
+                'created_at': obj.feedback.created_at
+            }
+        return None
 
     def get_has_customer_feedback(self, obj):
         return hasattr(obj, 'feedback')
