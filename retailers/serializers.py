@@ -31,7 +31,7 @@ class RetailerProfileSerializer(serializers.ModelSerializer):
     Serializer for retailer profile
     """
     operating_hours = RetailerOperatingHoursSerializer(many=True, read_only=True)
-    categories = RetailerCategorySerializer(many=True, read_only=True)
+    categories = serializers.SerializerMethodField()
     username = serializers.CharField(source='user.username', read_only=True)
     email = serializers.EmailField(source='user.email', read_only=True)
     phone_number = serializers.CharField(source='user.phone_number', read_only=True)
@@ -53,6 +53,11 @@ class RetailerProfileSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'is_verified', 'average_rating', 'total_ratings', 'created_at', 'updated_at']
 
+    def get_categories(self, obj):
+        mappings = obj.categories.all()
+        categories = [mapping.category for mapping in mappings]
+        return RetailerCategorySerializer(categories, many=True).data
+
 
 class RetailerProfileUpdateSerializer(serializers.ModelSerializer):
     """
@@ -61,9 +66,20 @@ class RetailerProfileUpdateSerializer(serializers.ModelSerializer):
     def to_internal_value(self, data):
         # Handle cases where image fields are sent as URLs (meaning no change)
         # We create a mutable copy if it's a QueryDict
-        if hasattr(data, 'dict'):
+        if hasattr(data, 'getlist'):
+            mutable_data = {}
+            for key in data.keys():
+                if key == 'serviceable_pincodes':
+                    mutable_data[key] = data.getlist(key)
+                else:
+                    # For other fields, keep the list if length > 1, else scalar
+                    # DRF handles scalars for list fields natively if not using dict()
+                    lst = data.getlist(key)
+                    mutable_data[key] = lst[0] if len(lst) == 1 else lst
+            data = mutable_data
+        elif hasattr(data, 'dict'):
             data = data.dict()
-        
+            
         for field in ['shop_image', 'upi_qr_code']:
             if field in data and isinstance(data[field], str) and data[field].startswith('http'):
                 data.pop(field)
@@ -105,7 +121,7 @@ class RetailerListSerializer(serializers.ModelSerializer):
     """
     Serializer for retailer list view
     """
-    categories = RetailerCategorySerializer(many=True, read_only=True)
+    categories = serializers.SerializerMethodField()
     distance = serializers.SerializerMethodField()
     
     class Meta:
@@ -124,6 +140,11 @@ class RetailerListSerializer(serializers.ModelSerializer):
             lat, lng = request.user_location
             return obj.get_distance_from(lat, lng)
         return None
+
+    def get_categories(self, obj):
+        mappings = obj.categories.all()
+        categories = [mapping.category for mapping in mappings]
+        return RetailerCategorySerializer(categories, many=True).data
 
 
 class RetailerReviewSerializer(serializers.ModelSerializer):
