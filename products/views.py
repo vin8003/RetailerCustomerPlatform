@@ -2594,3 +2594,182 @@ class DeleteSessionItemView(APIView):
             return Response(status=status.HTTP_204_NO_CONTENT)
         except UploadSessionItem.DoesNotExist:
             return Response({'error': 'Item not found'}, status=status.HTTP_404_NOT_FOUND)
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def get_deals_of_the_day(request, retailer_id):
+    """
+    Get Deals of the Day (highest discount percentage > 0)
+    """
+    try:
+        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        products = Product.objects.filter(
+            retailer=retailer,
+            is_active=True,
+            is_available=True,
+            discount_percentage__gt=0
+        ).select_related('master_product', 'category', 'brand', 'retailer').annotate(
+            average_rating_annotated=Avg('reviews__rating'),
+            review_count_annotated=Count('reviews')
+        ).order_by('-discount_percentage')[:10]
+
+        from offers.models import Offer
+        from django.utils import timezone
+        active_offers = list(Offer.objects.filter(
+            retailer=retailer,
+            is_active=True,
+            start_date__lte=timezone.now()
+        ).filter(
+            Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
+        ).order_by('-priority').prefetch_related('targets'))
+
+        serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error getting deals of the day: {str(e)}")
+        return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def get_budget_buys(request, retailer_id):
+    """
+    Get Budget Buys (price <= 99)
+    """
+    try:
+        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        limit_price = float(request.query_params.get('max_price', 99))
+        products = Product.objects.filter(
+            retailer=retailer,
+            is_active=True,
+            is_available=True,
+            price__lte=limit_price
+        ).select_related('master_product', 'category', 'brand', 'retailer').annotate(
+            average_rating_annotated=Avg('reviews__rating'),
+            review_count_annotated=Count('reviews')
+        ).order_by('price')[:10]
+
+        from offers.models import Offer
+        from django.utils import timezone
+        active_offers = list(Offer.objects.filter(
+            retailer=retailer,
+            is_active=True,
+            start_date__lte=timezone.now()
+        ).filter(
+            Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
+        ).order_by('-priority').prefetch_related('targets'))
+
+        serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error getting budget buys: {str(e)}")
+        return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def get_trending_products(request, retailer_id):
+    """
+    Get Trending Products (velocity based on last 72 hours)
+    """
+    try:
+        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        
+        from django.utils import timezone
+        from datetime import timedelta
+        time_threshold = timezone.now() - timedelta(hours=72)
+        
+        # We rely on orderitem counts in the last 72h, or fallback to review counts + recent creation
+        products = Product.objects.filter(
+            retailer=retailer,
+            is_active=True,
+            is_available=True
+        ).select_related('master_product', 'category', 'brand', 'retailer').annotate(
+            recent_sales=Count('orderitem', filter=Q(orderitem__order__created_at__gte=time_threshold)),
+            average_rating_annotated=Avg('reviews__rating'),
+            review_count_annotated=Count('reviews')
+        ).order_by('-recent_sales', '-review_count_annotated')[:10]
+
+        from offers.models import Offer
+        active_offers = list(Offer.objects.filter(
+            retailer=retailer,
+            is_active=True,
+            start_date__lte=timezone.now()
+        ).filter(
+            Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
+        ).order_by('-priority').prefetch_related('targets'))
+
+        serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error getting trending products: {str(e)}")
+        return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def get_new_arrivals(request, retailer_id):
+    """
+    Get New Arrivals (order by -created_at)
+    """
+    try:
+        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        products = Product.objects.filter(
+            retailer=retailer,
+            is_active=True,
+            is_available=True
+        ).select_related('master_product', 'category', 'brand', 'retailer').annotate(
+            average_rating_annotated=Avg('reviews__rating'),
+            review_count_annotated=Count('reviews')
+        ).order_by('-created_at')[:10]
+
+        from offers.models import Offer
+        from django.utils import timezone
+        active_offers = list(Offer.objects.filter(
+            retailer=retailer,
+            is_active=True,
+            start_date__lte=timezone.now()
+        ).filter(
+            Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
+        ).order_by('-priority').prefetch_related('targets'))
+
+        serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error getting new arrivals: {str(e)}")
+        return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def get_seasonal_picks(request, retailer_id):
+    """
+    Get Seasonal Picks (filter by is_seasonal flag)
+    """
+    try:
+        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        products = Product.objects.filter(
+            retailer=retailer,
+            is_active=True,
+            is_available=True,
+            is_seasonal=True
+        ).select_related('master_product', 'category', 'brand', 'retailer').annotate(
+            average_rating_annotated=Avg('reviews__rating'),
+            review_count_annotated=Count('reviews')
+        ).order_by('-created_at')[:10]
+
+        from offers.models import Offer
+        from django.utils import timezone
+        active_offers = list(Offer.objects.filter(
+            retailer=retailer,
+            is_active=True,
+            start_date__lte=timezone.now()
+        ).filter(
+            Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
+        ).order_by('-priority').prefetch_related('targets'))
+
+        serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error getting seasonal picks: {str(e)}")
+        return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

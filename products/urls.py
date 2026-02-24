@@ -33,6 +33,14 @@ urlpatterns = [
     path('retailer/<int:retailer_id>/best-selling/', views.get_best_selling_products, name='get_best_selling_products'),
     path('retailer/<int:retailer_id>/buy-again/', views.get_buy_again_products, name='get_buy_again_products'),
     path('retailer/<int:retailer_id>/recommended/', views.get_recommended_products, name='get_recommended_products'),
+    
+    # New Discovery Lanes
+    path('retailer/<int:retailer_id>/deals-of-the-day/', views.get_deals_of_the_day, name='get_deals_of_the_day'),
+    path('retailer/<int:retailer_id>/budget-buys/', views.get_budget_buys, name='get_budget_buys'),
+    path('retailer/<int:retailer_id>/trending-now/', views.get_trending_products, name='get_trending_products'),
+    path('retailer/<int:retailer_id>/new-arrivals/', views.get_new_arrivals, name='get_new_arrivals'),
+    path('retailer/<int:retailer_id>/seasonal-picks/', views.get_seasonal_picks, name='get_seasonal_picks'),
+    
     path('retailer/<int:retailer_id>/<int:product_id>/', views.get_product_detail_public, name='get_product_detail_public'),
 
     # Categories and brands

@@ -219,6 +219,7 @@ class Product(models.Model):
     is_featured = models.BooleanField(default=False)
     is_available = models.BooleanField(default=True)
     is_draft = models.BooleanField(default=False)  # For incomplete products
+    is_seasonal = models.BooleanField(default=False) # For Seasonal Picks lane
     
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
@@ -234,6 +235,7 @@ class Product(models.Model):
             models.Index(fields=['price']),
             models.Index(fields=['created_at']),
             models.Index(fields=['is_featured']),
+            models.Index(fields=['is_seasonal']),
             GinIndex(
                 SearchVector('name', 'product_group', 'description', 'tags', config='english'),
                 name='product_search_vector_idx'
