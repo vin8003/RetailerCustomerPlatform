@@ -29,6 +29,7 @@ urlpatterns = [
     path('retailer/<int:retailer_id>/', views.get_retailer_products_public, name='get_retailer_products_public'),
     path('retailer/<int:retailer_id>/search/', views.search_products_public, name='search_products_public'),
     path('retailer/<int:retailer_id>/categories/', views.get_retailer_categories, name='get_retailer_categories'),
+    path('retailer/<int:retailer_id>/categories/<int:category_id>/groups/', views.get_retailer_product_groups_by_category, name='get_retailer_product_groups_by_category'),
     path('retailer/<int:retailer_id>/featured/', views.get_retailer_featured_products, name='get_retailer_featured_products'),
     path('retailer/<int:retailer_id>/best-selling/', views.get_best_selling_products, name='get_best_selling_products'),
     path('retailer/<int:retailer_id>/buy-again/', views.get_buy_again_products, name='get_buy_again_products'),
