@@ -603,6 +603,7 @@ def get_retailer_products_public(request, retailer_id):
         max_price = request.query_params.get('max_price')
         in_stock = request.query_params.get('in_stock')
         offer_id = request.query_params.get('offer_id')
+        product_group = request.query_params.get('product_group')
 
         # Offer filtering
         if offer_id:
@@ -652,6 +653,9 @@ def get_retailer_products_public(request, retailer_id):
                 products = products.filter(category_id__in=category_ids)
             else:
                 products = products.filter(category__name__icontains=category)
+
+        if product_group:
+            products = products.filter(product_group=product_group)
 
         if brand:
             products = products.filter(brand__name__icontains=brand)
@@ -843,6 +847,34 @@ def get_retailer_categories(request, retailer_id):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def get_retailer_product_groups_by_category(request, retailer_id, category_id):
+    """
+    Get all unique product groups for a specific retailer and category (public endpoint).
+    """
+    try:
+        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        category_ids = get_all_category_ids(category_id)
+        
+        groups = Product.objects.filter(
+            retailer=retailer,
+            category_id__in=category_ids,
+            is_active=True,
+            is_available=True,
+            product_group__isnull=False
+        ).exclude(product_group='').values_list('product_group', flat=True).distinct()
+        
+        all_groups = sorted(list(groups))
+        return Response(all_groups, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        logger.error(f"Error getting retailer product groups by category: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 @api_view(['GET'])
 @permission_classes([permissions.AllowAny])
