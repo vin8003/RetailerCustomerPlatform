@@ -38,7 +38,8 @@ class OrderListSerializer(serializers.ModelSerializer):
         model = Order
         fields = [
             'id', 'order_number', 'retailer', 'retailer_name', 'customer_name', 'delivery_mode', 'payment_mode',
-            'status', 'total_amount', 'items_count', 'created_at', 'updated_at', 'has_customer_feedback', 'has_retailer_rating', 'feedback'
+            'status', 'total_amount', 'items_count', 'created_at', 'updated_at', 'has_customer_feedback', 'has_retailer_rating', 'feedback',
+            'preparation_time_minutes', 'estimated_ready_time'
         ]
     
     def get_items_count(self, obj):
@@ -122,7 +123,8 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'delivery_latitude', 'delivery_longitude',
             'items', 'applied_offers', 'created_at', 'updated_at', 'confirmed_at', 'delivered_at',
             'cancelled_at', 'unread_messages_count',
-            'has_customer_feedback', 'has_retailer_rating', 'feedback'
+            'has_customer_feedback', 'has_retailer_rating', 'feedback',
+            'preparation_time_minutes', 'estimated_ready_time'
         ]
     
     def get_applied_offers(self, obj):
@@ -442,6 +444,7 @@ class OrderStatusUpdateSerializer(serializers.Serializer):
     """
     status = serializers.ChoiceField(choices=Order.ORDER_STATUS_CHOICES)
     notes = serializers.CharField(required=False, allow_blank=True)
+    preparation_time_minutes = serializers.IntegerField(required=False, min_value=0, allow_null=True)
     
     def validate_status(self, value):
         """Validate status transition"""
@@ -472,7 +475,16 @@ class OrderStatusUpdateSerializer(serializers.Serializer):
         """Update order status"""
         new_status = validated_data['status']
         notes = validated_data.get('notes', '')
+        preparation_time_minutes = validated_data.get('preparation_time_minutes')
         user = self.context['user']
+        
+        # When order is confirmed, calculate estimated_ready_time if prep_time is provided
+        if new_status == 'confirmed' and preparation_time_minutes is not None:
+            instance.preparation_time_minutes = preparation_time_minutes
+            from datetime import timedelta
+            from django.utils import timezone
+            instance.estimated_ready_time = timezone.now() + timedelta(minutes=preparation_time_minutes)
+            instance.save()
         
         # Update order status
         instance.update_status(new_status, user)

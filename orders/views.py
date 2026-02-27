@@ -1005,3 +1005,88 @@ def mark_chat_read(request, order_id):
     except Exception as e:
         logger.error(f"Error marking read: {e}")
         return Response({'error': 'Internal server error'}, status=500)
+
+
+@api_view(['PATCH'])
+@permission_classes([permissions.IsAuthenticated])
+def update_estimated_time(request, order_id):
+    """
+    Update estimated ready time - only for retailers
+    """
+    try:
+        if request.user.user_type != 'retailer':
+            return Response(
+                {'error': 'Only retailers can update estimated time'}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        try:
+            retailer = RetailerProfile.objects.get(user=request.user)
+            order = get_object_or_404(Order, id=order_id, retailer=retailer)
+        except RetailerProfile.DoesNotExist:
+            return Response(
+                {'error': 'Retailer profile not found'}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+            
+        if order.status not in ['confirmed', 'processing']:
+            return Response(
+                {'error': 'Can only update time for confirmed or processing orders'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        prep_time = request.data.get('preparation_time_minutes')
+        if prep_time is None:
+            return Response(
+                {'error': 'preparation_time_minutes is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        try:
+            prep_time = int(prep_time)
+            if prep_time < 0:
+                raise ValueError()
+        except ValueError:
+            return Response(
+                {'error': 'preparation_time_minutes must be a positive integer'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        # Update order
+        from datetime import timedelta
+        from django.utils import timezone
+        
+        order.preparation_time_minutes = prep_time
+        order.estimated_ready_time = timezone.now() + timedelta(minutes=prep_time)
+        order.save()
+        
+        # Send silent push to customer to refresh order
+        from common.notifications import send_silent_update, send_push_notification
+        
+        send_silent_update(
+            user=order.customer,
+            event_type='order_refresh',
+            data={'order_id': str(order.id)}
+        )
+        
+        send_push_notification(
+            user=order.customer,
+            title=f"Order Update: #{order.order_number}",
+            message=f"The estimated ready time for your order has been updated.",
+            data={
+                'type': 'order_status_update',
+                'order_id': str(order.id),
+                'status': order.status
+            }
+        )
+        
+        serializer = OrderDetailSerializer(order, context={'request': request})
+        logger.info(f"Estimated time updated for order: {order.order_number}")
+        return Response(serializer.data, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        logger.error(f"Error updating estimated time: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
