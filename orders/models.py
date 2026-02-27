@@ -62,6 +62,7 @@ class Order(models.Model):
     # Timing
     preparation_time_minutes = models.IntegerField(null=True, blank=True)
     estimated_ready_time = models.DateTimeField(null=True, blank=True)
+    expected_processing_start = models.DateTimeField(null=True, blank=True)
     
     # Pricing
     subtotal = models.DecimalField(

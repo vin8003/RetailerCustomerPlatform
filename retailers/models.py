@@ -69,6 +69,9 @@ class RetailerProfile(models.Model):
     average_rating = models.DecimalField(max_digits=3, decimal_places=2, default=0)
     total_ratings = models.PositiveIntegerField(default=0)
     
+    # Store Configuration
+    timezone = models.CharField(max_length=50, default='Asia/Kolkata')
+    
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

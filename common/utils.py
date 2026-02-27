@@ -427,3 +427,86 @@ def cleanup_old_files(directory, days=30):
     except Exception as e:
         logger.error(f"Error cleaning up old files: {str(e)}")
         return False
+
+
+def get_retailer_status(retailer):
+    """
+    Calculate if a retailer is currently open and when they will open/close next,
+    based on their timezone and operating hours.
+    """
+    import pytz
+    from datetime import datetime
+    
+    # Get retailer timezone
+    tz_name = getattr(retailer, 'timezone', 'Asia/Kolkata')
+    try:
+        tz = pytz.timezone(tz_name)
+    except pytz.UnknownTimeZoneError:
+        tz = pytz.timezone('Asia/Kolkata')
+        
+    now = datetime.now(tz)
+    current_time = now.time()
+    current_day_str = now.strftime('%A').lower()
+    
+    # Get all operating hours
+    from retailers.models import RetailerOperatingHours
+    hours = RetailerOperatingHours.objects.filter(retailer=retailer)
+    hours_dict = {h.day_of_week: h for h in hours}
+    
+    today_hours = hours_dict.get(current_day_str)
+    
+    is_open = False
+    next_open_time_str = None
+    
+    if today_hours and today_hours.is_open and today_hours.opening_time and today_hours.closing_time:
+        if today_hours.opening_time <= current_time <= today_hours.closing_time:
+            is_open = True
+            
+    if is_open:
+        # We are open. When do we close?
+        next_open_time_str = f"Closes at {today_hours.closing_time.strftime('%I:%M %p')}"
+    else:
+        # We are closed. When do we open next?
+        # Check today first (if it's before today's opening time)
+        if today_hours and today_hours.is_open and today_hours.opening_time and current_time < today_hours.opening_time:
+            next_open_time_str = f"Opens today at {today_hours.opening_time.strftime('%I:%M %p')}"
+        else:
+            # Need to search the next 7 days
+            days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+            current_day_index = days.index(current_day_str)
+            for i in range(1, 8):
+                next_day_index = (current_day_index + i) % 7
+                next_day_str = days[next_day_index]
+                next_day_hours = hours_dict.get(next_day_str)
+                if next_day_hours and next_day_hours.is_open and next_day_hours.opening_time:
+                    day_name = next_day_str.capitalize() if i > 1 else "tomorrow"
+                    next_open_time_str = f"Opens {day_name} at {next_day_hours.opening_time.strftime('%I:%M %p')}"
+                    break
+                    
+    return {
+        'is_open': is_open,
+        'next_status_time': next_open_time_str,
+        'next_open_dt': _get_next_open_dt(now, current_day_str, current_time, hours_dict)
+    }
+
+def _get_next_open_dt(now, current_day_str, current_time, hours_dict):
+    """Helper to return the actual datetime of next opening"""
+    from datetime import timedelta
+    today_hours = hours_dict.get(current_day_str)
+    
+    if today_hours and today_hours.is_open and today_hours.opening_time and current_time < today_hours.opening_time:
+        return now.replace(hour=today_hours.opening_time.hour, minute=today_hours.opening_time.minute, second=0, microsecond=0)
+        
+    days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+    current_day_index = days.index(current_day_str)
+    for i in range(1, 8):
+        next_day_index = (current_day_index + i) % 7
+        next_day_str = days[next_day_index]
+        next_day_hours = hours_dict.get(next_day_str)
+        if next_day_hours and next_day_hours.is_open and next_day_hours.opening_time:
+            target_date = now + timedelta(days=i)
+            return target_date.replace(hour=next_day_hours.opening_time.hour, minute=next_day_hours.opening_time.minute, second=0, microsecond=0)
+    
+    # If no hours configured at all, just return tomorrow 9 AM fallback
+    fallback_date = now + timedelta(days=1)
+    return fallback_date.replace(hour=9, minute=0, second=0, microsecond=0)

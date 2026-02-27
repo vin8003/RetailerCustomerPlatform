@@ -39,7 +39,7 @@ class OrderListSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'order_number', 'retailer', 'retailer_name', 'customer_name', 'delivery_mode', 'payment_mode',
             'status', 'total_amount', 'items_count', 'created_at', 'updated_at', 'has_customer_feedback', 'has_retailer_rating', 'feedback',
-            'preparation_time_minutes', 'estimated_ready_time'
+            'preparation_time_minutes', 'estimated_ready_time', 'expected_processing_start'
         ]
     
     def get_items_count(self, obj):
@@ -124,7 +124,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'items', 'applied_offers', 'created_at', 'updated_at', 'confirmed_at', 'delivered_at',
             'cancelled_at', 'unread_messages_count',
             'has_customer_feedback', 'has_retailer_rating', 'feedback',
-            'preparation_time_minutes', 'estimated_ready_time'
+            'preparation_time_minutes', 'estimated_ready_time', 'expected_processing_start'
         ]
     
     def get_applied_offers(self, obj):
@@ -339,7 +339,16 @@ class OrderCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 f"Minimum order amount is ₹{retailer.minimum_order_amount}"
             )
-        
+            
+        # Calculate expected processing start time
+        from common.utils import get_retailer_status
+        status_info = get_retailer_status(retailer)
+        if status_info.get('is_open'):
+            from django.utils import timezone
+            expected_processing_start = timezone.now()
+        else:
+            expected_processing_start = status_info.get('next_open_dt')
+
         # Create order
         with transaction.atomic():
             order_data = {
@@ -355,6 +364,7 @@ class OrderCreateSerializer(serializers.Serializer):
                 'points_earned': total_points_offer,
                 'total_amount': total_amount,
                 'special_instructions': validated_data.get('special_instructions', ''),
+                'expected_processing_start': expected_processing_start,
             }
             
             if validated_data.get('address_id'):
