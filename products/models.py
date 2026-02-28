@@ -505,3 +505,35 @@ class UploadSessionItem(models.Model):
     
     def __str__(self):
         return f"Item {self.barcode} in Session {self.session.id}"
+
+class SearchTelemetry(models.Model):
+    """
+    Log for search queries to track zero-result searches and popular terms
+    """
+    retailer = models.ForeignKey(
+        'retailers.RetailerProfile', 
+        on_delete=models.CASCADE, 
+        related_name='search_telemetry',
+        null=True,
+        blank=True
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True
+    )
+    query = models.CharField(max_length=255)
+    result_count = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'search_telemetry'
+        indexes = [
+            models.Index(fields=['query']),
+            models.Index(fields=['created_at']),
+            models.Index(fields=['result_count']),
+        ]
+
+    def __str__(self):
+        return f"Search: '{self.query}' - {self.result_count} results"

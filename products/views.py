@@ -104,6 +104,25 @@ def get_all_category_ids(category_id):
     return list(ids_to_collect)
 
 
+def log_search_telemetry(query, result_count, retailer=None, user=None):
+    """Asynchronously log search queries to the database"""
+    if not query:
+        return
+        
+    try:
+        from .models import SearchTelemetry
+        # Create asynchronously using a simple thread context or inline if traffic allows
+        # For simplicity, we create inline here. In a true high-scale env, use Celery.
+        SearchTelemetry.objects.create(
+            query=query[:255],
+            result_count=result_count,
+            retailer=retailer,
+            user=user if user and user.is_authenticated else None
+        )
+    except Exception as e:
+        logger.error(f"Failed to log search telemetry: {str(e)}")
+
+
 def smart_product_search(queryset, search_query):
     """
     Hybrid Smart Search optimized for grocery data.
@@ -111,18 +130,17 @@ def smart_product_search(queryset, search_query):
     Strategy:
     1. Exact/Startswith Match (Highest Priority)
     2. Full-Text Search (Ranked via Weights A-D)
-    3. Fallback to simple icontains
+    3. Trigram Similarity (Fuzzy matching/Typo tolerance)
+    4. Fallback to simple icontains
     
     Weights:
     - A: Name
     - B: Category Name
     - C: Tags, Product Group
     - D: Description
-    
-    Performance:
-    - Uses efficient Postgres SearchVector.
-    - Recommended Index: GinIndex(SearchVector('name', 'category__name', ...))
     """
+    from django.contrib.postgres.search import TrigramSimilarity
+
     if not search_query:
         return queryset
 
@@ -143,9 +161,10 @@ def smart_product_search(queryset, search_query):
     
     search_query_obj = SearchQuery(query)
 
-    # Annotate with Rank and Exact Boosts
+    # Annotate with Rank, Boosts, and Business logic metrics
     qs_smart = queryset.annotate(
         rank_score=SearchRank(vector, search_query_obj),
+        trigram_score=TrigramSimilarity('name', query),
         is_barcode=Case(
             When(barcode__icontains=query, then=Value(1)),
             default=Value(0),
@@ -160,33 +179,50 @@ def smart_product_search(queryset, search_query):
             When(name__istartswith=query, then=Value(1)),
             default=Value(0),
             output_field=IntegerField(),
+        ),
+        in_stock=Case(
+            When(quantity__gt=0, then=Value(1)),
+            default=Value(0),
+            output_field=IntegerField(),
         )
     ).filter(
-        Q(rank_score__gt=0) |
-        Q(is_barcode=1)
+        Q(rank_score__gt=0.05) |  # FTS Match
+        Q(trigram_score__gt=0.2) | # Fuzzy Match (typo tolerance)
+        Q(is_barcode=1) |
+        Q(is_exact=1) |
+        Q(is_startswith=1)
     )
 
-    # STEP 5: Ordering
-    # Priority: Barcode > Exact > Startswith > Rank > Name
+    # STEP 5: Ordering factoring in business logic
+    # Priority: Exact/Barcode > Startswith > In Stock > FTS Rank > Trigram > Discount > Name
     qs_smart = qs_smart.order_by(
         '-is_barcode',
         '-is_exact',
         '-is_startswith',
+        '-in_stock',          # Business Rule: In-stock items first
         '-rank_score',
+        '-trigram_score',
+        '-discount_percentage', # Business Rule: Higher discounts pushed up slightly
         'name'
     )
 
-    # STEP 6: Fallback logic
+    # STEP 6: Fallback logic if FTS/Trigram yields nothing
     if not qs_smart.exists():
         # Fallback to original icontains logic
-        return queryset.filter(
+        return queryset.annotate(
+            in_stock=Case(
+                When(quantity__gt=0, then=Value(1)),
+                default=Value(0),
+                output_field=IntegerField(),
+            )
+        ).filter(
             Q(name__icontains=query) |
             Q(description__icontains=query) |
             Q(tags__icontains=query) |
             Q(category__name__icontains=query) |
             Q(product_group__icontains=query) |
             Q(barcode__icontains=query)
-        )
+        ).order_by('-in_stock', '-discount_percentage', 'name')
     
     return qs_smart
 
@@ -297,7 +333,7 @@ def get_retailer_products(request):
 @permission_classes([permissions.IsAuthenticated])
 def search_products(request):
     """
-    Search products for authenticated retailer with minimal data
+    Search products for authenticated retailer with minimal data and facets
     """
     try:
         if request.user.user_type != 'retailer':
@@ -322,19 +358,39 @@ def search_products(request):
             products = smart_product_search(products, search)
 
         # Apply category filter if provided
+        category = request.query_params.get('category')
         if category:
             if category.isdigit():
                 category_ids = get_all_category_ids(category)
                 products = products.filter(category_id__in=category_ids)
             else:
                 products = products.filter(category__name__icontains=category)
+                
+        # Calculate facets before limiting
+        facets = {
+            'categories': list(products.values('category__id', 'category__name')
+                                    .annotate(count=Count('id'))
+                                    .filter(category__isnull=False)
+                                    .order_by('-count')[:10]),
+            'brands': list(products.values('brand__id', 'brand__name')
+                                .annotate(count=Count('id'))
+                                .filter(brand__isnull=False)
+                                .order_by('-count')[:10])
+        }
+
+        # Log Telemetry asynchronously
+        if search:
+            log_search_telemetry(search, products.count(), retailer=retailer, user=request.user)
 
         # Limit results for search
         limit = int(request.query_params.get('limit', 50))
         products = products[:limit]
 
         serializer = ProductSearchSerializer(products, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response({
+            'results': serializer.data,
+            'facets': facets
+        }, status=status.HTTP_200_OK)
 
     except Exception as e:
         logger.error(f"Error searching retailer products: {str(e)}")
@@ -744,12 +800,31 @@ def search_products_public(request, retailer_id):
             else:
                 products = products.filter(category__name__icontains=category)
 
+        # Calculate facets before limiting
+        facets = {
+            'categories': list(products.values('category__id', 'category__name')
+                                    .annotate(count=Count('id'))
+                                    .filter(category__isnull=False)
+                                    .order_by('-count')[:10]),
+            'brands': list(products.values('brand__id', 'brand__name')
+                                .annotate(count=Count('id'))
+                                .filter(brand__isnull=False)
+                                .order_by('-count')[:10])
+        }
+
+        # Log Telemetry asynchronously
+        if search:
+            log_search_telemetry(search, products.count(), retailer=retailer, user=request.user if request.user.is_authenticated else None)
+
         # Limit results for search
         limit = int(request.query_params.get('limit', 50))
         products = products[:limit]
 
         serializer = ProductSearchSerializer(products, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response({
+            'results': serializer.data,
+            'facets': facets
+        }, status=status.HTTP_200_OK)
 
     except Exception as e:
         logger.error(f"Error searching public retailer products: {str(e)}")
