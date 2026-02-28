@@ -254,3 +254,11 @@ class ResetPasswordEmailConfirmSerializer(serializers.Serializer):
             raise serializers.ValidationError({"new_password": "Passwords don't match"})
         return attrs
 
+
+class EmailVerifySerializer(serializers.Serializer):
+    """
+    Serializer for email verification (OTP verification)
+    """
+    email = serializers.EmailField()
+    otp_code = serializers.CharField(max_length=6)
+

@@ -18,7 +18,8 @@ from .serializers import (
     OTPVerificationSerializer, UserProfileSerializer, TokenSerializer,
     PasswordChangeSerializer, RequestPhoneVerificationSerializer,
     ForgotPasswordSerializer, ResetPasswordConfirmSerializer,
-    ForgotPasswordEmailSerializer, ResetPasswordEmailConfirmSerializer
+    ForgotPasswordEmailSerializer, ResetPasswordEmailConfirmSerializer,
+    EmailVerifySerializer
 )
 from .utils import generate_otp, send_sms_otp, verify_otp_helper, verify_firebase_id_token, send_email_otp
 
@@ -156,16 +157,30 @@ def customer_signup(request):
         if serializer.is_valid():
             user = serializer.save()
             
-            # Customer is active but phone not verified
+            # Customer is active but phone and email not verified
             user.is_active = True
             user.is_phone_verified = False
+            user.is_email_verified = False
             user.save()
+
+            # Generate and send Email OTP
+            otp_code = generate_otp()
+            EmailOTPVerification.objects.update_or_create(
+                user=user,
+                email=user.email,
+                defaults={
+                    'otp_code': otp_code,
+                    'is_verified': False,
+                    'created_at': timezone.now()
+                }
+            )
+            send_email_otp(user.email, otp_code)
 
             # Generate JWT tokens
             refresh = RefreshToken.for_user(user)
 
             response_data = {
-                'message': 'Customer registered successfully. Please verify your phone number.',
+                'message': 'Customer registered successfully. Please verify your email with the OTP sent.',
                 'user': UserProfileSerializer(user).data,
                 'tokens': {
                     'access': str(refresh.access_token),
@@ -203,6 +218,17 @@ def customer_login(request):
                 return Response(
                     {'error': 'Invalid user type for customer login'},
                     status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Check if email is verified
+            if not user.is_email_verified:
+                return Response(
+                    {
+                        'error': 'Email not verified. Please verify your email to continue.',
+                        'email': user.email,
+                        'code': 'email_not_verified'
+                    },
+                    status=status.HTTP_403_FORBIDDEN
                 )
 
             # Generate JWT tokens
@@ -1007,3 +1033,84 @@ def reset_password_email(request):
             {'error': 'Internal server error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+def verify_email_otp(request):
+    """
+    Verify email OTP for signup
+    """
+    try:
+        serializer = EmailVerifySerializer(data=request.data)
+        if serializer.is_valid():
+            email = serializer.validated_data['email']
+            otp_code = serializer.validated_data['otp_code']
+            
+            try:
+                user = User.objects.get(email=email)
+                otp_ver = EmailOTPVerification.objects.filter(
+                    user=user, 
+                    email=email, 
+                    otp_code=otp_code,
+                    is_verified=False
+                ).latest('created_at')
+                
+                # Check expiry
+                if otp_ver.is_expired():
+                    return Response({'error': 'OTP has expired'}, status=status.HTTP_400_BAD_REQUEST)
+                
+                otp_ver.is_verified = True
+                otp_ver.save()
+                
+                user.is_email_verified = True
+                user.save()
+                
+                logger.info(f"Email verified for user: {user.username}")
+                return Response({'message': 'Email verified successfully'}, status=status.HTTP_200_OK)
+                
+            except (User.DoesNotExist, EmailOTPVerification.DoesNotExist):
+                return Response({'error': 'Invalid email or OTP'}, status=status.HTTP_400_BAD_REQUEST)
+                
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Error in verify_email_otp: {str(e)}")
+        return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+def resend_email_otp(request):
+    """
+    Resend email OTP
+    """
+    try:
+        email = request.data.get('email')
+        if not email:
+            return Response({'error': 'Email is required'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        try:
+            user = User.objects.get(email=email)
+            
+            # Generate new OTP
+            otp_code, secret_key = generate_otp()
+            
+            # Use same pattern as forgot password for consistency
+            EmailOTPVerification.objects.filter(user=user).delete()
+            EmailOTPVerification.objects.create(
+                user=user,
+                email=email,
+                otp_code=otp_code,
+                secret_key=secret_key,
+                expires_at=timezone.now() + timezone.timedelta(seconds=settings.OTP_EXPIRY_TIME)
+            )
+            
+            send_email_otp(email, otp_code)
+            logger.info(f"Email OTP resent to {email}")
+            return Response({'message': 'OTP resent successfully'}, status=status.HTTP_200_OK)
+            
+        except User.DoesNotExist:
+            return Response({'error': 'User not found'}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Error in resend_email_otp: {str(e)}")
+        return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

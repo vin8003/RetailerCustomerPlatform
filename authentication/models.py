@@ -19,6 +19,7 @@ class User(AbstractUser):
     )
     phone_number = models.CharField(max_length=15, unique=True, null=True, blank=True)
     is_phone_verified = models.BooleanField(default=False)
+    is_email_verified = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
