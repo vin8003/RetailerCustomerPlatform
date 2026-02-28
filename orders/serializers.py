@@ -344,8 +344,7 @@ class OrderCreateSerializer(serializers.Serializer):
         from common.utils import get_retailer_status
         status_info = get_retailer_status(retailer)
         if status_info.get('is_open'):
-            from django.utils import timezone
-            expected_processing_start = timezone.now()
+            expected_processing_start = None
         else:
             expected_processing_start = status_info.get('next_open_dt')
 
