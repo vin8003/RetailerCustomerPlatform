@@ -28,4 +28,6 @@ urlpatterns = [
     # Password Reset
     path('password/forgot/', views.forgot_password, name='forgot_password'),
     path('password/reset/', views.reset_password, name='reset_password'),
+    path('password/email/forgot/', views.forgot_password_email, name='forgot_password_email'),
+    path('password/email/reset/', views.reset_password_email, name='reset_password_email'),
 ]

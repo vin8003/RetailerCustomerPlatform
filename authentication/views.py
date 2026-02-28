@@ -10,16 +10,17 @@ from django.core.cache import cache
 from django.conf import settings
 import logging
 
-from .models import User, OTPVerification
+from .models import User, OTPVerification, EmailOTPVerification
 from fcm_django.models import FCMDevice
 from retailers.models import RetailerProfile, RetailerOperatingHours
 from .serializers import (
     UserRegistrationSerializer, UserLoginSerializer, OTPRequestSerializer,
     OTPVerificationSerializer, UserProfileSerializer, TokenSerializer,
     PasswordChangeSerializer, RequestPhoneVerificationSerializer,
-    ForgotPasswordSerializer, ResetPasswordConfirmSerializer
+    ForgotPasswordSerializer, ResetPasswordConfirmSerializer,
+    ForgotPasswordEmailSerializer, ResetPasswordEmailConfirmSerializer
 )
-from .utils import generate_otp, send_sms_otp, verify_otp_helper, verify_firebase_id_token
+from .utils import generate_otp, send_sms_otp, verify_otp_helper, verify_firebase_id_token, send_email_otp
 
 logger = logging.getLogger(__name__)
 
@@ -883,6 +884,125 @@ def reset_password(request):
 
     except Exception as e:
         logger.error(f"Error in reset_password: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+@throttle_classes([OTPThrottle])
+def forgot_password_email(request):
+    """
+    Request password reset OTP via email
+    """
+    try:
+        serializer = ForgotPasswordEmailSerializer(data=request.data)
+        if serializer.is_valid():
+            email = serializer.validated_data['email']
+            user = User.objects.get(email=email)
+
+            # Generate OTP
+            otp_code, secret_key = generate_otp()
+
+            # Update/Create verification record
+            EmailOTPVerification.objects.filter(user=user).delete()
+            
+            EmailOTPVerification.objects.create(
+                user=user,
+                email=email,
+                otp_code=otp_code,
+                secret_key=secret_key,
+                expires_at=timezone.now() + timezone.timedelta(seconds=settings.OTP_EXPIRY_TIME)
+            )
+
+            # Send OTP
+            email_sent = send_email_otp(email, otp_code)
+
+            if email_sent:
+                logger.info(f"Password reset OTP sent to {email}")
+                return Response({
+                    'message': 'OTP sent successfully to email',
+                    'email': email,
+                    'expires_in': settings.OTP_EXPIRY_TIME
+                }, status=status.HTTP_200_OK)
+            else:
+                return Response(
+                    {'error': 'Failed to send OTP email'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    except Exception as e:
+        logger.error(f"Error in forgot_password_email: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+@throttle_classes([OTPThrottle])
+def reset_password_email(request):
+    """
+    Verify Email OTP and reset password
+    """
+    try:
+        serializer = ResetPasswordEmailConfirmSerializer(data=request.data)
+        if serializer.is_valid():
+            email = serializer.validated_data['email']
+            otp_code = serializer.validated_data.get('otp_code')
+            new_password = serializer.validated_data['new_password']
+
+            # Verify OTP
+            try:
+                otp_verification = EmailOTPVerification.objects.get(
+                    email=email,
+                    is_verified=False
+                )
+            except EmailOTPVerification.DoesNotExist:
+                return Response(
+                    {'error': 'Invalid or expired OTP request'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if otp_verification.is_expired():
+                return Response(
+                    {'error': 'OTP has expired'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Using direct string match for email OTPs without secret key legacy
+            # (which verify_otp_helper falls back to if expected_otp is not passed, 
+            #  but let's do a direct verification here to ensure it uses the db's otp_code strictly)
+            if str(otp_verification.otp_code) != str(otp_code):
+                otp_verification.attempts += 1
+                otp_verification.save()
+                return Response(
+                    {'error': 'Invalid OTP'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # OTP Valid, change password
+            user = otp_verification.user
+            user.set_password(new_password)
+            user.save()
+
+            # Cleanup OTP
+            otp_verification.delete()
+
+            logger.info(f"Password reset successful for email: {email}")
+            return Response(
+                {'message': 'Password reset successfully. Please login with your new password.'},
+                status=status.HTTP_200_OK
+            )
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    except Exception as e:
+        logger.error(f"Error in reset_password_email: {str(e)}")
         return Response(
             {'error': 'Internal server error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
