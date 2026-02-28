@@ -197,6 +197,41 @@ def send_sms_otp(phone_number, otp_code):
         return False
 
 
+def _send_email_otp_thread(email, otp_code):
+    """
+    Internal function to send email in a background thread using django.core.mail
+    """
+    from django.core.mail import send_mail
+    from django.conf import settings
+    try:
+        subject = 'Your Password Reset OTP'
+        message = f'Your OTP code for password reset is {otp_code}. It is valid for 5 minutes. Do not share this code.'
+        from_email = settings.DEFAULT_FROM_EMAIL
+        recipient_list = [email]
+        
+        send_mail(subject, message, from_email, recipient_list, fail_silently=False)
+        logger.info(f"Email OTP sent successfully to {email}")
+    except Exception as e:
+        logger.error(f"Error sending Email OTP in thread: {str(e)}")
+
+def send_email_otp(email, otp_code):
+    """
+    Send OTP via Email using Django's email backend.
+    Runs in a separate thread.
+    """
+    try:
+        import threading
+        thread = threading.Thread(
+            target=_send_email_otp_thread,
+            args=(email, otp_code)
+        )
+        thread.start()
+        return True
+    except Exception as e:
+        logger.error(f"Error initiating Email OTP thread: {str(e)}")
+        return False
+
+
 def clean_phone_number(phone_number):
     """
     Clean and format phone number

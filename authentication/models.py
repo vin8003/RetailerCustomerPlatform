@@ -19,6 +19,7 @@ class User(AbstractUser):
     )
     phone_number = models.CharField(max_length=15, unique=True, null=True, blank=True)
     is_phone_verified = models.BooleanField(default=False)
+    is_email_verified = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -86,3 +87,36 @@ class UserSession(models.Model):
     
     def __str__(self):
         return f"Session for {self.user.username}"
+
+
+class EmailOTPVerification(models.Model):
+    """
+    Model to store OTP verification data for email authentication/password resetting
+    """
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    email = models.EmailField()
+    otp_code = models.CharField(max_length=6)
+    secret_key = models.CharField(max_length=32)
+    is_verified = models.BooleanField(default=False)
+    attempts = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    
+    class Meta:
+        db_table = 'email_otp_verification'
+        indexes = [
+            models.Index(fields=['email']),
+            models.Index(fields=['expires_at']),
+        ]
+    
+    def is_expired(self):
+        """Check if OTP has expired"""
+        return timezone.now() > self.expires_at
+    
+    def can_retry(self):
+        """Check if user can retry OTP verification"""
+        from django.conf import settings
+        return self.attempts < settings.OTP_MAX_ATTEMPTS
+    
+    def __str__(self):
+        return f"Email OTP for {self.email}"
