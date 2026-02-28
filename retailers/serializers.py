@@ -31,6 +31,8 @@ class RetailerProfileSerializer(serializers.ModelSerializer):
     Serializer for retailer profile
     """
     operating_hours = RetailerOperatingHoursSerializer(many=True, read_only=True)
+    is_currently_open = serializers.SerializerMethodField()
+    next_open_time = serializers.SerializerMethodField()
     categories = serializers.SerializerMethodField()
     username = serializers.CharField(source='user.username', read_only=True)
     email = serializers.EmailField(source='user.email', read_only=True)
@@ -49,9 +51,19 @@ class RetailerProfileSerializer(serializers.ModelSerializer):
             'offers_pickup', 'delivery_radius', 'serviceable_pincodes', 'minimum_order_amount',
             'delivery_charge', 'free_delivery_threshold',
             'is_verified', 'is_active', 'average_rating', 'total_ratings',
-            'operating_hours', 'categories', 'created_at', 'updated_at'
+            'operating_hours', 'is_currently_open', 'next_open_time', 'categories', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'is_verified', 'average_rating', 'total_ratings', 'created_at', 'updated_at']
+
+    def get_is_currently_open(self, obj):
+        from common.utils import get_retailer_status
+        status = get_retailer_status(obj)
+        return status.get('is_open', False)
+
+    def get_next_open_time(self, obj):
+        from common.utils import get_retailer_status
+        status = get_retailer_status(obj)
+        return status.get('next_status_time', None)
 
     def get_categories(self, obj):
         mappings = obj.categories.all()
@@ -123,6 +135,8 @@ class RetailerListSerializer(serializers.ModelSerializer):
     """
     categories = serializers.SerializerMethodField()
     distance = serializers.SerializerMethodField()
+    is_currently_open = serializers.SerializerMethodField()
+    next_open_time = serializers.SerializerMethodField()
     
     class Meta:
         model = RetailerProfile
@@ -130,8 +144,18 @@ class RetailerListSerializer(serializers.ModelSerializer):
             'id', 'shop_name', 'shop_description', 'shop_image',
             'city', 'state', 'pincode', 'average_rating', 'total_ratings',
             'offers_delivery', 'offers_pickup', 'delivery_radius',
-            'minimum_order_amount', 'categories', 'distance'
+            'minimum_order_amount', 'categories', 'distance', 'is_currently_open', 'next_open_time'
         ]
+    
+    def get_is_currently_open(self, obj):
+        from common.utils import get_retailer_status
+        status = get_retailer_status(obj)
+        return status.get('is_open', False)
+
+    def get_next_open_time(self, obj):
+        from common.utils import get_retailer_status
+        status = get_retailer_status(obj)
+        return status.get('next_status_time', None)
     
     def get_distance(self, obj):
         """Calculate distance from user location if provided"""

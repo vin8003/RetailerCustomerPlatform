@@ -1,3 +1,4 @@
+
 """
 Django settings for ordering_platform project.
 """
@@ -89,9 +90,6 @@ WSGI_APPLICATION = 'ordering_platform.wsgi.application'
 
 # Database
 # https://docs.djangoproject.com/en/stable/ref/settings/#databases
-import dj_database_url
-
-# Use DATABASE_URL from environment, fallback to sqlite
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',

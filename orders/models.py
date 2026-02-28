@@ -59,6 +59,11 @@ class Order(models.Model):
     payment_mode = models.CharField(max_length=20, choices=PAYMENT_MODE_CHOICES)
     status = models.CharField(max_length=50, choices=ORDER_STATUS_CHOICES, default='pending')
     
+    # Timing
+    preparation_time_minutes = models.IntegerField(null=True, blank=True)
+    estimated_ready_time = models.DateTimeField(null=True, blank=True)
+    expected_processing_start = models.DateTimeField(null=True, blank=True)
+    
     # Pricing
     subtotal = models.DecimalField(
         max_digits=10, 

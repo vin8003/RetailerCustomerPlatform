@@ -16,6 +16,7 @@ from .serializers import (
     RetailerProfileSerializer, RetailerProfileUpdateSerializer,
     RetailerListSerializer, RetailerReviewSerializer,
     RetailerCreateReviewSerializer, RetailerOperatingHoursUpdateSerializer,
+    RetailerOperatingHoursSerializer,
     RetailerCategorySerializer, RetailerRewardConfigSerializer
 )
 from common.permissions import IsRetailerOwner, IsCustomerUser
@@ -389,16 +390,16 @@ def create_retailer_review(request, retailer_id):
         )
 
 
-@api_view(['PUT', 'PATCH'])
+@api_view(['GET', 'POST', 'PUT', 'PATCH'])
 @permission_classes([permissions.IsAuthenticated])
 def update_operating_hours(request):
     """
-    Update retailer operating hours - only for retailer users
+    Get or update retailer operating hours - only for retailer users
     """
     try:
         if request.user.user_type != 'retailer':
             return Response(
-                {'error': 'Only retailers can update operating hours'}, 
+                {'error': 'Only retailers can access operating hours'}, 
                 status=status.HTTP_403_FORBIDDEN
             )
         
@@ -409,6 +410,11 @@ def update_operating_hours(request):
                 {'error': 'Retailer profile not found'}, 
                 status=status.HTTP_404_NOT_FOUND
             )
+            
+        if request.method == 'GET':
+            hours = RetailerOperatingHours.objects.filter(retailer=profile).order_by('id')
+            serializer = RetailerOperatingHoursSerializer(hours, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
         
         # Expect list of operating hours
         operating_hours_data = request.data.get('operating_hours', [])

@@ -11,6 +11,7 @@ urlpatterns = [
     path('<int:order_id>/cancel/', views.cancel_order, name='cancel_order'),
     path('<int:order_id>/modify/', views.modify_order, name='modify_order'),
     path('<int:order_id>/confirm_modification/', views.confirm_modification, name='confirm_modification'),
+    path('<int:order_id>/estimated-time/', views.update_estimated_time, name='update_estimated_time'),
     path('stats/', views.get_order_stats, name='get_order_stats'),
     path('retailer-reviews/', views.get_retailer_reviews, name='get_retailer_reviews'),
     
