@@ -10,6 +10,7 @@ from django.http import Http404
 from django.utils import timezone
 from datetime import timedelta
 import logging
+from common.error_utils import format_exception
 
 from .models import Order, OrderItem, OrderStatusLog, OrderFeedback, OrderReturn, OrderChatMessage, RetailerRating
 from .serializers import (
@@ -103,7 +104,7 @@ def place_order(request):
     except Exception as e:
         logger.error(f"Error placing order: {str(e)}")
         return Response(
-            {'error': 'Internal server error'}, 
+            {'error': format_exception(e)}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -177,7 +178,7 @@ def get_current_orders(request):
     except Exception as e:
         logger.error(f"Error getting current orders: {str(e)}")
         return Response(
-            {'error': 'Internal server error'}, 
+            {'error': format_exception(e)}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -265,7 +266,7 @@ def get_order_history(request):
     except Exception as e:
         logger.error(f"Error getting order history: {str(e)}")
         return Response(
-            {'error': 'Internal server error'}, 
+            {'error': format_exception(e)}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -325,7 +326,7 @@ def get_order_detail(request, order_id):
     except Exception as e:
         logger.error(f"Error getting order detail: {str(e)}")
         return Response(
-            {'error': 'Internal server error'}, 
+            {'error': format_exception(e)}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -369,7 +370,7 @@ def update_order_status(request, order_id):
     except Exception as e:
         logger.error(f"Error updating order status: {str(e)}")
         return Response(
-            {'error': 'Internal server error'}, 
+            {'error': format_exception(e)}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -432,7 +433,7 @@ def cancel_order(request, order_id):
     except Exception as e:
         logger.error(f"Error cancelling order: {str(e)}")
         return Response(
-            {'error': 'Internal server error'}, 
+            {'error': format_exception(e)}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -467,7 +468,7 @@ def create_order_feedback(request, order_id):
     except Exception as e:
         logger.error(f"Error creating order feedback: {str(e)}")
         return Response(
-            {'error': 'Internal server error'}, 
+            {'error': format_exception(e)}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -502,7 +503,7 @@ def create_return_request(request, order_id):
     except Exception as e:
         logger.error(f"Error creating return request: {str(e)}")
         return Response(
-            {'error': 'Internal server error'}, 
+            {'error': format_exception(e)}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -605,7 +606,7 @@ def get_order_stats(request):
     
     except Exception as e:
         return Response(
-            {'error': 'Internal server error'}, 
+            {'error': format_exception(e)}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -656,7 +657,7 @@ def get_retailer_reviews(request):
     except Exception as e:
         logger.error(f"Error getting retailer reviews: {str(e)}")
         return Response(
-            {'error': 'Internal server error'}, 
+            {'error': format_exception(e)}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -760,7 +761,7 @@ def modify_order(request, order_id):
     except Exception as e:
         logger.error(f"Error modifying order: {str(e)}")
         return Response(
-            {'error': 'Internal server error'}, 
+            {'error': format_exception(e)}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -821,7 +822,7 @@ def confirm_modification(request, order_id):
     except Exception as e:
         logger.error(f"Error confirming modification: {str(e)}")
         return Response(
-            {'error': 'Internal server error'}, 
+            {'error': format_exception(e)}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -854,7 +855,7 @@ def get_order_chat(request, order_id):
         raise
     except Exception as e:
         logger.error(f"Error getting chat: {e}")
-        return Response({'error': 'Internal server error'}, status=500)
+        return Response({'error': format_exception(e)}, status=500)
 
 
 @api_view(['POST'])
@@ -916,7 +917,7 @@ def send_order_message(request, order_id):
         
     except Exception as e:
         logger.error(f"Error sending message: {e}")
-        return Response({'error': 'Internal server error'}, status=500)
+        return Response({'error': format_exception(e)}, status=500)
 
 
 @api_view(['POST'])
@@ -956,7 +957,7 @@ def create_retailer_rating(request, order_id):
     except Exception as e:
         logger.error(f"Error creating retailer rating: {str(e)}")
         return Response(
-            {'error': 'Internal server error'}, 
+            {'error': format_exception(e)}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -1004,7 +1005,7 @@ def mark_chat_read(request, order_id):
         raise
     except Exception as e:
         logger.error(f"Error marking read: {e}")
-        return Response({'error': 'Internal server error'}, status=500)
+        return Response({'error': format_exception(e)}, status=500)
 
 
 @api_view(['PATCH'])
@@ -1087,6 +1088,6 @@ def update_estimated_time(request, order_id):
     except Exception as e:
         logger.error(f"Error updating estimated time: {str(e)}")
         return Response(
-            {'error': 'Internal server error'}, 
+            {'error': format_exception(e)}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
