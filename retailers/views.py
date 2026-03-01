@@ -7,6 +7,7 @@ from django.shortcuts import get_object_or_404
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 import logging
+from common.error_utils import format_exception
 
 from .models import (
     RetailerProfile, RetailerOperatingHours, RetailerCategory,
@@ -56,7 +57,7 @@ def get_retailer_profile(request):
     except Exception as e:
         logger.error(f"Error getting retailer profile: {str(e)}")
         return Response(
-            {'error': 'Internal server error'}, 
+            {'error': format_exception(e)}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -105,7 +106,7 @@ def create_retailer_profile(request):
     except Exception as e:
         logger.error(f"Error creating retailer profile: {str(e)}")
         return Response(
-            {'error': 'Internal server error'}, 
+            {'error': format_exception(e)}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -148,7 +149,7 @@ def update_retailer_profile(request):
     except Exception as e:
         logger.error(f"Error updating retailer profile: {str(e)}")
         return Response(
-            {'error': 'Internal server error'}, 
+            {'error': format_exception(e)}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -282,7 +283,7 @@ def list_retailers(request):
     except Exception as e:
         logger.error(f"Error listing retailers: {str(e)}")
         return Response(
-            {'error': 'Internal server error'}, 
+            {'error': format_exception(e)}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -301,7 +302,7 @@ def get_retailer_detail(request, retailer_id):
     except Exception as e:
         logger.error(f"Error getting retailer detail: {str(e)}")
         return Response(
-            {'error': 'Internal server error'}, 
+            {'error': format_exception(e)}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -320,7 +321,7 @@ def get_retailer_categories(request):
     except Exception as e:
         logger.error(f"Error getting retailer categories: {str(e)}")
         return Response(
-            {'error': 'Internal server error'}, 
+            {'error': format_exception(e)}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -349,7 +350,7 @@ def get_retailer_reviews(request, retailer_id):
     except Exception as e:
         logger.error(f"Error getting retailer reviews: {str(e)}")
         return Response(
-            {'error': 'Internal server error'}, 
+            {'error': format_exception(e)}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -385,7 +386,7 @@ def create_retailer_review(request, retailer_id):
     except Exception as e:
         logger.error(f"Error creating retailer review: {str(e)}")
         return Response(
-            {'error': 'Internal server error'}, 
+            {'error': format_exception(e)}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -468,7 +469,7 @@ def update_operating_hours(request):
     except Exception as e:
         logger.error(f"Error updating operating hours: {str(e)}")
         return Response(
-            {'error': 'Internal server error'}, 
+            {'error': format_exception(e)}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -521,7 +522,7 @@ def search_retailers(request):
     except Exception as e:
         logger.error(f"Error searching retailers: {str(e)}")
         return Response(
-            {'error': 'Internal server error'}, 
+            {'error': format_exception(e)}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -557,6 +558,6 @@ def manage_reward_configuration(request):
     except Exception as e:
         logger.error(f"Error managing reward config: {str(e)}")
         return Response(
-            {'error': 'Internal server error'}, 
+            {'error': format_exception(e)}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
