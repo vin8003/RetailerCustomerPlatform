@@ -10,6 +10,7 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 import logging
 import json
+from common.error_utils import format_exception
 
 from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -288,7 +289,7 @@ def get_retailer_products(request):
     except Exception as e:
         logger.error(f"Error getting retailer products: {str(e)}")
         return Response(
-            {'error': 'Internal server error'},
+            {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -339,7 +340,7 @@ def search_products(request):
     except Exception as e:
         logger.error(f"Error searching retailer products: {str(e)}")
         return Response(
-            {'error': 'Internal server error'},
+            {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -404,7 +405,7 @@ def create_product(request):
     except Exception as e:
         logger.error(f"Error creating product: {str(e)}")
         return Response(
-            {'error': 'Internal server error'},
+            {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -455,7 +456,7 @@ def get_product_detail(request, product_id):
     except Exception as e:
         logger.error(f"Error getting product detail: {str(e)}")
         return Response(
-            {'error': 'Internal server error'},
+            {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -529,7 +530,7 @@ def update_product(request, product_id):
     except Exception as e:
         logger.error(f"Error updating product: {str(e)}")
         return Response(
-            {'error': 'Internal server error'},
+            {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -571,7 +572,7 @@ def delete_product(request, product_id):
     except Exception as e:
         logger.error(f"Error deleting product: {str(e)}")
         return Response(
-            {'error': 'Internal server error'},
+            {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -710,7 +711,7 @@ def get_retailer_products_public(request, retailer_id):
     except Exception as e:
         logger.error(f"Error getting retailer products: {str(e)}")
         return Response(
-            {'error': 'Internal server error'},
+            {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -754,7 +755,7 @@ def search_products_public(request, retailer_id):
     except Exception as e:
         logger.error(f"Error searching public retailer products: {str(e)}")
         return Response(
-            {'error': 'Internal server error'},
+            {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -843,7 +844,7 @@ def get_retailer_categories(request, retailer_id):
     except Exception as e:
         logger.error(f"Error getting retailer categories: {str(e)}")
         return Response(
-            {'error': 'Internal server error'},
+            {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -872,7 +873,7 @@ def get_retailer_product_groups_by_category(request, retailer_id, category_id):
     except Exception as e:
         logger.error(f"Error getting retailer product groups by category: {str(e)}")
         return Response(
-            {'error': 'Internal server error'},
+            {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -931,7 +932,7 @@ def get_retailer_featured_products(request, retailer_id):
     except Exception as e:
         logger.error(f"Error getting retailer featured products: {str(e)}")
         return Response(
-            {'error': 'Internal server error'},
+            {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -992,7 +993,7 @@ def get_product_detail_public(request, retailer_id, product_id):
     except Exception as e:
         logger.error(f"Error getting product detail: {str(e)}")
         return Response(
-            {'error': 'Internal server error'},
+            {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -1057,7 +1058,7 @@ def upload_products_excel(request):
             except Exception as e:
                 # Update upload record with error
                 upload.status = 'failed'
-                upload.error_log = [{'error': str(e)}]
+                upload.error_log = [{'error': format_exception(e)}]
                 upload.completed_at = timezone.now()
                 upload.save()
 
@@ -1072,7 +1073,7 @@ def upload_products_excel(request):
     except Exception as e:
         logger.error(f"Error uploading products: {str(e)}")
         return Response(
-            {'error': 'Internal server error'},
+            {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -1091,7 +1092,7 @@ def get_product_categories(request):
     except Exception as e:
         logger.error(f"Error getting product categories: {str(e)}")
         return Response(
-            {'error': 'Internal server error'},
+            {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -1124,7 +1125,7 @@ def get_all_categories(request):
     except Exception as e:
         logger.error(f"Error getting all categories: {str(e)}")
         return Response(
-            {'error': 'Internal server error'},
+            {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -1150,7 +1151,7 @@ def get_product_groups(request):
     except Exception as e:
         logger.error(f"Error getting product groups: {str(e)}")
         return Response(
-            {'error': 'Internal server error'},
+            {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -1181,7 +1182,7 @@ def get_product_brands(request):
     except Exception as e:
         logger.error(f"Error getting product brands: {str(e)}")
         return Response(
-            {'error': 'Internal server error'},
+            {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -1259,7 +1260,7 @@ def get_product_stats(request):
     except Exception as e:
         logger.error(f"Error getting product stats: {str(e)}")
         return Response(
-            {'error': 'Internal server error'},
+            {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -1426,7 +1427,7 @@ def create_product_brand(request):
     except Exception as e:
         logger.error(f"Error creating brand: {str(e)}")
         return Response(
-            {'error': 'Internal server error'},
+            {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -1456,7 +1457,7 @@ def create_product_category(request):
     except Exception as e:
         logger.error(f"Error creating category: {str(e)}")
         return Response(
-            {'error': 'Internal server error'},
+            {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -1496,7 +1497,7 @@ def search_master_product(request):
     except Exception as e:
         logger.error(f"Error searching master product: {str(e)}")
         return Response(
-            {'error': 'Internal server error'},
+            {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -1790,7 +1791,7 @@ def check_bulk_upload(request):
     except Exception as e:
         logger.error(f"Error check bulk upload: {str(e)}")
         return Response(
-            {'error': 'Internal server error'},
+            {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -2040,7 +2041,7 @@ def complete_bulk_upload(request):
     except Exception as e:
         logger.error(f"Error complete bulk upload: {str(e)}")
         return Response(
-            {'error': 'Internal server error'},
+            {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -2062,7 +2063,7 @@ class CreateUploadSessionView(APIView):
         except RetailerProfile.DoesNotExist:
             return Response({'error': 'Retailer profile not found'}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': format_exception(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class GetActiveSessionsView(APIView):
@@ -2078,7 +2079,7 @@ class GetActiveSessionsView(APIView):
              serializer = ProductUploadSessionSerializer(sessions, many=True)
              return Response(serializer.data)
         except Exception as e:
-             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+             return Response({'error': format_exception(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class AddSessionItemView(APIView):
@@ -2129,7 +2130,7 @@ class AddSessionItemView(APIView):
         except ProductUploadSession.DoesNotExist:
             return Response({'error': 'Session not found or access denied'}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': format_exception(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class GetSessionDetailsView(APIView):
@@ -2440,7 +2441,7 @@ class CommitUploadSessionView(APIView):
             return Response({'message': 'Session committed', 'count': success_count})
 
         except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({'error': format_exception(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET'])
@@ -2488,7 +2489,7 @@ def get_best_selling_products(request, retailer_id):
     except Exception as e:
         logger.error(f"Error getting best selling products: {str(e)}")
         return Response(
-            {'error': 'Internal server error'},
+            {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -2540,7 +2541,7 @@ def get_buy_again_products(request, retailer_id):
     except Exception as e:
         logger.error(f"Error getting buy again products: {str(e)}")
         return Response(
-            {'error': 'Internal server error'},
+            {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -2607,7 +2608,7 @@ def get_recommended_products(request, retailer_id):
     except Exception as e:
         logger.error(f"Error getting recommended products: {str(e)}")
         return Response(
-            {'error': 'Internal server error'},
+            {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -2659,7 +2660,7 @@ def get_deals_of_the_day(request, retailer_id):
         return Response(serializer.data, status=status.HTTP_200_OK)
     except Exception as e:
         logger.error(f"Error getting deals of the day: {str(e)}")
-        return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({'error': format_exception(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET'])
@@ -2695,7 +2696,7 @@ def get_budget_buys(request, retailer_id):
         return Response(serializer.data, status=status.HTTP_200_OK)
     except Exception as e:
         logger.error(f"Error getting budget buys: {str(e)}")
-        return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({'error': format_exception(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET'])
@@ -2735,7 +2736,7 @@ def get_trending_products(request, retailer_id):
         return Response(serializer.data, status=status.HTTP_200_OK)
     except Exception as e:
         logger.error(f"Error getting trending products: {str(e)}")
-        return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({'error': format_exception(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET'])
@@ -2769,7 +2770,7 @@ def get_new_arrivals(request, retailer_id):
         return Response(serializer.data, status=status.HTTP_200_OK)
     except Exception as e:
         logger.error(f"Error getting new arrivals: {str(e)}")
-        return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({'error': format_exception(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET'])
@@ -2804,4 +2805,4 @@ def get_seasonal_picks(request, retailer_id):
         return Response(serializer.data, status=status.HTTP_200_OK)
     except Exception as e:
         logger.error(f"Error getting seasonal picks: {str(e)}")
-        return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({'error': format_exception(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
