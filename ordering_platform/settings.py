@@ -93,9 +93,9 @@ WSGI_APPLICATION = 'ordering_platform.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'buyez_db',
-        'USER': 'buyez_user',
-        'PASSWORD': 'strongpassword',
+        'NAME': 'ordereasy_local',
+        'USER': 'postgres',
+        'PASSWORD': 'postgres',
         'HOST': 'localhost',
         'PORT': '5432',
         'CONN_MAX_AGE': 600,
