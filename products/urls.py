@@ -9,6 +9,7 @@ urlpatterns = [
     path('<int:product_id>/', views.get_product_detail, name='get_product_detail'),
     path('<int:product_id>/update/', views.update_product, name='update_product'),
     path('<int:product_id>/delete/', views.delete_product, name='delete_product'),
+    path('bulk-update/', views.bulk_update_products, name='bulk_update_products'),
     path('upload/', views.upload_products_excel, name='upload_products_excel'),
     path('stats/', views.get_product_stats, name='get_product_stats'),
     path('master/search/', views.search_master_product, name='search_master_product'), # NEW
