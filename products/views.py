@@ -738,6 +738,33 @@ def bulk_update_products(request):
                         product.is_active = False
                         changed = True
 
+                if 'name' in item:
+                    try:
+                        product.name = str(item['name'])
+                        changed = True
+                    except Exception:
+                        pass
+                
+                if 'original_price' in item:
+                    try:
+                        product.original_price = Decimal(str(item['original_price']))
+                        changed = True
+                    except Exception:
+                        pass
+                elif 'mrp' in item:
+                    try:
+                        product.original_price = Decimal(str(item['mrp']))
+                        changed = True
+                    except Exception:
+                        pass
+                
+                if 'barcode' in item:
+                    try:
+                        product.barcode = str(item['barcode'])
+                        changed = True
+                    except Exception:
+                        pass
+
                 if changed:
                     product.save()
                     updated_count += 1
