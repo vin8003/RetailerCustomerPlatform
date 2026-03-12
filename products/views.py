@@ -275,7 +275,15 @@ def get_retailer_products(request):
                 category_ids = get_all_category_ids(category)
                 products = products.filter(category_id__in=category_ids)
             else:
-                products = products.filter(category__name__icontains=category)
+                matched_categories = ProductCategory.objects.filter(name__icontains=category).values_list('id', flat=True)
+                all_ids = set()
+                for cat_id in matched_categories:
+                    all_ids.update(get_all_category_ids(cat_id))
+                
+                if all_ids:
+                    products = products.filter(category_id__in=list(all_ids))
+                else:
+                    products = products.none()
 
         if brand:
             products = products.filter(brand__name__icontains=brand)
@@ -294,6 +302,10 @@ def get_retailer_products(request):
                 products = products.filter(quantity__gt=0)
             else:
                 products = products.filter(quantity=0)
+                
+        low_stock = request.query_params.get('low_stock')
+        if low_stock and low_stock.lower() == 'true':
+            products = products.filter(quantity__gt=0, quantity__lte=10)
 
         # Search functionality
         search = request.query_params.get('search')
@@ -365,7 +377,15 @@ def search_products(request):
                 category_ids = get_all_category_ids(category)
                 products = products.filter(category_id__in=category_ids)
             else:
-                products = products.filter(category__name__icontains=category)
+                matched_categories = ProductCategory.objects.filter(name__icontains=category).values_list('id', flat=True)
+                all_ids = set()
+                for cat_id in matched_categories:
+                    all_ids.update(get_all_category_ids(cat_id))
+                
+                if all_ids:
+                    products = products.filter(category_id__in=list(all_ids))
+                else:
+                    products = products.none()
                 
         # Calculate facets before limiting
         facets = {
@@ -633,6 +653,132 @@ def delete_product(request, product_id):
         )
 
 
+@api_view(['PATCH'])
+@permission_classes([permissions.IsAuthenticated])
+def bulk_update_products(request):
+    """
+    Update multiple products efficiently for authenticated retailer
+    """
+    try:
+        if request.user.user_type != 'retailer':
+            return Response(
+                {'error': 'Only retailers can bulk update products'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        retailer, _ = RetailerProfile.objects.get_or_create(user=request.user)
+        items = request.data.get('items', [])
+        
+        if not items or not isinstance(items, list):
+            return Response(
+                {'error': 'Invalid payload. "items" array is required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        product_ids = [item.get('id') for item in items if item.get('id')]
+        if not product_ids:
+            return Response(
+                {'error': 'No valid product IDs provided.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        updated_count = 0
+        
+        with transaction.atomic():
+            products = Product.objects.select_for_update().filter(id__in=product_ids, retailer=retailer)
+            product_dict = {p.id: p for p in products}
+            logs_to_create = []
+            
+            for item in items:
+                p_id = item.get('id')
+                product = product_dict.get(p_id)
+                if not product:
+                    continue
+                
+                changed = False
+                old_quantity = product.quantity
+                
+                if 'price' in item:
+                    try:
+                        product.price = Decimal(str(item['price']))
+                        changed = True
+                    except Exception:
+                        pass
+                        
+                if 'quantity' in item:
+                    try:
+                        new_quantity = int(item['quantity'])
+                        if new_quantity >= 0:
+                            product.quantity = new_quantity
+                            changed = True
+                            
+                            if old_quantity != new_quantity:
+                                quantity_change = new_quantity - old_quantity
+                                log_type = 'added' if quantity_change > 0 else 'removed'
+                                logs_to_create.append(
+                                    ProductInventoryLog(
+                                        product=product,
+                                        log_type=log_type,
+                                        quantity_change=abs(quantity_change),
+                                        previous_quantity=old_quantity,
+                                        new_quantity=new_quantity,
+                                        reason='Bulk update',
+                                        created_by=request.user
+                                    )
+                                )
+                    except Exception:
+                        pass
+                
+                if 'is_active' in item:
+                    val = item['is_active']
+                    if str(val).lower() == 'true':
+                        product.is_active = True
+                        changed = True
+                    elif str(val).lower() == 'false':
+                        product.is_active = False
+                        changed = True
+
+                if 'name' in item:
+                    try:
+                        product.name = str(item['name'])
+                        changed = True
+                    except Exception:
+                        pass
+                
+                if 'original_price' in item:
+                    try:
+                        product.original_price = Decimal(str(item['original_price']))
+                        changed = True
+                    except Exception:
+                        pass
+                elif 'mrp' in item:
+                    try:
+                        product.original_price = Decimal(str(item['mrp']))
+                        changed = True
+                    except Exception:
+                        pass
+                
+                if 'barcode' in item:
+                    try:
+                        product.barcode = str(item['barcode'])
+                        changed = True
+                    except Exception:
+                        pass
+
+                if changed:
+                    product.save()
+                    updated_count += 1
+            
+            if logs_to_create:
+                ProductInventoryLog.objects.bulk_create(logs_to_create)
+
+        return Response({'message': f'Successfully updated {updated_count} products'}, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        logger.error(f"Error bulk updating products: {str(e)}")
+        return Response({'error': format_exception(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 @api_view(['GET'])
 @permission_classes([permissions.AllowAny])
 def get_retailer_products_public(request, retailer_id):
@@ -709,7 +855,15 @@ def get_retailer_products_public(request, retailer_id):
                 category_ids = get_all_category_ids(category)
                 products = products.filter(category_id__in=category_ids)
             else:
-                products = products.filter(category__name__icontains=category)
+                matched_categories = ProductCategory.objects.filter(name__icontains=category).values_list('id', flat=True)
+                all_ids = set()
+                for cat_id in matched_categories:
+                    all_ids.update(get_all_category_ids(cat_id))
+                
+                if all_ids:
+                    products = products.filter(category_id__in=list(all_ids))
+                else:
+                    products = products.none()
 
         if product_group:
             products = products.filter(product_group=product_group)
