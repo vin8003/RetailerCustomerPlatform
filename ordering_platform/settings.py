@@ -306,7 +306,7 @@ if not firebase_admin._apps:
             print(f"DEBUG: Credential file NOT found or var not set. Using default options.")
             # Default initialization (uses GOOGLE_APPLICATION_CREDENTIALS if set,
             # but won't crash if it's not and we are just testing)
-            firebase_admin.initialize_app(options={'projectId': 'buyeasy-4003f'})
+            firebase_admin.initialize_app(options={'projectId': 'ordereasy-win'})
     except Exception as e:
         print(f"Warning: Firebase Admin SDK could not be initialized: {e}")
 
