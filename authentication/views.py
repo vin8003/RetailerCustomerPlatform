@@ -147,31 +147,55 @@ def retailer_login(request):
 @permission_classes([permissions.AllowAny])
 def customer_signup(request):
     """
-    Register a new customer user with password
+    Register a new customer user with password.
+    If a stale unverified account with the same phone/email/username exists
+    (e.g. from a previous failed signup attempt), it is deleted before re-creating.
     """
     try:
         data = request.data.copy()
         data['user_type'] = 'customer'
 
+        incoming_username   = data.get('username', '').strip()
+        incoming_phone      = data.get('phone_number', '').strip()
+        incoming_email      = data.get('email', '').strip()
+
+        # --- Purge stale unverified accounts ---
+        # Match on username, phone_number, or email for customer accounts that
+        # have never verified email (is_email_verified=False).
+        stale_qs = User.objects.filter(user_type='customer', is_email_verified=False)
+        if incoming_username:
+            stale_qs = stale_qs.filter(username=incoming_username)
+        elif incoming_phone:
+            stale_qs = stale_qs.filter(phone_number=incoming_phone)
+        elif incoming_email:
+            stale_qs = stale_qs.filter(email=incoming_email)
+        else:
+            stale_qs = User.objects.none()
+
+        deleted_count, _ = stale_qs.delete()
+        if deleted_count:
+            logger.info(f"Deleted {deleted_count} stale unverified customer account(s) before re-signup")
+
         serializer = UserRegistrationSerializer(data=data)
         if serializer.is_valid():
             user = serializer.save()
-            
-            # Customer is active but phone and email not verified
+
+            # Customer is active but email/phone not yet verified
             user.is_active = True
             user.is_phone_verified = False
             user.is_email_verified = False
             user.save()
 
             # Generate and send Email OTP
-            otp_code = generate_otp()
+            otp_code, secret_key = generate_otp()
             EmailOTPVerification.objects.update_or_create(
                 user=user,
                 email=user.email,
                 defaults={
                     'otp_code': otp_code,
+                    'secret_key': secret_key,
                     'is_verified': False,
-                    'created_at': timezone.now()
+                    'expires_at': timezone.now() + timezone.timedelta(minutes=10),
                 }
             )
             send_email_otp(user.email, otp_code)
@@ -191,6 +215,7 @@ def customer_signup(request):
             logger.info(f"New customer registered: {user.username}")
             return Response(response_data, status=status.HTTP_201_CREATED)
 
+        logger.error(f"Customer signup validation errors: {serializer.errors}")
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     except Exception as e:
@@ -199,6 +224,7 @@ def customer_signup(request):
             {'error': 'Internal server error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
 
 
 @api_view(['POST'])
