@@ -332,7 +332,7 @@ def request_phone_verification(request):
         sms_sent = send_sms_otp(phone_number, otp_code)
 
         if sms_sent:
-            cache.set(cache_key, requests + 1, 900)
+            cache.set(cache_key, requests + 1, 600)
             logger.info(f"OTP sent to {phone_number} for verification")
             return Response({
                 'message': 'OTP sent successfully',
@@ -698,9 +698,9 @@ def resend_otp(request):
             cache_key = f"resend_otp_limit_{phone_number}"
             resend_count = cache.get(cache_key, 0)
 
-            if resend_count >= 3: # Limit to 3 resends per hour
+            if resend_count >= 3:
                 return Response(
-                    {'error': 'Too many resend attempts. Please wait 15 mins.'},
+                    {'error': 'Too many resend attempts. Please wait 10 mins.'},
                     status=status.HTTP_429_TOO_MANY_REQUESTS
                 )
 
@@ -724,7 +724,7 @@ def resend_otp(request):
 
             if sms_sent:
                 # Update resend count in cache
-                cache.set(cache_key, resend_count + 1, 900)
+                cache.set(cache_key, resend_count + 1, 600)
 
                 logger.info(f"OTP Resent to {phone_number}")
                 return Response({
@@ -1118,6 +1118,15 @@ def resend_email_otp(request):
         try:
             user = User.objects.get(email=email)
             
+            # Rate limiting check
+            cache_key = f"resend_email_otp_{email}"
+            requests = cache.get(cache_key, 0)
+            if requests >= 3:
+                return Response(
+                    {'error': 'Too many OTP requests. Please wait 10 mins.'},
+                    status=status.HTTP_429_TOO_MANY_REQUESTS
+                )
+            
             # Generate new OTP
             otp_code, secret_key = generate_otp()
             
@@ -1132,6 +1141,7 @@ def resend_email_otp(request):
             )
             
             send_email_otp(email, otp_code)
+            cache.set(cache_key, requests + 1, 600)  # 10 minutes
             logger.info(f"Email OTP resent to {email}")
             return Response({'message': 'OTP resent successfully'}, status=status.HTTP_200_OK)
             
