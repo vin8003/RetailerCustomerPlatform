@@ -81,7 +81,7 @@ class RetailerProfileUpdateSerializer(serializers.ModelSerializer):
         if hasattr(data, 'getlist'):
             mutable_data = {}
             for key in data.keys():
-                if key == 'serviceable_pincodes':
+                if key in ['serviceable_pincodes', 'categories']:
                     mutable_data[key] = data.getlist(key)
                 else:
                     # For other fields, keep the list if length > 1, else scalar
@@ -98,6 +98,12 @@ class RetailerProfileUpdateSerializer(serializers.ModelSerializer):
         
         return super().to_internal_value(data)
 
+    categories = serializers.ListField(
+        child=serializers.IntegerField(),
+        write_only=True,
+        required=False
+    )
+
     class Meta:
         model = RetailerProfile
         fields = [
@@ -107,8 +113,33 @@ class RetailerProfileUpdateSerializer(serializers.ModelSerializer):
             'business_type', 'gst_number', 'pan_number', 'upi_id', 'upi_qr_code', 
             'offers_delivery',
             'offers_pickup', 'delivery_radius', 'serviceable_pincodes', 'minimum_order_amount',
-            'delivery_charge', 'free_delivery_threshold'
+            'delivery_charge', 'free_delivery_threshold', 'categories'
         ]
+        
+    def create(self, validated_data):
+        categories_data = validated_data.pop('categories', [])
+        instance = super().create(validated_data)
+        self._update_categories(instance, categories_data)
+        return instance
+
+    def update(self, instance, validated_data):
+        categories_data = validated_data.pop('categories', None)
+        instance = super().update(instance, validated_data)
+        if categories_data is not None:
+            self._update_categories(instance, categories_data)
+        return instance
+
+    def _update_categories(self, instance, categories_data):
+        from .models import RetailerCategoryMapping, RetailerCategory
+        # Clear existing
+        RetailerCategoryMapping.objects.filter(retailer=instance).delete()
+        # Add new
+        for cat_id in categories_data:
+            try:
+                category = RetailerCategory.objects.get(id=cat_id)
+                RetailerCategoryMapping.objects.create(retailer=instance, category=category)
+            except RetailerCategory.DoesNotExist:
+                pass
     
     def validate_pincode(self, value):
         """Validate pincode format"""
