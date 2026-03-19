@@ -107,6 +107,7 @@ class Order(models.Model):
     # Additional info
     special_instructions = models.TextField(blank=True)
     cancellation_reason = models.TextField(blank=True)
+    cancelled_by = models.CharField(max_length=50, blank=True, null=True)
     
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
