@@ -267,6 +267,7 @@ def get_retailer_products(request):
         brand = request.query_params.get('brand')
         is_active = request.query_params.get('is_active')
         is_featured = request.query_params.get('is_featured')
+        is_seasonal = request.query_params.get('is_seasonal')
         is_available = request.query_params.get('is_available')
         in_stock = request.query_params.get('in_stock')
 
@@ -293,6 +294,9 @@ def get_retailer_products(request):
 
         if is_featured is not None:
             products = products.filter(is_featured=is_featured.lower() == 'true')
+
+        if is_seasonal is not None:
+            products = products.filter(is_seasonal=is_seasonal.lower() == 'true')
 
         if is_available is not None:
             products = products.filter(is_available=is_available.lower() == 'true')
@@ -738,6 +742,15 @@ def bulk_update_products(request):
                         product.is_active = False
                         changed = True
 
+                if 'is_seasonal' in item:
+                    val = item['is_seasonal']
+                    if str(val).lower() == 'true':
+                        product.is_seasonal = True
+                        changed = True
+                    elif str(val).lower() == 'false':
+                        product.is_seasonal = False
+                        changed = True
+
                 if 'name' in item:
                     try:
                         product.name = str(item['name'])
@@ -772,7 +785,10 @@ def bulk_update_products(request):
             if logs_to_create:
                 ProductInventoryLog.objects.bulk_create(logs_to_create)
 
-        return Response({'message': f'Successfully updated {updated_count} products'}, status=status.HTTP_200_OK)
+        return Response({
+            'message': f'Successfully updated {updated_count} products',
+            'updated_count': updated_count
+        }, status=status.HTTP_200_OK)
 
     except Exception as e:
         logger.error(f"Error bulk updating products: {str(e)}")

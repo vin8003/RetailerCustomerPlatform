@@ -39,7 +39,7 @@ class OrderListSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'order_number', 'retailer', 'retailer_name', 'customer_name', 'delivery_mode', 'payment_mode',
             'status', 'total_amount', 'items_count', 'created_at', 'updated_at', 'has_customer_feedback', 'has_retailer_rating', 'feedback',
-            'preparation_time_minutes', 'estimated_ready_time', 'expected_processing_start'
+            'preparation_time_minutes', 'estimated_ready_time', 'expected_processing_start', 'cancelled_by'
         ]
     
     def get_items_count(self, obj):
@@ -119,7 +119,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'retailer', 'retailer_name', 'retailer_phone',
             'retailer_address', 'retailer_upi_id', 'retailer_upi_qr_code', 'delivery_mode', 'payment_mode', 'status',
             'subtotal', 'delivery_fee', 'discount_amount', 'discount_from_points', 'points_redeemed', 'points_earned', 'total_amount',
-            'special_instructions', 'cancellation_reason', 'delivery_address_text',
+            'special_instructions', 'cancellation_reason', 'cancelled_by', 'delivery_address_text',
             'delivery_latitude', 'delivery_longitude',
             'items', 'applied_offers', 'created_at', 'updated_at', 'confirmed_at', 'delivered_at',
             'cancelled_at', 'unread_messages_count',

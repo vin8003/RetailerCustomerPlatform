@@ -414,6 +414,7 @@ def cancel_order(request, order_id):
         # Cancel order
         order.update_status('cancelled', user)
         order.cancellation_reason = reason
+        order.cancelled_by = user.user_type
         order.save()
         
         # Restore product quantities

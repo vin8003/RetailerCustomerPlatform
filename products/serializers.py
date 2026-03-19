@@ -83,7 +83,7 @@ class ProductListSerializer(serializers.ModelSerializer):
             'original_price', 'discount_percentage', 'quantity', 'unit',
             'minimum_order_quantity', 'maximum_order_quantity',
             'image', 'image_url', 'category_name', 'brand_name', 'retailer_name',
-            'is_in_stock', 'is_featured', 'is_active', 'is_available',
+            'is_in_stock', 'is_featured', 'is_active', 'is_seasonal', 'is_available',
             'average_rating', 'review_count', 'created_at', 'product_group',
             'active_offer_text', 'is_wishlisted'
         ]
@@ -247,7 +247,7 @@ class ProductDetailSerializer(serializers.ModelSerializer):
             'image', 'image_url', 'images', 'additional_images', 'category', 
             'category_name', 'brand', 'brand_name',
             'retailer_name', 'retailer_id', 'specifications', 'tags',
-            'is_in_stock', 'is_featured', 'is_active', 'is_available', 
+            'is_in_stock', 'is_featured', 'is_active', 'is_seasonal', 'is_available', 
             'average_rating', 'review_count', 'created_at', 'updated_at',
             'product_group', 'active_offer_text', 'offers', 'is_wishlisted'
         ]
@@ -481,7 +481,7 @@ class ProductCreateSerializer(serializers.ModelSerializer):
             'original_price', 'discount_percentage', 'quantity', 'unit',
             'minimum_order_quantity', 'maximum_order_quantity', 'image',
             'images', 'specifications', 'tags', 'is_featured', 'is_available',
-            'barcode', 'master_product', 'product_group'
+            'barcode', 'master_product', 'product_group', 'is_active', 'is_seasonal'
         ]
     
     def validate(self, data):
@@ -516,7 +516,7 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
             'original_price', 'discount_percentage', 'quantity', 'unit',
             'minimum_order_quantity', 'maximum_order_quantity', 'image',
             'images', 'specifications', 'tags', 'is_featured', 'is_available',
-            'barcode', 'master_product', 'product_group'
+            'barcode', 'master_product', 'product_group', 'is_active', 'is_seasonal'
         ]
     
     def validate(self, data):
