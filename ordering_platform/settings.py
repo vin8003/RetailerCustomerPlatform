@@ -96,7 +96,7 @@ DATABASES = {
         'NAME': 'buyez_db',
         'USER': 'buyez_user',
         'PASSWORD': 'strongpassword',
-        'HOST': 'localhost',
+        'HOST': '10.0.0.105',
         'PORT': '5432',
         'CONN_MAX_AGE': 600,
     }
