@@ -17,7 +17,7 @@ class ProductCategorySerializer(serializers.ModelSerializer):
     
     class Meta:
         model = ProductCategory
-        fields = ['id', 'name', 'description', 'icon', 'parent', 'subcategories']
+        fields = ['id', 'name', 'description', 'icon', 'image', 'parent', 'subcategories']
     
     def get_subcategories(self, obj):
         """Get subcategories"""
