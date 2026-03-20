@@ -1331,7 +1331,7 @@ def get_product_categories(request):
     """
     try:
         categories = ProductCategory.objects.filter(is_active=True, parent=None)
-        serializer = ProductCategorySerializer(categories, many=True)
+        serializer = ProductCategorySerializer(categories, many=True, context={'request': request})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     except Exception as e:
@@ -1698,9 +1698,43 @@ def create_product_category(request):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
     except Exception as e:
         logger.error(f"Error creating category: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['PUT', 'PATCH'])
+@permission_classes([permissions.IsAuthenticated])
+def update_product_category(request, category_id):
+    """
+    Update a product category (e.g. set image) - Only for retailers/admins
+    """
+    try:
+        if request.user.user_type != 'retailer' and not request.user.is_staff:
+            return Response(
+                {'error': 'Only retailers can update categories'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        category = get_object_or_404(ProductCategory, id=category_id)
+        
+        serializer = ProductCategorySerializer(
+            category, 
+            data=request.data, 
+            partial=request.method == 'PATCH',
+            context={'request': request}
+        )
+        if serializer.is_valid():
+            category = serializer.save()
+            logger.info(f"Category updated: {category.name} by {request.user.username}")
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    except Exception as e:
+        logger.error(f"Error updating category: {str(e)}")
         return Response(
             {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR

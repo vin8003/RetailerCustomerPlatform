@@ -14,6 +14,7 @@ class ProductCategory(models.Model):
     name = models.CharField(max_length=100, unique=True)
     description = models.TextField(blank=True)
     icon = models.CharField(max_length=50, blank=True)  # Icon class name
+    image = models.ImageField(upload_to=generate_upload_path, blank=True, null=True)
     parent = models.ForeignKey(
         'self', 
         null=True, 
@@ -34,6 +35,12 @@ class ProductCategory(models.Model):
     
     def __str__(self):
         return self.name
+
+    def save(self, *args, **kwargs):
+        if self.image:
+            from common.utils import resize_image
+            resize_image(self.image)
+        super().save(*args, **kwargs)
 
 
 
