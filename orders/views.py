@@ -585,7 +585,7 @@ def get_order_stats(request):
         ).order_by('-total_spent')[:5]
         
         # Recent orders
-        recent_orders = orders.select_related('customer').order_by('-created_at')[:5]
+        recent_orders = orders.select_related('customer').order_by('-created_at')[:10]
         recent_orders_data = []
         for order in recent_orders:
             recent_orders_data.append({
