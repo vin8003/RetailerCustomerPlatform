@@ -10,6 +10,7 @@ from django.http import Http404
 from django.utils import timezone
 from datetime import timedelta
 import logging
+import re
 from common.error_utils import format_exception
 
 from .models import Order, OrderItem, OrderStatusLog, OrderFeedback, OrderReturn, OrderChatMessage, RetailerRating
@@ -1113,6 +1114,169 @@ def update_estimated_time(request, order_id):
         
     except Exception as e:
         logger.error(f"Error updating estimated time: {str(e)}")
+        return Response(
+            {'error': format_exception(e)}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def submit_payment(request, order_id):
+    """
+    Submit/Update payment reference ID for UPI orders - only for customers
+    """
+    try:
+        if request.user.user_type != 'customer':
+            return Response(
+                {'error': 'Only customers can submit payment details'}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        order = get_object_or_404(Order, id=order_id, customer=request.user)
+        
+        if order.payment_mode != 'upi':
+            return Response(
+                {'error': 'This order does not use UPI payment'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        if order.is_payment_locked:
+            return Response(
+                {'error': 'Payment is verified and locked. Cannot edit transaction ID.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if order.payment_edit_count >= 3:
+            return Response(
+                {'error': 'Maximum edit attempts (3) reached.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        payment_reference_id = request.data.get('payment_reference_id')
+        if not payment_reference_id:
+            return Response(
+                {'error': 'Payment reference ID is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        # 12-digit numeric validation
+        if not re.match(r'^[0-9]{12}$', str(payment_reference_id)):
+            return Response(
+                {'error': 'Invalid Transaction ID. Please enter a valid 12-digit numeric UPI reference number.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Check if it's an update or first time
+        is_update = order.payment_reference_id is not None
+        
+        order.payment_reference_id = payment_reference_id
+        order.payment_status = 'pending_verification'
+        order.payment_edit_count += 1
+        order.save()
+        
+        # Notify Retailer (wrapped in try-except to prevent 500 on notification failure)
+        try:
+            if order.retailer and order.retailer.user:
+                title = "Payment Updated" if is_update else "Payment Submitted"
+                message = f"Customer has {'updated' if is_update else 'submitted'} payment reference for Order #{order.order_number}."
+                
+                send_push_notification(
+                    user=order.retailer.user,
+                    title=title,
+                    message=message,
+                    data={
+                        'type': 'payment_submitted',
+                        'order_id': str(order.id),
+                        'is_update': is_update
+                    }
+                )
+                
+                # Silent update for live reload
+                send_silent_update(
+                    user=order.retailer.user,
+                    event_type='order_refresh',
+                    data={'order_id': str(order.id)}
+                )
+        except Exception as notify_error:
+            logger.error(f"Notification error in submit_payment: {str(notify_error)}")
+        
+        logger.info(f"Payment reference {'updated' if is_update else 'submitted'} for order: {order.order_number}")
+        serializer = OrderDetailSerializer(order, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    except Exception as e:
+        logger.error(f"Error submitting payment: {str(e)}")
+        return Response(
+            {'error': format_exception(e)}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def verify_payment(request, order_id):
+    """
+    Verify/Reject payment - only for retailers
+    """
+    try:
+        if request.user.user_type != 'retailer':
+            return Response(
+                {'error': 'Only retailers can verify payments'}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        retailer = RetailerProfile.objects.get(user=request.user)
+        order = get_object_or_404(Order, id=order_id, retailer=retailer)
+        
+        action = request.data.get('action') # 'verify' or 'fail'
+        if action not in ['verify', 'fail']:
+            return Response(
+                {'error': 'Invalid action. Use "verify" or "fail".'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if action == 'verify':
+            order.payment_status = 'verified'
+            order.is_payment_locked = True
+            msg = f"Your UPI payment for Order #{order.order_number} has been verified."
+        else:
+            order.payment_status = 'failed'
+            msg = f"Payment verification failed for Order #{order.order_number}. Please update the transaction ID."
+        
+        order.save()
+        
+        # Notify Customer (wrapped in try-except)
+        try:
+            if order.customer:
+                send_push_notification(
+                    user=order.customer,
+                    title="Payment Update",
+                    message=msg,
+                    data={
+                        'type': 'payment_status_update',
+                        'order_id': str(order.id),
+                        'payment_status': order.payment_status
+                    }
+                )
+                
+                # Send silent update
+                send_silent_update(
+                    user=order.customer,
+                    event_type='order_refresh',
+                    data={'order_id': str(order.id)}
+                )
+        except Exception as notify_error:
+            logger.error(f"Notification error in verify_payment: {str(notify_error)}")
+        
+        logger.info(f"Payment {action}ed for order: {order.order_number}")
+        serializer = OrderDetailSerializer(order, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    except RetailerProfile.DoesNotExist:
+        return Response({'error': 'Retailer profile not found'}, status=404)
+    except Exception as e:
+        logger.error(f"Error verifying payment: {str(e)}")
         return Response(
             {'error': format_exception(e)}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
