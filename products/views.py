@@ -3085,3 +3085,49 @@ def get_seasonal_picks(request, retailer_id):
     except Exception as e:
         logger.error(f"Error getting seasonal picks: {str(e)}")
         return Response({'error': format_exception(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def get_demand_insights(request):
+    """
+    Get top zero-result searches to show unmet demand for the retailer.
+    """
+    try:
+        if request.user.user_type != 'retailer':
+            return Response(
+                {'error': 'Only retailers can access this endpoint'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            retailer = RetailerProfile.objects.get(user=request.user)
+        except RetailerProfile.DoesNotExist:
+            return Response(
+                {'error': 'Retailer profile not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        from .models import SearchTelemetry
+        from django.utils import timezone
+        import datetime
+
+        # Get the last 30 days
+        thirty_days_ago = timezone.now() - datetime.timedelta(days=30)
+
+        # Filter for the retailer, 0 results, in the last 30 days
+        insights = SearchTelemetry.objects.filter(
+            retailer=retailer,
+            result_count=0,
+            created_at__gte=thirty_days_ago
+        ).values('query').annotate(
+            count=Count('query')
+        ).order_by('-count')[:100]
+
+        return Response(list(insights), status=status.HTTP_200_OK)
+
+    except Exception as e:
+        logger.error(f"Error getting demand insights: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )

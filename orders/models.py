@@ -32,6 +32,18 @@ class Order(models.Model):
         ('upi', 'UPI'),
     ]
     
+    CANCELLED_BY_CHOICES = [
+        ('customer', 'Customer'),
+        ('retailer', 'Retailer'),
+    ]
+
+    PAYMENT_STATUS_CHOICES = [
+        ('pending_payment', 'Pending Payment'),
+        ('pending_verification', 'Pending Verification'),
+        ('verified', 'Verified'),
+        ('failed', 'Failed'),
+    ]
+    
     # Order identification
     order_number = models.CharField(max_length=20, unique=True, editable=False)
     source = models.CharField(max_length=50, default='app')
@@ -108,6 +120,10 @@ class Order(models.Model):
     special_instructions = models.TextField(blank=True)
     cancellation_reason = models.TextField(blank=True)
     cancelled_by = models.CharField(max_length=50, blank=True, null=True)
+    payment_reference_id = models.CharField(max_length=100, blank=True, null=True)
+    payment_status = models.CharField(max_length=50, choices=PAYMENT_STATUS_CHOICES, default='pending_payment')
+    payment_edit_count = models.IntegerField(default=0)
+    is_payment_locked = models.BooleanField(default=False)
     
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
