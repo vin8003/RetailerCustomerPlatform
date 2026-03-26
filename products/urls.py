@@ -12,6 +12,7 @@ urlpatterns = [
     path('bulk-update/', views.bulk_update_products, name='bulk_update_products'),
     path('upload/', views.upload_products_excel, name='upload_products_excel'),
     path('stats/', views.get_product_stats, name='get_product_stats'),
+    path('demand-insights/', views.get_demand_insights, name='get_demand_insights'),
     path('master/search/', views.search_master_product, name='search_master_product'), # NEW
     path('upload/check/', views.check_bulk_upload, name='check_bulk_upload'),
     path('upload/complete/', views.complete_bulk_upload, name='complete_bulk_upload'),
