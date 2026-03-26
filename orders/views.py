@@ -535,6 +535,31 @@ def get_order_stats(request):
         total_products = Product.objects.filter(retailer=retailer).count()
         today = timezone.now().date()
         
+        # Apply date filters
+        time_range = request.query_params.get('time_range')
+        if time_range == 'today':
+            orders = orders.filter(created_at__date=today)
+        elif time_range == 'this_week':
+            start_of_week = today - timedelta(days=today.weekday())
+            orders = orders.filter(created_at__date__gte=start_of_week)
+        elif time_range == 'this_month':
+            orders = orders.filter(created_at__year=today.year, created_at__month=today.month)
+        elif time_range == 'custom':
+            start_date = request.query_params.get('start_date')
+            end_date = request.query_params.get('end_date')
+            if start_date:
+                try:
+                    start_date_obj = timezone.datetime.strptime(start_date, '%Y-%m-%d').date()
+                    orders = orders.filter(created_at__date__gte=start_date_obj)
+                except ValueError:
+                    pass
+            if end_date:
+                try:
+                    end_date_obj = timezone.datetime.strptime(end_date, '%Y-%m-%d').date()
+                    orders = orders.filter(created_at__date__lte=end_date_obj)
+                except ValueError:
+                    pass
+        
         # Calculate statistics with optimized aggregation
         stats = orders.aggregate(
             total_orders=Count('id'),
