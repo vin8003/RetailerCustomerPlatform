@@ -51,6 +51,7 @@ urlpatterns = [
     path('categories/all/', views.get_all_categories, name='get_all_categories'),
     path('categories/create/', views.create_product_category, name='create_product_category'), # NEW
     path('categories/<int:category_id>/update/', views.update_product_category, name='update_product_category'),
+    path('categories/<int:category_id>/delete/', views.delete_product_category, name='delete_product_category'),
     
     path('product-groups/', views.get_product_groups, name='get_product_groups'),
 

@@ -1331,6 +1331,21 @@ def get_product_categories(request):
     """
     try:
         categories = ProductCategory.objects.filter(is_active=True, parent=None)
+        
+        if request.user.is_authenticated and hasattr(request.user, 'user_type') and request.user.user_type == 'retailer':
+            from retailers.models import RetailerProfile
+            try:
+                retailer = RetailerProfile.objects.get(user=request.user)
+                used_category_ids = Product.objects.filter(retailer=retailer, category__isnull=False).values_list('category_id', flat=True)
+                used_parent_ids = ProductCategory.objects.filter(id__in=used_category_ids, parent__isnull=False).values_list('parent_id', flat=True)
+                used_ids = set(used_category_ids) | set(used_parent_ids)
+                
+                categories = categories.filter(Q(retailer=retailer) | Q(id__in=used_ids)).distinct()
+            except RetailerProfile.DoesNotExist:
+                categories = categories.none()
+        elif not request.user.is_staff:
+            categories = categories.filter(retailer=None)
+
         serializer = ProductCategorySerializer(categories, many=True, context={'request': request})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -1350,6 +1365,18 @@ def get_all_categories(request):
     """
     try:
         categories = ProductCategory.objects.filter(is_active=True).order_by('name')
+        
+        if request.user.is_authenticated and hasattr(request.user, 'user_type') and request.user.user_type == 'retailer':
+            from retailers.models import RetailerProfile
+            try:
+                retailer = RetailerProfile.objects.get(user=request.user)
+                used_category_ids = Product.objects.filter(retailer=retailer, category__isnull=False).values_list('category_id', flat=True)
+                used_ids = set(used_category_ids)
+                categories = categories.filter(Q(retailer=retailer) | Q(id__in=used_ids)).distinct()
+            except RetailerProfile.DoesNotExist:
+                categories = categories.none()
+        elif request.user.is_authenticated and not request.user.is_staff:
+             categories = categories.filter(retailer=None)
         
         search = request.query_params.get('search')
         if search:
@@ -1560,6 +1587,7 @@ def process_excel_upload(file, retailer, user):
                 if 'category' in row and pd.notna(row['category']):
                     category, _ = ProductCategory.objects.get_or_create(
                         name=row['category'],
+                        retailer=retailer,
                         defaults={'is_active': True}
                     )
 
@@ -1694,6 +1722,13 @@ def create_product_category(request):
         serializer = ProductCategorySerializer(data=request.data)
         if serializer.is_valid():
             category = serializer.save()
+            
+            if request.user.user_type == 'retailer':
+                from retailers.models import RetailerProfile
+                retailer = RetailerProfile.objects.get(user=request.user)
+                category.retailer = retailer
+                category.save()
+                
             logger.info(f"Category created: {category.name} by {request.user.username}")
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -1720,6 +1755,25 @@ def update_product_category(request, category_id):
 
         category = get_object_or_404(ProductCategory, id=category_id)
         
+        if hasattr(request.user, 'user_type') and request.user.user_type == 'retailer':
+            from retailers.models import RetailerProfile
+            retailer = RetailerProfile.objects.get(user=request.user)
+            if category.retailer != retailer:
+                if category.retailer is None:
+                    # Clone generic category for this specific retailer to ensure isolation
+                    new_category = ProductCategory.objects.create(
+                        name=category.name,
+                        retailer=retailer,
+                        description=category.description,
+                        icon=category.icon,
+                        parent=category.parent
+                    )
+                    # Migrate the retailer's products immediately to the new owned category
+                    Product.objects.filter(retailer=retailer, category=category).update(category=new_category)
+                    category = new_category
+                else:
+                    return Response({'error': 'You do not have permission to update this category'}, status=status.HTTP_403_FORBIDDEN)
+        
         serializer = ProductCategorySerializer(
             category, 
             data=request.data, 
@@ -1735,6 +1789,47 @@ def update_product_category(request, category_id):
 
     except Exception as e:
         logger.error(f"Error updating category: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['DELETE'])
+@permission_classes([permissions.IsAuthenticated])
+def delete_product_category(request, category_id):
+    """
+    Delete a product category - Only for retailers/admins
+    """
+    try:
+        if request.user.user_type != 'retailer' and not request.user.is_staff:
+            return Response(
+                {'error': 'Only retailers can delete categories'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        category = get_object_or_404(ProductCategory, id=category_id)
+        
+        if hasattr(request.user, 'user_type') and request.user.user_type == 'retailer':
+            from retailers.models import RetailerProfile
+            retailer = RetailerProfile.objects.get(user=request.user)
+            if category.retailer != retailer:
+                if category.retailer is None:
+                    return Response({'error': 'Cannot delete generic global categories. They will disappear when no longer used by your products.'}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({'error': 'You do not have permission to delete this category'}, status=status.HTTP_403_FORBIDDEN)
+                
+        # Check if category has products before deleting
+        is_retailer = hasattr(request.user, 'user_type') and request.user.user_type == 'retailer'
+        if (category.products.filter(retailer=retailer).exists() if is_retailer else category.products.exists()):
+            return Response({'error': 'Cannot delete category that is assigned to existing products. Remove it from your products first.'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        category_name = category.name
+        category.delete()
+        
+        logger.info(f"Category deleted: {category_name} by {request.user.username}")
+        return Response({'message': 'Category deleted successfully'}, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        logger.error(f"Error deleting category: {str(e)}")
         return Response(
             {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR

@@ -11,7 +11,14 @@ class ProductCategory(models.Model):
     """
     Categories for products
     """
-    name = models.CharField(max_length=100, unique=True)
+    name = models.CharField(max_length=100)
+    retailer = models.ForeignKey(
+        'retailers.RetailerProfile', 
+        on_delete=models.CASCADE, 
+        related_name='product_categories',
+        null=True,
+        blank=True
+    )
     description = models.TextField(blank=True)
     icon = models.CharField(max_length=50, blank=True)  # Icon class name
     image = models.ImageField(upload_to=generate_upload_path, blank=True, null=True)
@@ -28,6 +35,7 @@ class ProductCategory(models.Model):
     class Meta:
         db_table = 'product_category'
         verbose_name_plural = 'Product Categories'
+        unique_together = ['retailer', 'name']
         indexes = [
             models.Index(fields=['name']),
             models.Index(fields=['parent']),
