@@ -171,6 +171,7 @@ def list_retailers(request):
         offers_delivery = request.query_params.get('offers_delivery')
         offers_pickup = request.query_params.get('offers_pickup')
         min_rating = request.query_params.get('min_rating')
+        has_referral = request.query_params.get('has_referral')
         
         if city:
             queryset = queryset.filter(city__icontains=city)
@@ -196,6 +197,9 @@ def list_retailers(request):
                 queryset = queryset.filter(average_rating__gte=min_rating)
             except ValueError:
                 pass
+        
+        if has_referral:
+            queryset = queryset.filter(reward_config__is_referral_enabled=has_referral.lower() == 'true')
         
         # Search functionality
         search = request.query_params.get('search')

@@ -428,11 +428,20 @@ class OrderCreateSerializer(serializers.Serializer):
             
             # Deduct points from customer profile if used
             if points_to_redeem > 0:
-                from customers.models import CustomerLoyalty
+                from customers.models import CustomerLoyalty, LoyaltyTransaction
                 try:
                     loyalty = CustomerLoyalty.objects.get(customer=customer, retailer=retailer)
                     loyalty.points -= points_to_redeem
                     loyalty.save()
+                    
+                    # Log redemption transaction
+                    LoyaltyTransaction.objects.create(
+                        customer=customer,
+                        retailer=retailer,
+                        amount=points_to_redeem,
+                        transaction_type='redeem',
+                        description=f"Redeemed on order #{order.order_number}"
+                    )
                 except CustomerLoyalty.DoesNotExist:
                     # Should not happen given validation above, but safe handle
                     pass
