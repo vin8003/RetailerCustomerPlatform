@@ -8,7 +8,7 @@ from django.utils import timezone
 from datetime import timedelta
 import logging
 
-from .models import CustomerProfile, CustomerAddress, CustomerWishlist, CustomerNotification, CustomerLoyalty, CustomerReferral
+from .models import CustomerProfile, CustomerAddress, CustomerWishlist, CustomerNotification, CustomerLoyalty, CustomerReferral, LoyaltyTransaction
 from .serializers import (
     CustomerProfileSerializer, CustomerAddressSerializer, CustomerAddressUpdateSerializer,
     CustomerWishlistSerializer, CustomerNotificationSerializer, CustomerDashboardSerializer,
@@ -613,27 +613,81 @@ def get_all_customer_loyalty(request):
         retailer_ids = [record.retailer.id for record in loyalty_records]
         configs = RetailerRewardConfig.objects.filter(retailer__id__in=retailer_ids)
         config_map = {config.retailer.id: config.conversion_rate for config in configs}
+        print(f"DEBUG: loyalty_records counts={len(loyalty_records)}")
+        print(f"DEBUG: config_map counts={len(config_map)}")
+        
+        # Fetch upcoming expiries
+        from django.db.models import Min, Sum
+        expiries = LoyaltyTransaction.objects.filter(
+            customer=request.user,
+            transaction_type='earn',
+            is_expired=False,
+            expiry_date__isnull=False
+        ).values('retailer_id').annotate(
+            next_expiry=Min('expiry_date'),
+            amount=Sum('amount')
+        )
+        print(f"DEBUG: expiries counts={len(expiries)}")
+        expiry_map = {e['retailer_id']: {'date': e['next_expiry'], 'amount': e['amount']} for e in expiries}
         
         data = []
         for record in loyalty_records:
-            conversion_rate = config_map.get(record.retailer.id, 1.0)
+            # Safer conversion rate handling
+            raw_rate = config_map.get(record.retailer.id, 1.0)
+            conversion_rate = float(raw_rate) if raw_rate is not None else 1.0
+            
+            expiry_info = expiry_map.get(record.retailer.id)
+            
+            # Robust point calculation
+            pts_float = float(record.points) if record.points else 0.0
+            val_in_curr = pts_float * conversion_rate
+            
             data.append({
                 'retailer_id': record.retailer.id,
                 'retailer_name': record.retailer.shop_name,
-                'points': record.points,
+                'points': pts_float,
                 'conversion_rate': conversion_rate,
-                'value_in_currency': float(record.points) * float(conversion_rate),
+                'value_in_currency': val_in_curr,
+                'next_expiry_date': expiry_info['date'] if expiry_info else None,
+                'points_expiring_soon': float(expiry_info['amount'] or 0) if expiry_info else 0,
                 'updated_at': record.updated_at
             })
             
         return Response(data, status=status.HTTP_200_OK)
-    
     except Exception as e:
-        logger.error(f"Error getting all customer loyalty: {str(e)}")
-        return Response(
-            {'error': 'Internal server error'}, 
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
+        import traceback
+        traceback.print_exc()
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def get_loyalty_transactions(request):
+    """
+    Get history of loyalty point transactions
+    """
+    retailer_id = request.query_params.get('retailer_id')
+    transactions = LoyaltyTransaction.objects.filter(customer=request.user)
+    
+    if retailer_id:
+        transactions = transactions.filter(retailer_id=retailer_id)
+        
+    transactions = transactions.select_related('retailer').order_by('-created_at')[:50]
+    
+    data = []
+    for tx in transactions:
+        data.append({
+            'id': tx.id,
+            'retailer_id': tx.retailer.id,
+            'retailer_name': tx.retailer.shop_name,
+            'amount': tx.amount,
+            'transaction_type': tx.transaction_type,
+            'description': tx.description,
+            'expiry_date': tx.expiry_date,
+            'is_expired': tx.is_expired,
+            'created_at': tx.created_at
+        })
+        
+    return Response(data, status=status.HTTP_200_OK)
 
 
 @api_view(['GET'])
@@ -698,6 +752,14 @@ def apply_referral_code(request):
             
         retailer = get_object_or_404(RetailerProfile, id=retailer_id)
         
+        # Check if referral is enabled for this retailer
+        config = RetailerRewardConfig.objects.filter(retailer=retailer).first()
+        if not config or not config.is_referral_enabled:
+            return Response(
+                {'error': 'Referral system is currently disabled for this retailer'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
         # Find the referrer
         referrer_profile = get_object_or_404(CustomerProfile, referral_code=referral_code)
         referrer = referrer_profile.user
@@ -761,19 +823,41 @@ def get_referral_stats(request):
         # Referrals made by this user
         referrals_made = CustomerReferral.objects.filter(referrer=request.user).select_related('retailer', 'referee')
         
+        # Get active referral schemes for rule visibility
+        from retailers.models import RetailerRewardConfig
+        active_configs = RetailerRewardConfig.objects.filter(is_referral_enabled=True, is_active=True).select_related('retailer')
+        active_schemes = []
+        for config in active_configs:
+            active_schemes.append({
+                'retailer_id': config.retailer.id,
+                'retailer_name': config.retailer.shop_name,
+                'referral_reward_points': config.referral_reward_points,
+                'referee_reward_points': config.referee_reward_points,
+                'min_referral_order_amount': config.min_referral_order_amount
+            })
+
         data = {
             'referral_code': profile.referral_code,
             'total_referrals': referrals_made.count(),
             'successful_referrals': referrals_made.filter(is_rewarded=True).count(),
-            'referrals_detail': []
+            'referrals_detail': [],
+            'active_referral_schemes': active_schemes
         }
         
+        # Build map of reward configs for past referrals to show rules accurately
+        # (Though current rewards are fixed at delivery time, showing current rules is helpful)
         for ref in referrals_made:
+            ref_config = RetailerRewardConfig.objects.filter(retailer=ref.retailer).first()
             data['referrals_detail'].append({
                 'referee_name': ref.referee.get_full_name() or ref.referee.username,
                 'retailer_name': ref.retailer.shop_name,
                 'is_rewarded': ref.is_rewarded,
-                'created_at': ref.created_at
+                'created_at': ref.created_at,
+                'reward_rules': {
+                    'your_reward': ref_config.referral_reward_points if ref_config else 0,
+                    'friend_reward': ref_config.referee_reward_points if ref_config else 0,
+                    'min_order_condition': ref_config.min_referral_order_amount if ref_config else 0,
+                }
             })
             
         return Response(data, status=status.HTTP_200_OK)
@@ -804,14 +888,11 @@ def get_retailer_customers(request):
         # 1. Get all customers who have placed orders
         customers_with_orders = Order.objects.filter(retailer=retailer).values_list('customer', flat=True).distinct()
         
-        # 2. Get all customers with loyalty points
-        customers_with_loyalty = CustomerLoyalty.objects.filter(retailer=retailer).values_list('customer', flat=True)
-        
-        # 3. Get all blacklisted customers
+        # 2. Get all blacklisted customers (so retailer can still see them to un-blacklist)
         blacklisted_customers = RetailerBlacklist.objects.filter(retailer=retailer).values_list('customer', flat=True)
         
-        # Combine unique customer IDs
-        all_customer_ids = set(customers_with_orders) | set(customers_with_loyalty) | set(blacklisted_customers)
+        # Combine unique customer IDs (Restricted to orders and blacklists ONLY)
+        all_customer_ids = set(customers_with_orders) | set(blacklisted_customers)
         
         # Fetch detailed data for each customer
         customer_profiles = CustomerProfile.objects.filter(user__id__in=all_customer_ids).select_related('user')
@@ -877,6 +958,15 @@ def get_customer_details_for_retailer(request, customer_id):
         retailer = get_object_or_404(RetailerProfile, user=request.user)
         profile = get_object_or_404(CustomerProfile, user__id=customer_id)
         user = profile.user
+        
+        # Check association (must have at least one order or be blacklisted)
+        has_ordered = Order.objects.filter(retailer=retailer, customer=user).exists()
+        is_blacklisted = RetailerBlacklist.objects.filter(retailer=retailer, customer=user).exists()
+        if not (has_ordered or is_blacklisted):
+            return Response(
+                {'error': 'Customer not associated with this retailer'}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
         
         # Stats
         orders = Order.objects.filter(retailer=retailer, customer=user).order_by('-created_at')

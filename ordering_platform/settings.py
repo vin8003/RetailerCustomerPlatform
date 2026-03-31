@@ -21,6 +21,8 @@ SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-change-this-in-production'
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'True').lower() == 'true'
 
+RETAILER_ACCESS_CODE = os.getenv('RETAILER_ACCESS_CODE', 'Subh_Labh@26')
+
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 if '*' in ALLOWED_HOSTS:
     ALLOWED_HOSTS = ['*']

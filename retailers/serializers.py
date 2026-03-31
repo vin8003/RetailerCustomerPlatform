@@ -39,6 +39,16 @@ class RetailerProfileSerializer(serializers.ModelSerializer):
     phone_number = serializers.CharField(source='user.phone_number', read_only=True)
     is_phone_verified = serializers.BooleanField(source='user.is_phone_verified', read_only=True)
     
+    # Reward Configuration
+    is_referral_enabled = serializers.BooleanField(source='reward_config.is_referral_enabled', read_only=True)
+    referral_reward_points = serializers.DecimalField(source='reward_config.referral_reward_points', max_digits=10, decimal_places=2, read_only=True)
+    min_referral_order_amount = serializers.DecimalField(source='reward_config.min_referral_order_amount', max_digits=10, decimal_places=2, read_only=True)
+    cashback_percentage = serializers.DecimalField(source='reward_config.cashback_percentage', max_digits=5, decimal_places=2, read_only=True)
+    loyalty_earning_type = serializers.CharField(source='reward_config.earning_type', read_only=True)
+    loyalty_earning_value = serializers.DecimalField(source='reward_config.loyalty_earning_value', max_digits=10, decimal_places=2, read_only=True)
+    loyalty_min_order_value = serializers.DecimalField(source='reward_config.loyalty_min_order_value', max_digits=10, decimal_places=2, read_only=True)
+    is_reward_active = serializers.BooleanField(source='reward_config.is_active', read_only=True)
+    
     class Meta:
         model = RetailerProfile
         fields = [
@@ -51,6 +61,8 @@ class RetailerProfileSerializer(serializers.ModelSerializer):
             'offers_pickup', 'delivery_radius', 'serviceable_pincodes', 'minimum_order_amount',
             'delivery_charge', 'free_delivery_threshold',
             'is_verified', 'is_active', 'average_rating', 'total_ratings',
+            'is_reward_active', 'is_referral_enabled', 'referral_reward_points', 'min_referral_order_amount', 
+            'cashback_percentage', 'loyalty_earning_type', 'loyalty_earning_value', 'loyalty_min_order_value',
             'operating_hours', 'is_currently_open', 'next_open_time', 'categories', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'is_verified', 'average_rating', 'total_ratings', 'created_at', 'updated_at']
@@ -284,6 +296,7 @@ class RetailerRewardConfigSerializer(serializers.ModelSerializer):
     class Meta:
         model = RetailerRewardConfig
         fields = [
+            'earning_type', 'loyalty_earning_value', 'loyalty_min_order_value',
             'cashback_percentage', 'max_reward_usage_percent',
             'max_reward_usage_flat', 'conversion_rate', 'is_active',
             'is_referral_enabled', 'referral_reward_points',

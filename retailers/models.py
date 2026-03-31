@@ -239,12 +239,25 @@ class RetailerRewardConfig(models.Model):
     """
     Configuration for retailer-specific reward functionality
     """
+    EARNING_TYPES = (
+        ('percentage', 'Percentage of Order'),
+        ('points_per_amount', 'Points per Order Amount'),
+    )
+
     retailer = models.OneToOneField(
         RetailerProfile, 
         on_delete=models.CASCADE, 
         related_name='reward_config'
     )
+    # Earning Rules
+    earning_type = models.CharField(max_length=20, choices=EARNING_TYPES, default='percentage')
+    loyalty_earning_value = models.DecimalField(max_digits=10, decimal_places=2, default=1.0)
+    loyalty_min_order_value = models.DecimalField(max_digits=10, decimal_places=2, default=0.0)
+
+    # Legacy field - keeping for now to avoid breaking existing logic until update
     cashback_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=1.0)
+    
+    # Redemption Rules
     max_reward_usage_percent = models.DecimalField(max_digits=5, decimal_places=2, default=50.0)
     max_reward_usage_flat = models.DecimalField(max_digits=10, decimal_places=2, default=500.0)
     conversion_rate = models.DecimalField(max_digits=10, decimal_places=2, default=1.0)
