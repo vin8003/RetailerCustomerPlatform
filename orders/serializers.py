@@ -33,13 +33,14 @@ class OrderListSerializer(serializers.ModelSerializer):
     has_customer_feedback = serializers.SerializerMethodField()
     has_retailer_rating = serializers.SerializerMethodField()
     feedback = serializers.SerializerMethodField()
+    customer_average_rating = serializers.FloatField(source='customer.customer_profile.average_rating', read_only=True)
     
     class Meta:
         model = Order
         fields = [
             'id', 'order_number', 'retailer', 'retailer_name', 'customer_name', 'delivery_mode', 'payment_mode',
             'status', 'total_amount', 'items_count', 'created_at', 'updated_at', 'has_customer_feedback', 'has_retailer_rating', 'feedback',
-            'preparation_time_minutes', 'estimated_ready_time', 'expected_processing_start', 'cancelled_by'
+            'preparation_time_minutes', 'estimated_ready_time', 'expected_processing_start', 'cancelled_by', 'customer_average_rating'
         ]
     
     def get_items_count(self, obj):
@@ -109,6 +110,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     has_customer_feedback = serializers.SerializerMethodField()
     has_retailer_rating = serializers.SerializerMethodField()
     feedback = serializers.SerializerMethodField()
+    customer_average_rating = serializers.FloatField(source='customer.customer_profile.average_rating', read_only=True)
     
     applied_offers = serializers.SerializerMethodField()
     
@@ -126,7 +128,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'items', 'applied_offers', 'created_at', 'updated_at', 'confirmed_at', 'delivered_at',
             'cancelled_at', 'unread_messages_count',
             'has_customer_feedback', 'has_retailer_rating', 'feedback',
-            'preparation_time_minutes', 'estimated_ready_time', 'expected_processing_start'
+            'preparation_time_minutes', 'estimated_ready_time', 'expected_processing_start', 'customer_average_rating'
         ]
     
     def get_applied_offers(self, obj):

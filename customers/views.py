@@ -804,14 +804,11 @@ def get_retailer_customers(request):
         # 1. Get all customers who have placed orders
         customers_with_orders = Order.objects.filter(retailer=retailer).values_list('customer', flat=True).distinct()
         
-        # 2. Get all customers with loyalty points
-        customers_with_loyalty = CustomerLoyalty.objects.filter(retailer=retailer).values_list('customer', flat=True)
-        
-        # 3. Get all blacklisted customers
+        # 2. Get all blacklisted customers (so retailer can still see them to un-blacklist)
         blacklisted_customers = RetailerBlacklist.objects.filter(retailer=retailer).values_list('customer', flat=True)
         
-        # Combine unique customer IDs
-        all_customer_ids = set(customers_with_orders) | set(customers_with_loyalty) | set(blacklisted_customers)
+        # Combine unique customer IDs (Restricted to orders and blacklists ONLY)
+        all_customer_ids = set(customers_with_orders) | set(blacklisted_customers)
         
         # Fetch detailed data for each customer
         customer_profiles = CustomerProfile.objects.filter(user__id__in=all_customer_ids).select_related('user')
@@ -877,6 +874,15 @@ def get_customer_details_for_retailer(request, customer_id):
         retailer = get_object_or_404(RetailerProfile, user=request.user)
         profile = get_object_or_404(CustomerProfile, user__id=customer_id)
         user = profile.user
+        
+        # Check association (must have at least one order or be blacklisted)
+        has_ordered = Order.objects.filter(retailer=retailer, customer=user).exists()
+        is_blacklisted = RetailerBlacklist.objects.filter(retailer=retailer, customer=user).exists()
+        if not (has_ordered or is_blacklisted):
+            return Response(
+                {'error': 'Customer not associated with this retailer'}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
         
         # Stats
         orders = Order.objects.filter(retailer=retailer, customer=user).order_by('-created_at')
