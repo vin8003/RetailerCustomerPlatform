@@ -27,6 +27,7 @@ urlpatterns = [
     path('reward-configuration/', views.get_reward_configuration, name='get_reward_configuration'),
     path('loyalty/', views.get_customer_loyalty, name='get_customer_loyalty'),
     path('loyalty/all/', views.get_all_customer_loyalty, name='get_all_customer_loyalty'),
+    path('loyalty/transactions/', views.get_loyalty_transactions, name='get_loyalty_transactions'),
     path('loyalty/retailer-customers/', views.get_retailer_customers_loyalty, name='get_retailer_customers_loyalty'),
     
     # Retailer Customer Management

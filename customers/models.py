@@ -257,6 +257,49 @@ class CustomerLoyalty(models.Model):
         return f"{self.customer.username} - {self.retailer.shop_name}: {self.points}"
 
 
+class LoyaltyTransaction(models.Model):
+    """
+    Tracks individual loyalty point transactions (earning, spending, expiry)
+    """
+    TRANSACTION_TYPES = (
+        ('earn', 'Points Earned'),
+        ('redeem', 'Points Redeemed'),
+        ('refund', 'Points Refunded'),
+        ('expire', 'Points Expired'),
+    )
+    
+    customer = models.ForeignKey(
+        settings.AUTH_USER_MODEL, 
+        on_delete=models.CASCADE, 
+        related_name='loyalty_transactions'
+    )
+    retailer = models.ForeignKey(
+        'retailers.RetailerProfile', 
+        on_delete=models.CASCADE, 
+        related_name='loyalty_transactions'
+    )
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    transaction_type = models.CharField(max_length=20, choices=TRANSACTION_TYPES)
+    description = models.CharField(max_length=255, blank=True)
+    
+    # Expiry tracking
+    expiry_date = models.DateTimeField(null=True, blank=True)
+    is_expired = models.BooleanField(default=False)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        db_table = 'loyalty_transaction'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['customer', 'retailer', 'transaction_type']),
+            models.Index(fields=['expiry_date', 'is_expired']),
+        ]
+
+    def __str__(self):
+        return f"{self.customer.username} - {self.amount} ({self.transaction_type})"
+
+
 class CustomerReferral(models.Model):
     """
     Tracks referrals made by customers for specific retailers

@@ -43,6 +43,15 @@ def retailer_signup(request):
     """
     try:
         data = request.data.copy()
+        access_code = data.pop('access_code', None)
+        
+        # Verify access code
+        if access_code != settings.RETAILER_ACCESS_CODE:
+            return Response(
+                {'error': 'Invalid Access Code'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         data['user_type'] = 'retailer'
 
         serializer = UserRegistrationSerializer(data=data)

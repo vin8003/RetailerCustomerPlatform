@@ -93,14 +93,15 @@ class CustomerWishlistSerializer(serializers.ModelSerializer):
     product_price = serializers.DecimalField(source='product.price', max_digits=10, decimal_places=2, read_only=True)
     product_image = serializers.CharField(source='product.image_display_url', read_only=True)
     retailer_name = serializers.CharField(source='product.retailer.shop_name', read_only=True)
+    retailer_id = serializers.IntegerField(source='product.retailer.id', read_only=True)
     
     class Meta:
         model = CustomerWishlist
         fields = [
             'id', 'product', 'product_name', 'product_price', 'product_image',
-            'retailer_name', 'created_at'
+            'retailer_name', 'retailer_id', 'created_at'
         ]
-        read_only_fields = ['id', 'product_name', 'product_price', 'product_image', 'retailer_name', 'created_at']
+        read_only_fields = ['id', 'product_name', 'product_price', 'product_image', 'retailer_name', 'retailer_id', 'created_at']
     
     def create(self, validated_data):
         """Create wishlist item with customer from context"""
