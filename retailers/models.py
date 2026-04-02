@@ -57,6 +57,8 @@ class RetailerProfile(models.Model):
     # Service settings
     offers_delivery = models.BooleanField(default=True)
     offers_pickup = models.BooleanField(default=True)
+    accepts_cod = models.BooleanField(default=True)
+    accepts_upi = models.BooleanField(default=True)
     delivery_radius = models.PositiveIntegerField(default=5)  # in kilometers
     serviceable_pincodes = models.JSONField(default=list, blank=True)  # List of pincodes
     minimum_order_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)

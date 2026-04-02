@@ -113,6 +113,10 @@ class AddToCartSerializer(serializers.Serializer):
                 f"Only {product.quantity} items available in stock"
             )
         
+        # Check if retailer is accepting orders
+        if not product.retailer.offers_delivery and not product.retailer.offers_pickup:
+            raise serializers.ValidationError("This retailer is currently not accepting orders.")
+        
         return data
     
     def create(self, validated_data):
@@ -165,6 +169,11 @@ class UpdateCartItemSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 f"Only {cart_item.product.quantity} items available in stock"
             )
+        
+        # Check if retailer is accepting orders
+        retailer = cart_item.cart.retailer
+        if not retailer.offers_delivery and not retailer.offers_pickup:
+            raise serializers.ValidationError("This retailer is currently not accepting orders.")
         
         return data
     

@@ -202,6 +202,26 @@ class OrderCreateSerializer(serializers.Serializer):
         if data['delivery_mode'] == 'delivery' and not data.get('address_id'):
             raise serializers.ValidationError("Address is required for delivery orders")
         
+        # Validate Retailer Delivery/Pickup Flags
+        from retailers.models import RetailerProfile
+        retailer_id = data.get('retailer_id')
+        try:
+            retailer = RetailerProfile.objects.get(id=retailer_id)
+            if data['delivery_mode'] == 'delivery' and not retailer.offers_delivery:
+                raise serializers.ValidationError("This retailer does not offer delivery.")
+            if data['delivery_mode'] == 'pickup' and not retailer.offers_pickup:
+                raise serializers.ValidationError("This retailer does not offer store pickup.")
+            if not retailer.offers_delivery and not retailer.offers_pickup:
+                raise serializers.ValidationError("This retailer is currently not accepting orders.")
+            
+            # Additional Validation for Payment Modes
+            if data['payment_mode'] in ['cash', 'cash_pickup'] and not retailer.accepts_cod:
+                raise serializers.ValidationError("This retailer does not accept Cash on Delivery.")
+            if data['payment_mode'] == 'upi' and not retailer.accepts_upi:
+                raise serializers.ValidationError("This retailer does not accept UPI payments.")
+        except RetailerProfile.DoesNotExist:
+            pass # Handled by other validators
+
         if data['delivery_mode'] == 'delivery' and data['payment_mode'] not in ['cash', 'upi']:
             raise serializers.ValidationError("Invalid payment mode for delivery")
         
