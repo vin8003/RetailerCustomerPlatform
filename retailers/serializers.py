@@ -57,8 +57,8 @@ class RetailerProfileSerializer(serializers.ModelSerializer):
             'whatsapp_number', 'address_line1', 'address_line2', 'city', 
             'state', 'pincode', 'country', 'latitude', 'longitude',
             'business_type', 'gst_number', 'pan_number', 'upi_id', 'upi_qr_code', 
-            'offers_delivery',
-            'offers_pickup', 'delivery_radius', 'serviceable_pincodes', 'minimum_order_amount',
+            'offers_delivery', 'offers_pickup', 'accepts_cod', 'accepts_upi',
+            'delivery_radius', 'serviceable_pincodes', 'minimum_order_amount',
             'delivery_charge', 'free_delivery_threshold',
             'is_verified', 'is_active', 'average_rating', 'total_ratings',
             'is_reward_active', 'is_referral_enabled', 'referral_reward_points', 'min_referral_order_amount', 
@@ -123,8 +123,8 @@ class RetailerProfileUpdateSerializer(serializers.ModelSerializer):
             'contact_phone', 'whatsapp_number', 'address_line1', 'address_line2',
             'city', 'state', 'pincode', 'country', 'latitude', 'longitude',
             'business_type', 'gst_number', 'pan_number', 'upi_id', 'upi_qr_code', 
-            'offers_delivery',
-            'offers_pickup', 'delivery_radius', 'serviceable_pincodes', 'minimum_order_amount',
+            'offers_delivery', 'offers_pickup', 'accepts_cod', 'accepts_upi',
+            'delivery_radius', 'serviceable_pincodes', 'minimum_order_amount',
             'delivery_charge', 'free_delivery_threshold', 'categories'
         ]
         
