@@ -401,7 +401,7 @@ def validate_cart(request):
             for item in cart.items.all():
                 if not item.product.is_available or not item.product.is_active:
                     validation_errors.append(f"{item.product.name} is no longer available")
-                elif item.quantity > item.product.quantity:
+                elif item.product.track_inventory and item.quantity > item.product.quantity:
                     validation_errors.append(
                         f"{item.product.name} - only {item.product.quantity} items available"
                     )

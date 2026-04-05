@@ -80,7 +80,7 @@ class ProductListSerializer(serializers.ModelSerializer):
         model = Product
         fields = [
             'id', 'name', 'description', 'price', 'discounted_price',
-            'original_price', 'discount_percentage', 'quantity', 'unit',
+            'original_price', 'discount_percentage', 'quantity', 'track_inventory', 'unit',
             'minimum_order_quantity', 'maximum_order_quantity',
             'image', 'image_url', 'category_name', 'brand_name', 'retailer_name',
             'is_in_stock', 'is_featured', 'is_active', 'is_seasonal', 'is_available',
@@ -242,7 +242,7 @@ class ProductDetailSerializer(serializers.ModelSerializer):
         model = Product
         fields = [
             'id', 'name', 'description', 'price', 'discounted_price',
-            'original_price', 'discount_percentage', 'savings', 'quantity',
+            'original_price', 'discount_percentage', 'savings', 'quantity', 'track_inventory',
             'unit', 'minimum_order_quantity', 'maximum_order_quantity',
             'image', 'image_url', 'images', 'additional_images', 'category', 
             'category_name', 'brand', 'brand_name',
@@ -478,7 +478,7 @@ class ProductCreateSerializer(serializers.ModelSerializer):
         model = Product
         fields = [
             'name', 'description', 'category', 'brand', 'price',
-            'original_price', 'discount_percentage', 'quantity', 'unit',
+            'original_price', 'discount_percentage', 'quantity', 'track_inventory', 'unit',
             'minimum_order_quantity', 'maximum_order_quantity', 'image',
             'images', 'specifications', 'tags', 'is_featured', 'is_available',
             'barcode', 'master_product', 'product_group', 'is_active', 'is_seasonal'
@@ -490,7 +490,7 @@ class ProductCreateSerializer(serializers.ModelSerializer):
             if data['original_price'] < data['price']:
                 raise serializers.ValidationError("Original price cannot be less than current price")
         
-        if data.get('minimum_order_quantity', 1) > data.get('quantity', 0):
+        if data.get('track_inventory', True) and data.get('minimum_order_quantity', 1) > data.get('quantity', 0):
             raise serializers.ValidationError("Minimum order quantity cannot be greater than available quantity")
         
         if data.get('maximum_order_quantity') and data.get('minimum_order_quantity'):
@@ -513,7 +513,7 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
         model = Product
         fields = [
             'name', 'description', 'category', 'brand', 'price',
-            'original_price', 'discount_percentage', 'quantity', 'unit',
+            'original_price', 'discount_percentage', 'quantity', 'track_inventory', 'unit',
             'minimum_order_quantity', 'maximum_order_quantity', 'image',
             'images', 'specifications', 'tags', 'is_featured', 'is_available',
             'barcode', 'master_product', 'product_group', 'is_active', 'is_seasonal'
@@ -528,7 +528,8 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
         current_quantity = data.get('quantity', self.instance.quantity)
         min_quantity = data.get('minimum_order_quantity', self.instance.minimum_order_quantity)
         
-        if min_quantity > current_quantity:
+        track_inv = data.get('track_inventory', self.instance.track_inventory)
+        if track_inv and min_quantity > current_quantity:
             raise serializers.ValidationError("Minimum order quantity cannot be greater than available quantity")
         
         max_quantity = data.get('maximum_order_quantity', self.instance.maximum_order_quantity)
