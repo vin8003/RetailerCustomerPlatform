@@ -212,6 +212,7 @@ class Product(models.Model):
     
     # Inventory
     quantity = models.PositiveIntegerField(default=0)
+    track_inventory = models.BooleanField(default=True)
     unit = models.CharField(max_length=20, choices=UNIT_CHOICES, default='piece')
     minimum_order_quantity = models.PositiveIntegerField(default=1)
     maximum_order_quantity = models.PositiveIntegerField(null=True, blank=True)
@@ -276,6 +277,8 @@ class Product(models.Model):
     @property
     def is_in_stock(self):
         """Check if product is in stock"""
+        if not self.track_inventory:
+            return self.is_available
         return self.quantity > 0
     
     @property
@@ -307,10 +310,17 @@ class Product(models.Model):
             return False
         if self.maximum_order_quantity and quantity > self.maximum_order_quantity:
             return False
+        
+        if not self.track_inventory:
+            return self.is_available
+            
         return quantity <= self.quantity
     
     def reduce_quantity(self, quantity):
         """Reduce product quantity"""
+        if not self.track_inventory:
+            return True
+            
         if self.quantity >= quantity:
             self.quantity -= quantity
             self.save()
@@ -319,6 +329,9 @@ class Product(models.Model):
     
     def increase_quantity(self, quantity):
         """Increase product quantity"""
+        if not self.track_inventory:
+            return True
+            
         self.quantity += quantity
         self.save()
 

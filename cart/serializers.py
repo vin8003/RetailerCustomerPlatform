@@ -46,7 +46,7 @@ class CartItemSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError("Product is not available")
             
             # Check stock availability
-            if quantity > product.quantity:
+            if product.track_inventory and quantity > product.quantity:
                 raise serializers.ValidationError(
                     f"Only {product.quantity} items available in stock"
                 )
@@ -108,7 +108,7 @@ class AddToCartSerializer(serializers.Serializer):
         quantity = data['quantity']
             
         # Check stock availability
-        if quantity > product.quantity:
+        if product.track_inventory and quantity > product.quantity:
              raise serializers.ValidationError(
                 f"Only {product.quantity} items available in stock"
             )
@@ -165,7 +165,7 @@ class UpdateCartItemSerializer(serializers.Serializer):
         quantity = data['quantity']
         
         # Check stock availability
-        if quantity > cart_item.product.quantity:
+        if cart_item.product.track_inventory and quantity > cart_item.product.quantity:
             raise serializers.ValidationError(
                 f"Only {cart_item.product.quantity} items available in stock"
             )

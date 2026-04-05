@@ -257,7 +257,7 @@ class OrderCreateSerializer(serializers.Serializer):
         # Validate cart items availability and limits
         for cart_item in cart_items:
             # Check stock
-            if cart_item.quantity > cart_item.product.quantity:
+            if cart_item.product.track_inventory and cart_item.quantity > cart_item.product.quantity:
                  raise serializers.ValidationError(
                     f"Product '{cart_item.product.name}' - only {cart_item.product.quantity} items available"
                 )
@@ -436,15 +436,17 @@ class OrderCreateSerializer(serializers.Serializer):
                     total_price=total_price
                 ))
                 
-                # Reduce product quantity in memory
-                cart_item.product.quantity -= cart_item.quantity
-                products_to_update.append(cart_item.product)
+                # Reduce product quantity in memory (only if tracked)
+                if cart_item.product.track_inventory:
+                    cart_item.product.quantity -= cart_item.quantity
+                    products_to_update.append(cart_item.product)
             
             # Bulk create items
             OrderItem.objects.bulk_create(order_items)
             
-            # Bulk update product quantities
-            Product.objects.bulk_update(products_to_update, ['quantity'])
+            # Bulk update product quantities for tracked items
+            if products_to_update:
+                Product.objects.bulk_update(products_to_update, ['quantity'])
             
             # Deduct points from customer profile if used
             if points_to_redeem > 0:
