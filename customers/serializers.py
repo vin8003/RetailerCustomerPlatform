@@ -180,6 +180,9 @@ class RetailerCustomerListSerializer(serializers.Serializer):
     is_blacklisted = serializers.BooleanField()
     last_order_date = serializers.DateTimeField(allow_null=True)
     joined_date = serializers.DateTimeField(required=False)
+    registration_status = serializers.CharField(required=False)
+    is_phone_verified = serializers.BooleanField(required=False)
+    nickname = serializers.CharField(required=False, allow_null=True)
 
 
 class RetailerCustomerDetailSerializer(serializers.Serializer):
@@ -198,6 +201,10 @@ class RetailerCustomerDetailSerializer(serializers.Serializer):
     is_blacklisted = serializers.BooleanField()
     last_order_date = serializers.DateTimeField(allow_null=True)
     joined_date = serializers.DateTimeField()
+    registration_status = serializers.CharField()
+    is_phone_verified = serializers.BooleanField(required=False)
+    nickname = serializers.CharField(allow_null=True)
+    notes = serializers.CharField(allow_null=True)
     
     # Additional detail fields
     recent_orders = serializers.ListField()

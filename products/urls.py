@@ -1,7 +1,18 @@
 from django.urls import path
-from . import views
+from . import views, api_erp_views
+from rest_framework.routers import DefaultRouter
+
+erp_router = DefaultRouter()
+erp_router.register(r'erp/suppliers', api_erp_views.SupplierViewSet, basename='erp-supplier')
+erp_router.register(r'erp/purchase-invoices', api_erp_views.PurchaseInvoiceViewSet, basename='erp-purchase-invoice')
+erp_router.register(r'erp/supplier-ledger', api_erp_views.SupplierLedgerViewSet, basename='erp-supplier-ledger')
 
 urlpatterns = [
+    path('erp/pos-checkout/', api_erp_views.create_pos_order, name='create_pos_order'),
+    path('erp/verify-pos-customer/', api_erp_views.verify_pos_customer, name='verify_pos_customer'),
+    path('erp/search-pos-customers/', api_erp_views.search_pos_customers, name='search_pos_customers'),
+    path('erp/inventory-ledger/', api_erp_views.get_inventory_ledger, name='get_inventory_ledger'),
+    path('erp/daily-sales-summary/', api_erp_views.get_daily_sales_summary, name='get_daily_sales_summary'),
     # Retailer product management
     path('', views.get_retailer_products, name='get_retailer_products'),
     path('search/', views.search_products, name='search_products'),
@@ -58,4 +69,4 @@ urlpatterns = [
     path('brands/', views.get_product_brands, name='get_product_brands'),
     path('brands/create/', views.create_product_brand, name='create_product_brand'), # NEW
 
-]
+] + erp_router.urls

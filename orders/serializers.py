@@ -28,7 +28,7 @@ class OrderListSerializer(serializers.ModelSerializer):
     Serializer for order list view
     """
     retailer_name = serializers.CharField(source='retailer.shop_name', read_only=True)
-    customer_name = serializers.CharField(source='customer.first_name', read_only=True)
+    customer_name = serializers.SerializerMethodField()
     items_count = serializers.SerializerMethodField()
     has_customer_feedback = serializers.SerializerMethodField()
     has_retailer_rating = serializers.SerializerMethodField()
@@ -40,13 +40,40 @@ class OrderListSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'order_number', 'retailer', 'retailer_name', 'customer_name', 'delivery_mode', 'payment_mode',
             'status', 'total_amount', 'items_count', 'created_at', 'updated_at', 'has_customer_feedback', 'has_retailer_rating', 'feedback',
-            'preparation_time_minutes', 'estimated_ready_time', 'expected_processing_start', 'cancelled_by', 'customer_average_rating'
+            'preparation_time_minutes', 'estimated_ready_time', 'expected_processing_start', 'cancelled_by', 'customer_average_rating', 'source'
         ]
     
     def get_items_count(self, obj):
         """Get number of items in order"""
         # Fallback for when serializer used without annotation
         return getattr(obj, 'items_count_annotated', obj.items.count())
+
+    def get_customer_name(self, obj):
+        """Get unified customer name based on priority"""
+        from retailers.models import RetailerCustomerMapping
+        
+        # 1. Try mapping nickname
+        if obj.customer and obj.retailer:
+            mapping = RetailerCustomerMapping.objects.filter(
+                retailer=obj.retailer,
+                customer=obj.customer
+            ).first()
+            if mapping and mapping.nickname:
+                return mapping.nickname
+
+        # 2. Try customer first name
+        if obj.customer and obj.customer.first_name:
+            return obj.customer.first_name
+
+        # 3. Try guest name (POS legacy or provided name)
+        if obj.guest_name:
+            return obj.guest_name
+
+        # 4. Fallback
+        if obj.customer:
+            return obj.customer.username
+            
+        return "Walk-in"
 
     def get_has_customer_feedback(self, obj):
         """Check if order has customer feedback safely"""
@@ -100,7 +127,10 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     retailer_address = serializers.CharField(source='retailer.full_address', read_only=True)
     retailer_upi_id = serializers.CharField(source='retailer.upi_id', read_only=True)
     retailer_upi_qr_code = serializers.ImageField(source='retailer.upi_qr_code', read_only=True)
-    customer_name = serializers.CharField(source='customer.first_name', read_only=True)
+    retailer_gst_number = serializers.CharField(source='retailer.gst_number', read_only=True)
+    retailer_receipt_footer = serializers.CharField(source='retailer.receipt_footer', read_only=True)
+    retailer_show_gst = serializers.BooleanField(source='retailer.show_gst_on_receipt', read_only=True)
+    customer_name = serializers.SerializerMethodField()
     customer_phone = serializers.CharField(source='customer.phone_number', read_only=True)
     customer_email = serializers.CharField(source='customer.email', read_only=True)
     delivery_address_text = serializers.CharField(source='delivery_address.full_address', read_only=True)
@@ -123,14 +153,41 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'subtotal', 'delivery_fee', 'discount_amount', 'discount_from_points', 'points_redeemed', 'points_earned', 'total_amount',
             'special_instructions', 'cancellation_reason', 'cancelled_by', 
             'payment_reference_id', 'payment_status', 'payment_edit_count', 'is_payment_locked',
-            'delivery_address_text',
+            'delivery_address_text', 'retailer_gst_number', 'retailer_receipt_footer', 'retailer_show_gst',
             'delivery_latitude', 'delivery_longitude',
             'items', 'applied_offers', 'created_at', 'updated_at', 'confirmed_at', 'delivered_at',
             'cancelled_at', 'unread_messages_count',
             'has_customer_feedback', 'has_retailer_rating', 'feedback',
-            'preparation_time_minutes', 'estimated_ready_time', 'expected_processing_start', 'customer_average_rating'
+            'preparation_time_minutes', 'estimated_ready_time', 'expected_processing_start', 'customer_average_rating', 'source'
         ]
     
+    def get_customer_name(self, obj):
+        """Get unified customer name based on priority"""
+        from retailers.models import RetailerCustomerMapping
+        
+        # 1. Try mapping nickname
+        if obj.customer and obj.retailer:
+            mapping = RetailerCustomerMapping.objects.filter(
+                retailer=obj.retailer,
+                customer=obj.customer
+            ).first()
+            if mapping and mapping.nickname:
+                return mapping.nickname
+
+        # 2. Try customer first name
+        if obj.customer and obj.customer.first_name:
+            return obj.customer.first_name
+
+        # 3. Try guest name (POS legacy or provided name)
+        if obj.guest_name:
+            return obj.guest_name
+
+        # 4. Fallback
+        if obj.customer:
+            return obj.customer.username
+            
+        return "Walk-in"
+
     def get_applied_offers(self, obj):
         # Return list of applied offers with details
         offers = []
@@ -653,6 +710,12 @@ class OrderStatsSerializer(serializers.Serializer):
     total_products = serializers.IntegerField(required=False)
     average_rating = serializers.FloatField(required=False)
     recent_reviews = serializers.ListField(required=False)
+    
+    # New breakdown fields
+    cash_sales = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
+    digital_sales = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
+    pos_sales = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
+    online_sales = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
 
 
 class OrderModificationSerializer(serializers.Serializer):

@@ -569,7 +569,15 @@ def get_order_stats(request):
             delivered_orders=Count('id', filter=Q(status='delivered')),
             cancelled_orders=Count('id', filter=Q(status='cancelled')),
             total_revenue=Sum('total_amount', filter=Q(status='delivered')),
-            avg_order_value=Avg('total_amount', filter=Q(status='delivered'))
+            avg_order_value=Avg('total_amount', filter=Q(status='delivered')),
+            
+            # Payment Breakdown (respecting current filters)
+            cash_sales=Sum('total_amount', filter=Q(status='delivered') & (Q(payment_mode='cash') | Q(payment_mode='cash_pickup'))),
+            digital_sales=Sum('total_amount', filter=Q(status='delivered') & (Q(payment_mode='upi') | Q(payment_mode='online') | Q(payment_mode='card'))),
+            
+            # Channel Performance (respecting current filters)
+            pos_sales=Sum('total_amount', filter=Q(status='delivered') & Q(source='pos')),
+            online_sales=Sum('total_amount', filter=Q(status='delivered') & Q(source='app') | Q(source__isnull=True))
         )
         
         today_stats = orders.filter(created_at__date=today).aggregate(
@@ -577,8 +585,8 @@ def get_order_stats(request):
             today_revenue=Sum('total_amount', filter=Q(status='delivered'))
         )
         
-        # Top customers
-        top_customers = orders.filter(status='delivered').values(
+        # Top customers (only for identified customers)
+        top_customers = orders.filter(status='delivered', customer__isnull=False).values(
             'customer__first_name', 'customer__id'
         ).annotate(
             order_count=Count('id'),
@@ -592,7 +600,7 @@ def get_order_stats(request):
             recent_orders_data.append({
                 'id': order.id,
                 'order_number': order.order_number,
-                'customer_name': order.customer.first_name,
+                'customer_name': order.customer.first_name if order.customer else (order.guest_name or "Walk-in Customer"),
                 'total_amount': order.total_amount,
                 'status': order.status,
                 'created_at': order.created_at
@@ -625,7 +633,11 @@ def get_order_stats(request):
             'recent_orders': recent_orders_data,
             'total_products': total_products,
             'average_rating': float(retailer.average_rating),
-            'recent_reviews': recent_reviews_data
+            'recent_reviews': recent_reviews_data,
+            'cash_sales': stats['cash_sales'] or 0,
+            'digital_sales': stats['digital_sales'] or 0,
+            'pos_sales': stats['pos_sales'] or 0,
+            'online_sales': stats['online_sales'] or 0
         }
         
         serializer = OrderStatsSerializer(stats_data)

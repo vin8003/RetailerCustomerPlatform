@@ -2,7 +2,8 @@ from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from .models import (
     RetailerProfile, RetailerOperatingHours, RetailerCategory,
-    RetailerCategoryMapping, RetailerReview, RetailerRewardConfig
+    RetailerCategoryMapping, RetailerReview, RetailerRewardConfig,
+    Supplier
 )
 
 User = get_user_model()
@@ -63,7 +64,8 @@ class RetailerProfileSerializer(serializers.ModelSerializer):
             'is_verified', 'is_active', 'average_rating', 'total_ratings',
             'is_reward_active', 'is_referral_enabled', 'referral_reward_points', 'min_referral_order_amount', 
             'cashback_percentage', 'loyalty_earning_type', 'loyalty_earning_value', 'loyalty_min_order_value',
-            'operating_hours', 'is_currently_open', 'next_open_time', 'categories', 'created_at', 'updated_at'
+            'operating_hours', 'is_currently_open', 'next_open_time', 'categories', 'created_at', 'updated_at',
+            'receipt_footer', 'show_gst_on_receipt'
         ]
         read_only_fields = ['id', 'is_verified', 'average_rating', 'total_ratings', 'created_at', 'updated_at']
 
@@ -116,6 +118,52 @@ class RetailerProfileUpdateSerializer(serializers.ModelSerializer):
         required=False
     )
 
+    gst_number = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=15,
+        error_messages={
+            'max_length': 'GST Number must be exactly 15 characters (e.g. 22AAAAA0000A1Z5).'
+        }
+    )
+
+    pan_number = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=10,
+        error_messages={
+            'max_length': 'PAN Number must be exactly 10 characters (e.g. ABCDE1234F).'
+        }
+    )
+
+    def validate_gst_number(self, value):
+        import re
+        if value and len(value) > 0:
+            pattern = r'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$'
+            if not re.match(pattern, value.upper()):
+                raise serializers.ValidationError(
+                    'Invalid GST Number format. It should be like: 22AAAAA0000A1Z5 (15 characters).'
+                )
+            return value.upper()
+        return value
+
+    def validate_pan_number(self, value):
+        import re
+        if value and len(value) > 0:
+            pattern = r'^[A-Z]{5}[0-9]{4}[A-Z]{1}$'
+            if not re.match(pattern, value.upper()):
+                raise serializers.ValidationError(
+                    'Invalid PAN Number format. It should be like: ABCDE1234F (10 characters).'
+                )
+            return value.upper()
+        return value
+
+    def validate_pincode(self, value):
+        import re
+        if value and not re.match(r'^\d{6}$', str(value)):
+            raise serializers.ValidationError('Pincode must be exactly 6 digits.')
+        return value
+
     class Meta:
         model = RetailerProfile
         fields = [
@@ -125,7 +173,9 @@ class RetailerProfileUpdateSerializer(serializers.ModelSerializer):
             'business_type', 'gst_number', 'pan_number', 'upi_id', 'upi_qr_code', 
             'offers_delivery', 'offers_pickup', 'accepts_cod', 'accepts_upi',
             'delivery_radius', 'serviceable_pincodes', 'minimum_order_amount',
-            'delivery_charge', 'free_delivery_threshold', 'categories'
+            'delivery_charge', 'free_delivery_threshold',
+            'receipt_footer', 'show_gst_on_receipt',
+            'categories'
         ]
         
     def create(self, validated_data):
@@ -302,3 +352,14 @@ class RetailerRewardConfigSerializer(serializers.ModelSerializer):
             'is_referral_enabled', 'referral_reward_points',
             'referee_reward_points', 'min_referral_order_amount'
         ]
+
+
+class SupplierSerializer(serializers.ModelSerializer):
+    """
+    Serializer for Supplier
+    """
+    class Meta:
+        model = Supplier
+        fields = '__all__'
+        read_only_fields = ['id', 'retailer', 'balance_due', 'created_at', 'updated_at']
+
