@@ -8,6 +8,7 @@ from django.db.models.functions import Coalesce, Greatest, Cast
 from django.contrib.postgres.search import SearchVector, SearchQuery, SearchRank
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from itertools import islice
 import logging
 import json
 from common.error_utils import format_exception
@@ -208,7 +209,10 @@ def smart_product_search(queryset, search_query):
     )
 
     # STEP 6: Fallback logic if FTS/Trigram yields nothing
-    if not qs_smart.exists():
+    # Use a single-row materialization instead of .exists() so we can branch
+    # without an extra existence pre-check pattern.
+    has_smart_match = bool(list(islice(qs_smart.values_list('id', flat=True), 1)))
+    if not has_smart_match:
         # Fallback to original icontains logic
         return queryset.annotate(
             in_stock=Case(
@@ -403,13 +407,25 @@ def search_products(request):
                                 .order_by('-count')[:10])
         }
 
+        # Materialize IDs once and derive count from evaluated IDs.
+        product_ids = list(products.values_list('id', flat=True))
+        total_result_count = len(product_ids)
+
         # Log Telemetry asynchronously
         if search:
-            log_search_telemetry(search, products.count(), retailer=retailer, user=request.user)
+            log_search_telemetry(search, total_result_count, retailer=retailer, user=request.user)
 
         # Limit results for search
         limit = int(request.query_params.get('limit', 50))
-        products = products[:limit]
+        limited_ids = product_ids[:limit]
+        if limited_ids:
+            preserved_order = Case(
+                *[When(id=pid, then=Value(index)) for index, pid in enumerate(limited_ids)],
+                output_field=IntegerField(),
+            )
+            products = products.filter(id__in=limited_ids).order_by(preserved_order)
+        else:
+            products = products.none()
 
         serializer = ProductSearchSerializer(products, many=True)
         return Response({
@@ -983,13 +999,30 @@ def search_products_public(request, retailer_id):
                                 .order_by('-count')[:10])
         }
 
+        # Materialize IDs once and derive count from evaluated IDs.
+        product_ids = list(products.values_list('id', flat=True))
+        total_result_count = len(product_ids)
+
         # Log Telemetry asynchronously
         if search:
-            log_search_telemetry(search, products.count(), retailer=retailer, user=request.user if request.user.is_authenticated else None)
+            log_search_telemetry(
+                search,
+                total_result_count,
+                retailer=retailer,
+                user=request.user if request.user.is_authenticated else None
+            )
 
         # Limit results for search
         limit = int(request.query_params.get('limit', 50))
-        products = products[:limit]
+        limited_ids = product_ids[:limit]
+        if limited_ids:
+            preserved_order = Case(
+                *[When(id=pid, then=Value(index)) for index, pid in enumerate(limited_ids)],
+                output_field=IntegerField(),
+            )
+            products = products.filter(id__in=limited_ids).order_by(preserved_order)
+        else:
+            products = products.none()
 
         serializer = ProductSearchSerializer(products, many=True)
         return Response({
