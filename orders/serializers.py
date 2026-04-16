@@ -50,16 +50,12 @@ class OrderListSerializer(serializers.ModelSerializer):
 
     def get_customer_name(self, obj):
         """Get unified customer name based on priority"""
-        from retailers.models import RetailerCustomerMapping
-        
         # 1. Try mapping nickname
         if obj.customer and obj.retailer:
-            mapping = RetailerCustomerMapping.objects.filter(
-                retailer=obj.retailer,
-                customer=obj.customer
-            ).first()
-            if mapping and mapping.nickname:
-                return mapping.nickname
+            nickname_map = self.context.get('nickname_map', {})
+            nickname = nickname_map.get((obj.retailer_id, obj.customer_id))
+            if nickname:
+                return nickname
 
         # 2. Try customer first name
         if obj.customer and obj.customer.first_name:
@@ -163,16 +159,12 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     
     def get_customer_name(self, obj):
         """Get unified customer name based on priority"""
-        from retailers.models import RetailerCustomerMapping
-        
         # 1. Try mapping nickname
         if obj.customer and obj.retailer:
-            mapping = RetailerCustomerMapping.objects.filter(
-                retailer=obj.retailer,
-                customer=obj.customer
-            ).first()
-            if mapping and mapping.nickname:
-                return mapping.nickname
+            nickname_map = self.context.get('nickname_map', {})
+            nickname = nickname_map.get((obj.retailer_id, obj.customer_id))
+            if nickname:
+                return nickname
 
         # 2. Try customer first name
         if obj.customer and obj.customer.first_name:
