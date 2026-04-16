@@ -469,17 +469,18 @@ def get_customer_dashboard(request):
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        # Get orders statistics
+        # Get orders statistics in a single aggregate query
         orders = Order.objects.filter(customer=request.user)
-        total_orders = orders.count()
-        pending_orders = orders.filter(status__in=['pending', 'confirmed', 'processing']).count()
-        delivered_orders = orders.filter(status='delivered').count()
-        cancelled_orders = orders.filter(status='cancelled').count()
-        
-        # Calculate total spent
-        total_spent = orders.filter(status='delivered').aggregate(
-            total=Sum('total_amount')
-        )['total'] or 0
+        order_stats = orders.aggregate(
+            total_orders=Count('id'),
+            pending_orders=Count(
+                'id',
+                filter=Q(status__in=['pending', 'confirmed', 'processing'])
+            ),
+            delivered_orders=Count('id', filter=Q(status='delivered')),
+            cancelled_orders=Count('id', filter=Q(status='cancelled')),
+            total_spent=Sum('total_amount', filter=Q(status='delivered'))
+        )
         
         # Get other stats
         wishlist_count = CustomerWishlist.objects.filter(customer=request.user).count()
@@ -490,7 +491,7 @@ def get_customer_dashboard(request):
         ).count()
         
         # Get recent orders
-        recent_orders = orders.order_by('-created_at')[:5]
+        recent_orders = orders.select_related('retailer').order_by('-created_at')[:5]
         recent_orders_data = []
         for order in recent_orders:
             recent_orders_data.append({
@@ -510,11 +511,11 @@ def get_customer_dashboard(request):
         ).order_by('-order_count')[:5]
         
         dashboard_data = {
-            'total_orders': total_orders,
-            'pending_orders': pending_orders,
-            'delivered_orders': delivered_orders,
-            'cancelled_orders': cancelled_orders,
-            'total_spent': total_spent,
+            'total_orders': order_stats['total_orders'],
+            'pending_orders': order_stats['pending_orders'],
+            'delivered_orders': order_stats['delivered_orders'],
+            'cancelled_orders': order_stats['cancelled_orders'],
+            'total_spent': order_stats['total_spent'] or 0,
             'wishlist_count': wishlist_count,
             'addresses_count': addresses_count,
             'unread_notifications': unread_notifications,
@@ -1146,4 +1147,3 @@ def update_retailer_customer(request, customer_id):
             {'error': 'Internal server error'}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
-
