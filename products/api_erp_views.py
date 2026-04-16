@@ -1,5 +1,6 @@
 from decimal import Decimal
 from rest_framework import viewsets, permissions, status
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from django.utils import timezone
 from rest_framework.decorators import action, api_view, permission_classes
@@ -68,18 +69,23 @@ class SupplierLedgerViewSet(viewsets.ModelViewSet):
         return qs
 
     def perform_create(self, serializer):
+        retailer = RetailerProfile.objects.get(user=self.request.user)
+        supplier = serializer.validated_data.get('supplier')
+        if not supplier or supplier.retailer_id != retailer.id:
+            raise ValidationError({'supplier': 'Invalid supplier for this retailer.'})
+
         with transaction.atomic():
-            ledger_entry = serializer.save()
+            ledger_entry = serializer.save(supplier=supplier)
             
             # Use atomic F() expressions to prevent stale in-memory balance issues
             # CREDIT (Stock Received) increases balance_due
             # DEBIT (Payment Made) decreases balance_due
             if ledger_entry.transaction_type == 'CREDIT':
-                Supplier.objects.filter(id=ledger_entry.supplier.id).update(
+                Supplier.objects.filter(id=ledger_entry.supplier.id, retailer=retailer).update(
                     balance_due=F('balance_due') + ledger_entry.amount
                 )
             elif ledger_entry.transaction_type == 'DEBIT':
-                Supplier.objects.filter(id=ledger_entry.supplier.id).update(
+                Supplier.objects.filter(id=ledger_entry.supplier.id, retailer=retailer).update(
                     balance_due=F('balance_due') - ledger_entry.amount
                 )
 

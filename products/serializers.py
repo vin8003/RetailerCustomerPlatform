@@ -664,11 +664,34 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'retailer', 'created_at']
 
+    def _validate_invoice_products_for_retailer(self, items_data, retailer):
+        """
+        Ensure all invoice items belong to the same retailer as the invoice.
+        Prevents cross-tenant stock/price mutations.
+        """
+        if not retailer:
+            raise serializers.ValidationError("Retailer context is required for purchase invoices.")
+
+        invalid_product_ids = [
+            str(item['product'].id)
+            for item in items_data
+            if item.get('product') and item['product'].retailer_id != retailer.id
+        ]
+        if invalid_product_ids:
+            raise serializers.ValidationError({
+                'items': (
+                    "Products must belong to the same retailer as the invoice. "
+                    f"Invalid product id(s): {', '.join(invalid_product_ids)}."
+                )
+            })
+
     def create(self, validated_data):
         items_data = validated_data.pop('items', [])
         retailer = validated_data.get('retailer')
         supplier = validated_data.get('supplier')
         from products.models import ProductInventoryLog
+
+        self._validate_invoice_products_for_retailer(items_data, retailer)
         
         with transaction.atomic():
             # Calculate total from items to ensure accuracy
@@ -687,7 +710,7 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
                 item = PurchaseItem.objects.create(invoice=invoice, **item_data)
                 
                 # 3. Update Product Stock & Prices (Atomically)
-                Product.objects.filter(id=item.product.id).update(
+                Product.objects.filter(id=item.product.id, retailer=retailer).update(
                     quantity=F('quantity') + item.quantity,
                     purchase_price=item.purchase_price
                 )
@@ -746,8 +769,11 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         items_data = validated_data.pop('items', [])
         new_supplier = validated_data.get('supplier', instance.supplier)
+        retailer = instance.retailer
         
         from products.models import ProductInventoryLog
+
+        self._validate_invoice_products_for_retailer(items_data, retailer)
         
         with transaction.atomic():
             # --- 1. REVERSE OLD IMPACTS ---
@@ -803,7 +829,7 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
                 item = PurchaseItem.objects.create(invoice=instance, **item_data)
                 
                 # Atomic update
-                Product.objects.filter(id=item.product.id).update(
+                Product.objects.filter(id=item.product.id, retailer=retailer).update(
                     quantity=F('quantity') + item.quantity,
                     purchase_price=item.purchase_price
                 )
