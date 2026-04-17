@@ -1,6 +1,7 @@
 import os
 import django
 import sys
+import pytest
 
 # Setup Django environment
 sys.path.append(r'C:\Users\user\Desktop\online_files\ordereasy_140226\RetailerCustomerPlatform')
@@ -10,6 +11,7 @@ django.setup()
 from authentication.models import User
 from authentication.serializers import UserRegistrationSerializer
 
+@pytest.mark.django_db
 def test_account_claiming():
     phone = "+917777777777"
     # 1. Create Shadow User
