@@ -239,6 +239,7 @@ class OrderCreateSerializer(serializers.Serializer):
         from retailers.models import RetailerProfile
         try:
             retailer = RetailerProfile.objects.get(id=value, is_active=True)
+            self._retailer = retailer
             return value
         except RetailerProfile.DoesNotExist:
             raise serializers.ValidationError("Retailer not found")
@@ -256,14 +257,21 @@ class OrderCreateSerializer(serializers.Serializer):
     
     def validate(self, data):
         """Validate order data"""
+        customer = self.context['customer']
+        retailer = getattr(self, '_retailer', None)
+        if retailer is None:
+            from retailers.models import RetailerProfile
+            try:
+                retailer = RetailerProfile.objects.get(id=data.get('retailer_id'), is_active=True)
+            except RetailerProfile.DoesNotExist:
+                retailer = None
+            self._retailer = retailer
+
         if data['delivery_mode'] == 'delivery' and not data.get('address_id'):
             raise serializers.ValidationError("Address is required for delivery orders")
         
         # Validate Retailer Delivery/Pickup Flags
-        from retailers.models import RetailerProfile
-        retailer_id = data.get('retailer_id')
-        try:
-            retailer = RetailerProfile.objects.get(id=retailer_id)
+        if retailer is not None:
             if data['delivery_mode'] == 'delivery' and not retailer.offers_delivery:
                 raise serializers.ValidationError("This retailer does not offer delivery.")
             if data['delivery_mode'] == 'pickup' and not retailer.offers_pickup:
@@ -276,8 +284,6 @@ class OrderCreateSerializer(serializers.Serializer):
                 raise serializers.ValidationError("This retailer does not accept Cash on Delivery.")
             if data['payment_mode'] == 'upi' and not retailer.accepts_upi:
                 raise serializers.ValidationError("This retailer does not accept UPI payments.")
-        except RetailerProfile.DoesNotExist:
-            pass # Handled by other validators
 
         if data['delivery_mode'] == 'delivery' and data['payment_mode'] not in ['cash', 'upi']:
             raise serializers.ValidationError("Invalid payment mode for delivery")
@@ -286,28 +292,17 @@ class OrderCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError("Invalid payment mode for pickup")
         
         # Validate cart and items (Moved from create)
-        from retailers.models import RetailerProfile
-        customer = self.context['customer']
-        retailer_id = data.get('retailer_id') 
-        # Note: retailer_id is already validated by validate_retailer_id but we just need it here
-        # Actually validated_data in create has it, but in validate 'data' acts as input.
-        # But wait, validate runs before create. 'data' here is cleaned data so far? 
-        # DRF 'validate' receives 'attrs' which are validated fields.
-        
-        try:
-             retailer = RetailerProfile.objects.get(id=retailer_id)
-        except RetailerProfile.DoesNotExist:
-             # Should be caught by validate_retailer_id but safe to re-check or skip if missing
-             pass
-
         # Get customer's cart for this retailer
         # We need to access cart here to validate items
         try:
-            cart = Cart.objects.get(customer=customer, retailer_id=retailer_id)
+            cart = Cart.objects.select_related('retailer').prefetch_related(
+                'items__product'
+            ).get(customer=customer, retailer_id=data.get('retailer_id'))
         except Cart.DoesNotExist:
             raise serializers.ValidationError("Cart is empty")
+        self._cart = cart
 
-        cart_items = cart.items.select_related('product').all()
+        cart_items = cart.items.all()
         if not cart_items.exists():
             raise serializers.ValidationError("Cart is empty")
 
@@ -334,20 +329,16 @@ class OrderCreateSerializer(serializers.Serializer):
     
     def create(self, validated_data):
         """Create order from cart"""
-        from retailers.models import RetailerProfile
-        
         customer = self.context['customer']
-        retailer = RetailerProfile.objects.get(id=validated_data['retailer_id'])
+        retailer = self._retailer
         
         # Get customer's cart for this retailer
         # (Cart existence already validated in 'validate' method but we need the object)
-        try:
-            cart = Cart.objects.get(customer=customer, retailer=retailer)
-        except Cart.DoesNotExist:
-            # Should not happen as verified in validate
-             raise serializers.ValidationError("Cart not found")
+        cart = getattr(self, '_cart', None)
+        if cart is None:
+            raise serializers.ValidationError("Cart not found")
         
-        cart_items = cart.items.select_related('product').all()
+        cart_items = cart.items.all()
         
         # Calculate offers using Engine
         from offers.engine import OfferEngine
