@@ -35,3 +35,13 @@ env/
 .idea/
 .vscode/
 backend.env
+
+
+# Coverage
+.coverage
+htmlcov/
+coverage_*.txt
+
+
+# uploads
+media/
