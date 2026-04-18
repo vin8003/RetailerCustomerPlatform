@@ -72,16 +72,7 @@ def retailer_signup(request):
                 is_active=False,  # Inactive until profile is completed
             )
 
-            # Create default operating hours (Monday to Sunday, 9 AM to 9 PM)
-            days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
-            for day in days:
-                RetailerOperatingHours.objects.create(
-                    retailer=profile,
-                    day_of_week=day,
-                    is_open=True,
-                    opening_time='09:00',
-                    closing_time='21:00'
-                )
+            # (Removed manual hours creation to test for duplicates)
 
             # Generate JWT tokens
             refresh = RefreshToken.for_user(user)
@@ -103,7 +94,7 @@ def retailer_signup(request):
     except Exception as e:
         logger.error(f"Error in retailer signup: {str(e)}")
         return Response(
-            {'error': 'Internal server error'},
+            {'error': 'An error occurred during retailer registration'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 

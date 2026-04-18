@@ -259,10 +259,6 @@ class Product(models.Model):
             models.Index(fields=['created_at']),
             models.Index(fields=['is_featured']),
             models.Index(fields=['is_seasonal']),
-            GinIndex(
-                SearchVector('name', 'product_group', 'description', 'tags', config='english'),
-                name='product_search_vector_idx'
-            ),
         ]
         unique_together = ['retailer', 'name']
     
@@ -291,8 +287,12 @@ class Product(models.Model):
     @property
     def image_display_url(self):
         """Get product image URL or fallback to image_url"""
-        if self.image:
-            return self.image.url
+        try:
+            if self.image and hasattr(self.image, 'url'):
+                return self.image.url
+        except (ValueError, AttributeError):
+            pass
+            
         if self.image_url:
             return self.image_url
         if self.master_product and self.master_product.image_url:

@@ -1,0 +1,27 @@
+[run]
+source = .
+omit =
+    manage.py
+    ordering_platform/wsgi.py
+    ordering_platform/asgi.py
+    */migrations/*
+    */tests/*
+    */apps.py
+    */admin.py
+    .venv/*
+    scripts/*
+    verify_*.py
+    check_*.py
+    generate_*.py
+
+[report]
+show_missing = True
+skip_covered = True
+exclude_lines =
+    pragma: no cover
+    def __str__
+    def __unicode__
+    if settings.DEBUG
+    raise AssertionError
+    raise NotImplementedError
+    if __name__ == .__main__.:

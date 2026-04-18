@@ -26,18 +26,21 @@ def verify_firebase_id_token(id_token):
         logger.error(f"Invalid Firebase ID token: {str(e)}")
         return None
     except Exception as e:
+        # Check if the error is related to missing or invalid local credentials during development
+        cred_error_keywords = ["default credentials", "project ID", "was not found", "No such file"]
+        is_cred_error = any(keyword in str(e) for keyword in cred_error_keywords)
+
+        if is_cred_error and settings.DEBUG:
+            logger.warning("DEVELOPMENT MODE: Firebase credential error detected. Bypassing verification via jwt.decode (UNSAFE).")
+            try:
+                # Fallback to unverified decode ONLY in DEBUG mode when credentials are missing
+                unverified_claims = jwt.decode(id_token, options={"verify_signature": False})
+                return unverified_claims
+            except Exception as decode_e:
+                logger.error(f"Failed to decode token for bypass: {decode_e}")
+                return None
+        
         logger.error(f"Error verifying Firebase ID token: {str(e)}")
-        # Handle validation errors
-        if "default credentials" in str(e) or "project ID" in str(e) or "was not found" in str(e) or "No such file" in str(e):
-             if settings.DEBUG:
-                 logger.warning("DEVELOPMENT MODE (FIX-647): Credential error detected. Bypassing verification via jwt.decode (unsafe).")
-                 try:
-                     # Remove 'Bearer ' if present, though verify_id_token usually takes raw JWT
-                     unverified_claims = jwt.decode(id_token, options={"verify_signature": False})
-                     return unverified_claims
-                 except Exception as decode_e:
-                     logger.error(f"Failed to decode token for bypass: {decode_e}")
-                     return None
         return None
 
 
