@@ -102,6 +102,10 @@ class OTPVerificationSerializer(serializers.Serializer):
     firebase_token = serializers.CharField(required=False)
     name = serializers.CharField(max_length=150, required=False)
     
+    def validate_phone_number(self, value):
+        from .utils import clean_phone_number
+        return clean_phone_number(value)
+
     def validate(self, attrs):
         otp_code = attrs.get('otp_code')
         firebase_token = attrs.get('firebase_token')
@@ -216,6 +220,10 @@ class ResetPasswordConfirmSerializer(serializers.Serializer):
     firebase_token = serializers.CharField(required=False)
     new_password = serializers.CharField(write_only=True, validators=[validate_password])
     confirm_password = serializers.CharField(write_only=True)
+
+    def validate_phone_number(self, value):
+        from .utils import clean_phone_number
+        return clean_phone_number(value)
 
     def validate(self, attrs):
         if attrs['new_password'] != attrs['confirm_password']:
