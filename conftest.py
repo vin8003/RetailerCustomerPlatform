@@ -3,21 +3,19 @@ from decimal import Decimal
 from rest_framework.test import APIClient
 from rest_framework.throttling import BaseThrottle
 from authentication.models import User
-from retailers.models import RetailerProfile
-from products.models import (
+from retailers.models import (
+    RetailerProfile, RetailerOperatingHours, RetailerRewardConfig,
+    RetailerCategory, RetailerReview
+)
 from products.models import (
     Product, ProductCategory, ProductBrand, ProductReview,
     ProductInventoryLog, MasterProduct, SearchTelemetry,
 )
 from customers.models import (
     CustomerProfile, CustomerWishlist, CustomerAddress, 
-    CustomerNotification, CustomerLoyalty, LoyolaTransaction
+    CustomerNotification, CustomerLoyalty, LoyaltyTransaction
 )
 from offers.models import Offer, OfferTarget
-from retailers.models import (
-    RetailerProfile, RetailerOperatingHours, RetailerRewardConfig,
-    RetailerCategory, RetailerReview
-)
 
 # Globally disable throttling for tests
 BaseThrottle.allow_request = lambda self, request, view: True
@@ -207,4 +205,3 @@ def notification(customer):
         title="Test Title",
         message="Test Message"
     )
-
