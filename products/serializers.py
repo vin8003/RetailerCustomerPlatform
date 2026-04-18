@@ -234,6 +234,7 @@ class ProductDetailSerializer(serializers.ModelSerializer):
     average_rating = serializers.SerializerMethodField()
     review_count = serializers.SerializerMethodField()
     image = serializers.SerializerMethodField()
+    images = serializers.SerializerMethodField()
     active_offer_text = serializers.SerializerMethodField()
     offers = serializers.SerializerMethodField()
     is_wishlisted = serializers.SerializerMethodField()
@@ -277,14 +278,22 @@ class ProductDetailSerializer(serializers.ModelSerializer):
             imgs = []
             
             # 1. Primary Image
-            if obj.image:
-                imgs.append(obj.image.url)
-            elif obj.image_url:
-                imgs.append(obj.image_url)
+            try:
+                if obj.image and hasattr(obj.image, 'url'):
+                    imgs.append(obj.image.url)
+                elif obj.image_url:
+                    imgs.append(obj.image_url)
+            except (ValueError, AttributeError):
+                if obj.image_url:
+                    imgs.append(obj.image_url)
                 
             # 2. Additional Images (Model)
             for img in obj.additional_images.all():
-                imgs.append(img.image.url)
+                try:
+                    if img.image and hasattr(img.image, 'url'):
+                        imgs.append(img.image.url)
+                except (ValueError, AttributeError):
+                    pass
                 
             # 3. Additional Images (JSON)
             if obj.images and isinstance(obj.images, list):

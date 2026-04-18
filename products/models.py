@@ -280,8 +280,12 @@ class Product(models.Model):
     @property
     def image_display_url(self):
         """Get product image URL or fallback to image_url"""
-        if self.image:
-            return self.image.url
+        try:
+            if self.image and hasattr(self.image, 'url'):
+                return self.image.url
+        except (ValueError, AttributeError):
+            pass
+            
         if self.image_url:
             return self.image_url
         if self.master_product and self.master_product.image_url:
