@@ -205,3 +205,33 @@ def notification(customer):
         title="Test Title",
         message="Test Message"
     )
+@pytest.fixture
+def product_factory(retailer, category, brand):
+    class ProductFactory:
+        def create(self, **kwargs):
+            defaults = {
+                'retailer': retailer,
+                'category': category,
+                'brand': brand,
+                'name': "Factory Product",
+                'price': Decimal("100.00"),
+                'is_active': True,
+                'is_available': True,
+                'unit': 'kg'
+            }
+            defaults.update(kwargs)
+            return Product.objects.create(**defaults)
+    return ProductFactory()
+
+
+@pytest.fixture
+def category_factory(retailer):
+    class CategoryFactory:
+        def create(self, **kwargs):
+            defaults = {
+                'retailer': retailer,
+                'name': "Factory Category"
+            }
+            defaults.update(kwargs)
+            return ProductCategory.objects.create(**defaults)
+    return CategoryFactory()
