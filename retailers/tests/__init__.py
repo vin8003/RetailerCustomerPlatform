@@ -1,1 +1,0 @@
-# retailers.tests package

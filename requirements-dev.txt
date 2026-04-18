@@ -1,8 +1,0 @@
-pytest
-pytest-django
-pytest-mock
-factory-boy
-faker
-pytest-cov
-freezegun
-pytest-xdist
