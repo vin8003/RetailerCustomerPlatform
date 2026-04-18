@@ -94,7 +94,7 @@ def retailer_signup(request):
     except Exception as e:
         logger.error(f"Error in retailer signup: {str(e)}")
         return Response(
-            {'error': str(e)},  # TEMPORARY: Return actual error to see it in pytest
+            {'error': 'An error occurred during retailer registration'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
