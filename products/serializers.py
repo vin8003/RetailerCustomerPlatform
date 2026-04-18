@@ -1,9 +1,12 @@
 from rest_framework import serializers
-from django.db.models import Avg
+from decimal import Decimal
+from django.db import transaction
+from django.db.models import Avg, F
 from .models import (
     Product, ProductCategory, ProductBrand, ProductImage, 
     ProductReview, ProductUpload, MasterProduct,
-    ProductUploadSession, UploadSessionItem
+    ProductUploadSession, UploadSessionItem,
+    PurchaseInvoice, PurchaseItem, SupplierLedger
 )
 import logging
 
@@ -79,13 +82,13 @@ class ProductListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
         fields = [
-            'id', 'name', 'description', 'price', 'discounted_price',
+            'id', 'name', 'description', 'price', 'purchase_price', 'discounted_price',
             'original_price', 'discount_percentage', 'quantity', 'track_inventory', 'unit',
             'minimum_order_quantity', 'maximum_order_quantity',
             'image', 'image_url', 'category_name', 'brand_name', 'retailer_name',
             'is_in_stock', 'is_featured', 'is_active', 'is_seasonal', 'is_available',
             'average_rating', 'review_count', 'created_at', 'product_group',
-            'active_offer_text', 'is_wishlisted'
+            'active_offer_text', 'is_wishlisted', 'barcode'
         ]
     
     def get_category_name(self, obj):
@@ -241,7 +244,7 @@ class ProductDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
         fields = [
-            'id', 'name', 'description', 'price', 'discounted_price',
+            'id', 'name', 'description', 'price', 'purchase_price', 'discounted_price',
             'original_price', 'discount_percentage', 'savings', 'quantity', 'track_inventory',
             'unit', 'minimum_order_quantity', 'maximum_order_quantity',
             'image', 'image_url', 'images', 'additional_images', 'category', 
@@ -249,7 +252,7 @@ class ProductDetailSerializer(serializers.ModelSerializer):
             'retailer_name', 'retailer_id', 'specifications', 'tags',
             'is_in_stock', 'is_featured', 'is_active', 'is_seasonal', 'is_available', 
             'average_rating', 'review_count', 'created_at', 'updated_at',
-            'product_group', 'active_offer_text', 'offers', 'is_wishlisted'
+            'product_group', 'active_offer_text', 'offers', 'is_wishlisted', 'barcode'
         ]
     
     def get_category_name(self, obj):
@@ -477,13 +480,20 @@ class ProductCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
         fields = [
-            'name', 'description', 'category', 'brand', 'price',
+            'name', 'description', 'category', 'brand', 'price', 'purchase_price',
             'original_price', 'discount_percentage', 'quantity', 'track_inventory', 'unit',
             'minimum_order_quantity', 'maximum_order_quantity', 'image',
             'images', 'specifications', 'tags', 'is_featured', 'is_available',
             'barcode', 'master_product', 'product_group', 'is_active', 'is_seasonal'
         ]
     
+    def validate_barcode(self, value):
+        if value:
+            retailer = self.context.get('retailer')
+            if retailer and Product.objects.filter(retailer=retailer, barcode=value).exists():
+                raise serializers.ValidationError("A product with this barcode already exists.")
+        return value
+
     def validate(self, data):
         """Validate product data"""
         if data.get('original_price') and data.get('price'):
@@ -512,13 +522,19 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
         fields = [
-            'name', 'description', 'category', 'brand', 'price',
+            'name', 'description', 'category', 'brand', 'price', 'purchase_price',
             'original_price', 'discount_percentage', 'quantity', 'track_inventory', 'unit',
             'minimum_order_quantity', 'maximum_order_quantity', 'image',
             'images', 'specifications', 'tags', 'is_featured', 'is_available',
             'barcode', 'master_product', 'product_group', 'is_active', 'is_seasonal'
         ]
     
+    def validate_barcode(self, value):
+        if value and self.instance:
+            if Product.objects.filter(retailer=self.instance.retailer, barcode=value).exclude(id=self.instance.id).exists():
+                raise serializers.ValidationError("A product with this barcode already exists.")
+        return value
+
     def validate(self, data):
         """Validate product data"""
         if data.get('original_price') and data.get('price'):
@@ -615,3 +631,263 @@ class ProductUploadSessionSerializer(serializers.ModelSerializer):
         model = ProductUploadSession
         fields = ['id', 'name', 'status', 'created_at', 'updated_at', 'items']
         read_only_fields = ['id', 'status', 'created_at', 'updated_at', 'items']
+
+
+class PurchaseItemSerializer(serializers.ModelSerializer):
+    """
+    Serializer for Purchase Items
+    """
+    product_name = serializers.CharField(source='product.name', read_only=True)
+    # Fields to allow updating product prices during purchase
+    new_price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, write_only=True)
+    new_original_price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, write_only=True)
+
+    class Meta:
+        model = PurchaseItem
+        fields = ['id', 'product', 'product_name', 'quantity', 'purchase_price', 'total', 'mrp_updated', 'new_price', 'new_original_price']
+        read_only_fields = ['id']
+
+
+class PurchaseInvoiceSerializer(serializers.ModelSerializer):
+    """
+    Serializer for Purchase Invoices
+    """
+    items = PurchaseItemSerializer(many=True)
+    supplier_name = serializers.CharField(source='supplier.company_name', read_only=True)
+
+    class Meta:
+        model = PurchaseInvoice
+        fields = [
+            'id', 'retailer', 'supplier', 'supplier_name', 'invoice_number',
+            'invoice_date', 'total_amount', 'paid_amount', 'payment_status',
+            'notes', 'created_at', 'items'
+        ]
+        read_only_fields = ['id', 'retailer', 'created_at']
+
+    def _validate_invoice_products_for_retailer(self, items_data, retailer):
+        """
+        Ensure all invoice items belong to the same retailer as the invoice.
+        Prevents cross-tenant stock/price mutations.
+        """
+        if not retailer:
+            raise serializers.ValidationError("Retailer context is required for purchase invoices.")
+
+        invalid_product_ids = [
+            str(item['product'].id)
+            for item in items_data
+            if item.get('product') and item['product'].retailer_id != retailer.id
+        ]
+        if invalid_product_ids:
+            raise serializers.ValidationError({
+                'items': (
+                    "Products must belong to the same retailer as the invoice. "
+                    f"Invalid product id(s): {', '.join(invalid_product_ids)}."
+                )
+            })
+
+    def create(self, validated_data):
+        items_data = validated_data.pop('items', [])
+        retailer = validated_data.get('retailer')
+        supplier = validated_data.get('supplier')
+        from products.models import ProductInventoryLog
+
+        self._validate_invoice_products_for_retailer(items_data, retailer)
+        
+        with transaction.atomic():
+            # Calculate total from items to ensure accuracy
+            calculated_total = sum(Decimal(str(item['quantity'])) * Decimal(str(item['purchase_price'])) for item in items_data)
+            
+            # 1. Create Invoice (overwrite total_amount with calculated value)
+            validated_data['total_amount'] = calculated_total
+            invoice = PurchaseInvoice.objects.create(**validated_data)
+            
+            for item_data in items_data:
+                # Remove write-only fields for Product model updates
+                new_price = item_data.pop('new_price', None)
+                new_orig_price = item_data.pop('new_original_price', None)
+                
+                # 2. Create PurchaseItem
+                item = PurchaseItem.objects.create(invoice=invoice, **item_data)
+                
+                # 3. Update Product Stock & Prices (Atomically)
+                Product.objects.filter(id=item.product.id, retailer=retailer).update(
+                    quantity=F('quantity') + item.quantity,
+                    purchase_price=item.purchase_price
+                )
+                
+                # Refresh product for logs and price updates
+                product = item.product
+                product.refresh_from_db()
+                
+                if new_price:
+                    product.price = new_price
+                if new_orig_price:
+                    product.original_price = new_orig_price
+                product.save()
+                
+                # 4. Log Inventory Change
+                ProductInventoryLog.objects.create(
+                    product=product,
+                    created_by=self.context['request'].user,
+                    quantity_change=item.quantity,
+                    previous_quantity=product.quantity - item.quantity,
+                    new_quantity=product.quantity,
+                    log_type='added',
+                    reason=f'Purchase Inward: Invoice #{invoice.invoice_number}'
+                )
+
+            # 5. Update Supplier Balance (Atomically)
+            if supplier:
+                unpaid_amount = invoice.total_amount - invoice.paid_amount
+                from retailers.models import Supplier
+                Supplier.objects.filter(id=supplier.id).update(
+                    balance_due=F('balance_due') + unpaid_amount
+                )
+                
+                # 6. Create Ledger Entry (Credit)
+                SupplierLedger.objects.create(
+                    supplier=supplier,
+                    date=invoice.invoice_date,
+                    amount=invoice.total_amount,
+                    transaction_type='CREDIT',
+                    reference_invoice=invoice,
+                    notes=f"Purchase Bill #{invoice.invoice_number}"
+                )
+                
+                # 7. If there was a partial payment, create a Debit entry too
+                if invoice.paid_amount > 0:
+                    SupplierLedger.objects.create(
+                        supplier=supplier,
+                        date=invoice.invoice_date,
+                        amount=invoice.paid_amount,
+                        transaction_type='DEBIT',
+                        reference_invoice=invoice,
+                        notes=f"Paid against Bill #{invoice.invoice_number}"
+                    )
+            return invoice
+            
+    def update(self, instance, validated_data):
+        items_data = validated_data.pop('items', [])
+        new_supplier = validated_data.get('supplier', instance.supplier)
+        retailer = instance.retailer
+        
+        from products.models import ProductInventoryLog
+
+        self._validate_invoice_products_for_retailer(items_data, retailer)
+        
+        with transaction.atomic():
+            # --- 1. REVERSE OLD IMPACTS ---
+            
+            # Reverse Stock (Convert to list for safety)
+            old_items = list(instance.items.all())
+            for old_item in old_items:
+                product = old_item.product
+                Product.objects.filter(id=product.id).update(
+                    quantity=F('quantity') - old_item.quantity
+                )
+                
+                # Log stock reversal
+                product.refresh_from_db()
+                ProductInventoryLog.objects.create(
+                    product=product,
+                    created_by=self.context['request'].user,
+                    quantity_change=-old_item.quantity,
+                    previous_quantity=product.quantity + old_item.quantity,
+                    new_quantity=product.quantity,
+                    log_type='removed',
+                    reason=f'Purchase Edit (Reversal): Invoice #{instance.invoice_number}'
+                )
+
+            # Reverse Supplier Balance (From OLD Supplier - Atomically)
+            if instance.supplier:
+                old_unpaid = instance.total_amount - instance.paid_amount
+                from retailers.models import Supplier
+                Supplier.objects.filter(id=instance.supplier.id).update(
+                    balance_due=F('balance_due') - old_unpaid
+                )
+
+            # Clean Up Related Data
+            instance.items.all().delete()
+            SupplierLedger.objects.filter(reference_invoice=instance).delete()
+
+            # --- 2. APPLY NEW CHANGES ---
+            
+            # Recalculate New Total
+            new_total = sum(Decimal(str(item['quantity'])) * Decimal(str(item['purchase_price'])) for item in items_data)
+            validated_data['total_amount'] = new_total
+            
+            # Update Invoice Instance
+            for attr, value in validated_data.items():
+                setattr(instance, attr, value)
+            instance.save()
+
+            # Apply New Stock
+            for item_data in items_data:
+                new_price = item_data.pop('new_price', None)
+                new_orig_price = item_data.pop('new_original_price', None)
+                
+                item = PurchaseItem.objects.create(invoice=instance, **item_data)
+                
+                # Atomic update
+                Product.objects.filter(id=item.product.id, retailer=retailer).update(
+                    quantity=F('quantity') + item.quantity,
+                    purchase_price=item.purchase_price
+                )
+                
+                product = item.product
+                product.refresh_from_db()
+                
+                if new_price:
+                    product.price = new_price
+                if new_orig_price:
+                    product.original_price = new_orig_price
+                product.save()
+                
+                ProductInventoryLog.objects.create(
+                    product=product,
+                    created_by=self.context['request'].user,
+                    quantity_change=item.quantity,
+                    previous_quantity=product.quantity - item.quantity,
+                    new_quantity=product.quantity,
+                    log_type='added',
+                    reason=f'Purchase Updated: Invoice #{instance.invoice_number}'
+                )
+
+            # Apply New Supplier Balance (To NEW Supplier - Atomically)
+            if new_supplier:
+                new_unpaid = instance.total_amount - instance.paid_amount
+                from retailers.models import Supplier
+                Supplier.objects.filter(id=new_supplier.id).update(
+                    balance_due=F('balance_due') + new_unpaid
+                )
+                
+                # Re-create Ledger
+                SupplierLedger.objects.create(
+                    supplier=new_supplier,
+                    date=instance.invoice_date,
+                    amount=instance.total_amount,
+                    transaction_type='CREDIT',
+                    reference_invoice=instance,
+                    notes=f"Purchase Bill (Updated) #{instance.invoice_number}"
+                )
+                
+                if instance.paid_amount > 0:
+                    SupplierLedger.objects.create(
+                        supplier=new_supplier,
+                        date=instance.invoice_date,
+                        amount=instance.paid_amount,
+                        transaction_type='DEBIT',
+                        reference_invoice=instance,
+                        notes=f"Paid (Updated) against Bill #{instance.invoice_number}"
+                    )
+
+            return instance
+
+class SupplierLedgerSerializer(serializers.ModelSerializer):
+    """
+    Serializer for Supplier Ledger
+    """
+    class Meta:
+        model = SupplierLedger
+        fields = '__all__'
+        read_only_fields = ['id', 'created_at']

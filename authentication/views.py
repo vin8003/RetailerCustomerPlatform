@@ -168,10 +168,12 @@ def customer_signup(request):
         incoming_phone      = data.get('phone_number', '').strip()
         incoming_email      = data.get('email', '').strip()
 
-        # --- Purge stale unverified accounts ---
         # Match on username, phone_number, or email for customer accounts that
-        # have never verified email (is_email_verified=False).
-        stale_qs = User.objects.filter(user_type='customer', is_email_verified=False)
+        # have never verified email (is_email_verified=False) AND are not POS shadow users.
+        stale_qs = User.objects.filter(
+            user_type='customer', 
+            is_email_verified=False
+        ).exclude(registration_status='shadow')
         if incoming_username:
             stale_qs = stale_qs.filter(username=incoming_username)
         elif incoming_phone:

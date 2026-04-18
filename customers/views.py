@@ -8,17 +8,19 @@ from django.utils import timezone
 from datetime import timedelta
 import logging
 
+from django.contrib.auth import get_user_model
 from .models import CustomerProfile, CustomerAddress, CustomerWishlist, CustomerNotification, CustomerLoyalty, CustomerReferral, LoyaltyTransaction
 from .serializers import (
     CustomerProfileSerializer, CustomerAddressSerializer, CustomerAddressUpdateSerializer,
     CustomerWishlistSerializer, CustomerNotificationSerializer, CustomerDashboardSerializer,
     RetailerCustomerListSerializer, RetailerCustomerDetailSerializer,
 )
-from retailers.models import RetailerProfile, RetailerRewardConfig, RetailerBlacklist
+from retailers.models import RetailerProfile, RetailerRewardConfig, RetailerBlacklist, RetailerCustomerMapping
 from retailers.serializers import RetailerRewardConfigSerializer
 from orders.models import Order, RetailerRating
 from products.models import Product
-from retailers.models import RetailerProfile
+
+User = get_user_model()
 
 logger = logging.getLogger(__name__)
 
@@ -467,17 +469,18 @@ def get_customer_dashboard(request):
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        # Get orders statistics
+        # Get orders statistics in a single aggregate query
         orders = Order.objects.filter(customer=request.user)
-        total_orders = orders.count()
-        pending_orders = orders.filter(status__in=['pending', 'confirmed', 'processing']).count()
-        delivered_orders = orders.filter(status='delivered').count()
-        cancelled_orders = orders.filter(status='cancelled').count()
-        
-        # Calculate total spent
-        total_spent = orders.filter(status='delivered').aggregate(
-            total=Sum('total_amount')
-        )['total'] or 0
+        order_stats = orders.aggregate(
+            total_orders=Count('id'),
+            pending_orders=Count(
+                'id',
+                filter=Q(status__in=['pending', 'confirmed', 'processing'])
+            ),
+            delivered_orders=Count('id', filter=Q(status='delivered')),
+            cancelled_orders=Count('id', filter=Q(status='cancelled')),
+            total_spent=Sum('total_amount', filter=Q(status='delivered'))
+        )
         
         # Get other stats
         wishlist_count = CustomerWishlist.objects.filter(customer=request.user).count()
@@ -488,7 +491,7 @@ def get_customer_dashboard(request):
         ).count()
         
         # Get recent orders
-        recent_orders = orders.order_by('-created_at')[:5]
+        recent_orders = orders.select_related('retailer').order_by('-created_at')[:5]
         recent_orders_data = []
         for order in recent_orders:
             recent_orders_data.append({
@@ -508,11 +511,11 @@ def get_customer_dashboard(request):
         ).order_by('-order_count')[:5]
         
         dashboard_data = {
-            'total_orders': total_orders,
-            'pending_orders': pending_orders,
-            'delivered_orders': delivered_orders,
-            'cancelled_orders': cancelled_orders,
-            'total_spent': total_spent,
+            'total_orders': order_stats['total_orders'],
+            'pending_orders': order_stats['pending_orders'],
+            'delivered_orders': order_stats['delivered_orders'],
+            'cancelled_orders': order_stats['cancelled_orders'],
+            'total_spent': order_stats['total_spent'] or 0,
             'wishlist_count': wishlist_count,
             'addresses_count': addresses_count,
             'unread_notifications': unread_notifications,
@@ -885,21 +888,13 @@ def get_retailer_customers(request):
             
         retailer = get_object_or_404(RetailerProfile, user=request.user)
         
-        # 1. Get all customers who have placed orders
-        customers_with_orders = Order.objects.filter(retailer=retailer).values_list('customer', flat=True).distinct()
-        
-        # 2. Get all blacklisted customers (so retailer can still see them to un-blacklist)
-        blacklisted_customers = RetailerBlacklist.objects.filter(retailer=retailer).values_list('customer', flat=True)
-        
-        # Combine unique customer IDs (Restricted to orders and blacklists ONLY)
-        all_customer_ids = set(customers_with_orders) | set(blacklisted_customers)
-        
-        # Fetch detailed data for each customer
-        customer_profiles = CustomerProfile.objects.filter(user__id__in=all_customer_ids).select_related('user')
+        # 1. Get all customer mappings for this retailer
+        # This includes Shadow users, App users who ordered, and Blacklisted users
+        mappings = RetailerCustomerMapping.objects.filter(retailer=retailer).select_related('customer')
         
         data = []
-        for profile in customer_profiles:
-            user = profile.user
+        for mapping in mappings:
+            user = mapping.customer
             
             # Helper: Get Stats
             orders = Order.objects.filter(retailer=retailer, customer=user)
@@ -917,18 +912,27 @@ def get_retailer_customers(request):
             # Helper: Get Blacklist details
             is_blacklisted = RetailerBlacklist.objects.filter(retailer=retailer, customer=user).exists()
             
+            # Try to get profile if it exists (Shadow users might not have one)
+            profile = getattr(user, 'customer_profile', None)
+            
+            # Identity logic
+            customer_name = mapping.nickname or user.get_full_name() or user.username
+            
             data.append({
                 'customer_id': user.id,
-                'customer_name': user.get_full_name() or user.username,
+                'customer_name': customer_name,
+                'nickname': mapping.nickname,
                 'phone_number': user.phone_number,
-                'profile_image': profile.profile_image.url if profile.profile_image else None,
+                'profile_image': profile.profile_image.url if profile and profile.profile_image else None,
                 'points': points,
-                'average_rating': profile.average_rating, # Global rating
+                'registration_status': user.registration_status if user.registration_status else ('registered' if user.is_phone_verified else 'shadow'),
+                'is_phone_verified': user.is_phone_verified,
+                'average_rating': profile.average_rating if profile else 0,
                 'total_orders': total_orders,
                 'total_spent': total_spent,
                 'is_blacklisted': is_blacklisted,
                 'last_order_date': last_order_date,
-                'joined_date': profile.created_at
+                'joined_date': mapping.created_at
             })
             
         serializer = RetailerCustomerListSerializer(data, many=True)
@@ -956,17 +960,9 @@ def get_customer_details_for_retailer(request, customer_id):
             )
             
         retailer = get_object_or_404(RetailerProfile, user=request.user)
-        profile = get_object_or_404(CustomerProfile, user__id=customer_id)
-        user = profile.user
-        
-        # Check association (must have at least one order or be blacklisted)
-        has_ordered = Order.objects.filter(retailer=retailer, customer=user).exists()
-        is_blacklisted = RetailerBlacklist.objects.filter(retailer=retailer, customer=user).exists()
-        if not (has_ordered or is_blacklisted):
-            return Response(
-                {'error': 'Customer not associated with this retailer'}, 
-                status=status.HTTP_404_NOT_FOUND
-            )
+        user = get_object_or_404(User, id=customer_id)
+        mapping = get_object_or_404(RetailerCustomerMapping, retailer=retailer, customer=user)
+        profile = getattr(user, 'customer_profile', None)
         
         # Stats
         orders = Order.objects.filter(retailer=retailer, customer=user).order_by('-created_at')
@@ -1024,17 +1020,21 @@ def get_customer_details_for_retailer(request, customer_id):
             
         data = {
             'customer_id': user.id,
-            'customer_name': user.get_full_name() or user.username,
+            'customer_name': mapping.nickname or user.get_full_name() or user.username,
+            'nickname': mapping.nickname,
+            'notes': mapping.notes,
             'phone_number': user.phone_number,
             'email': user.email,
-            'profile_image': profile.profile_image.url if profile.profile_image else None,
+            'profile_image': profile.profile_image.url if profile and profile.profile_image else None,
             'points': points,
-            'average_rating': profile.average_rating,
+            'average_rating': profile.average_rating if profile else 0,
             'total_orders': total_orders,
             'total_spent': total_spent,
             'is_blacklisted': is_blacklisted,
             'last_order_date': last_order.created_at if last_order else None,
-            'joined_date': profile.created_at,
+            'joined_date': mapping.created_at,
+            'registration_status': user.registration_status,
+            'is_phone_verified': user.is_phone_verified,
             'recent_orders': recent_orders_data,
             'reward_history': reward_history,
             'retailer_ratings': my_ratings
@@ -1106,3 +1106,44 @@ def toggle_blacklist(request):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
+
+@api_view(['PATCH'])
+@permission_classes([permissions.IsAuthenticated])
+def update_retailer_customer(request, customer_id):
+    """
+    Update retailer-specific customer mapping (nickname and notes)
+    """
+    try:
+        if request.user.user_type != 'retailer':
+            return Response(
+                {'error': 'Only retailers can access this endpoint'}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+            
+        retailer = get_object_or_404(RetailerProfile, user=request.user)
+        user = get_object_or_404(User, id=customer_id)
+        
+        mapping = get_object_or_404(RetailerCustomerMapping, retailer=retailer, customer=user)
+        
+        nickname = request.data.get('nickname')
+        notes = request.data.get('notes')
+        
+        if nickname is not None:
+            mapping.nickname = nickname
+        if notes is not None:
+            mapping.notes = notes
+            
+        mapping.save()
+        
+        return Response({
+            'message': 'Customer updated successfully',
+            'nickname': mapping.nickname,
+            'notes': mapping.notes
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        logger.error(f"Error updating retailer customer mapping: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )

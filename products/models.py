@@ -191,6 +191,13 @@ class Product(models.Model):
     barcode = models.CharField(max_length=50, blank=True, null=True, db_index=True)
     
     # Pricing
+    purchase_price = models.DecimalField(
+        max_digits=10, 
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal('0.00'))]
+    )
     price = models.DecimalField(
         max_digits=10, 
         decimal_places=2,
@@ -565,3 +572,119 @@ class SearchTelemetry(models.Model):
 
     def __str__(self):
         return f"Search: '{self.query}' - {self.result_count} results"
+
+
+# =====================================================================
+# PURCHASE & ERP MODELS
+# =====================================================================
+
+class PurchaseInvoice(models.Model):
+    """
+    Purchase bills from distributors/suppliers
+    """
+    STATUS_CHOICES = [
+        ('UNPAID', 'Unpaid'),
+        ('PARTIAL', 'Partially Paid'),
+        ('PAID', 'Paid'),
+    ]
+
+    retailer = models.ForeignKey(
+        'retailers.RetailerProfile',
+        on_delete=models.CASCADE,
+        related_name='purchase_invoices'
+    )
+    supplier = models.ForeignKey(
+        'retailers.Supplier',
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='purchase_invoices'
+    )
+    invoice_number = models.CharField(max_length=100)
+    invoice_date = models.DateField()
+    
+    total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    paid_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    payment_status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='UNPAID')
+    notes = models.TextField(blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'purchase_invoice'
+        indexes = [
+            models.Index(fields=['retailer', 'invoice_date']),
+            models.Index(fields=['supplier']),
+        ]
+
+    def __str__(self):
+        return f"Invoice {self.invoice_number} - {self.supplier.company_name if self.supplier else 'Unknown'}"
+
+
+class PurchaseItem(models.Model):
+    """
+    Line items within a purchase invoice
+    """
+    invoice = models.ForeignKey(
+        PurchaseInvoice,
+        on_delete=models.CASCADE,
+        related_name='items'
+    )
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='purchase_history'
+    )
+    quantity = models.PositiveIntegerField()
+    purchase_price = models.DecimalField(max_digits=10, decimal_places=2)  # Rate per unit
+    total = models.DecimalField(max_digits=12, decimal_places=2)  # Qty * Rate
+    
+    # Store whether this invoice updated the master product MRP/Price
+    mrp_updated = models.BooleanField(default=False)
+
+    class Meta:
+        db_table = 'purchase_item'
+
+    def __str__(self):
+        return f"{self.quantity} x {self.product.name if self.product else 'Unknown'} in {self.invoice.invoice_number}"
+
+
+class SupplierLedger(models.Model):
+    """
+    Ledger/Khata entries for Suppliers
+    """
+    TRANSACTION_TYPES = [
+        ('CREDIT', 'Credit (Maal Aaya)'),
+        ('DEBIT', 'Debit (Paisa Diya)'),
+    ]
+
+    supplier = models.ForeignKey(
+        'retailers.Supplier',
+        on_delete=models.CASCADE,
+        related_name='ledger_entries'
+    )
+    date = models.DateField()
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    transaction_type = models.CharField(max_length=15, choices=TRANSACTION_TYPES)
+    
+    # Optional links
+    reference_invoice = models.ForeignKey(
+        PurchaseInvoice, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True,
+        related_name='ledger_entries'
+    )
+    payment_mode = models.CharField(max_length=50, blank=True) # Cash, Bank, UPI etc
+    notes = models.TextField(blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'supplier_ledger'
+        ordering = ['-date', '-created_at']
+
+    def __str__(self):
+        return f"{self.transaction_type} of {self.amount} on {self.date}"
+

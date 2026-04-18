@@ -11,11 +11,22 @@ class User(AbstractUser):
         ('retailer', 'Retailer'),
         ('customer', 'Customer'),
     ]
+
+    REGISTRATION_STATUS_CHOICES = [
+        ('shadow', 'Shadow'),
+        ('registered', 'Registered'),
+    ]
     
     user_type = models.CharField(
         max_length=20,
         choices=USER_TYPE_CHOICES,
         default='customer'
+    )
+
+    registration_status = models.CharField(
+        max_length=20,
+        choices=REGISTRATION_STATUS_CHOICES,
+        default='registered'
     )
     phone_number = models.CharField(max_length=15, unique=True, null=True, blank=True)
     is_phone_verified = models.BooleanField(default=False)

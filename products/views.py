@@ -38,6 +38,91 @@ logger = logging.getLogger(__name__)
 
 
 from django.core.cache import cache
+from types import SimpleNamespace
+
+
+ACTIVE_OFFERS_CACHE_TTL_SECONDS = 120
+
+
+class _CachedTargets:
+    """Mimics Django related manager API used in serializers."""
+
+    def __init__(self, targets):
+        self._targets = targets
+
+    def all(self):
+        return self._targets
+
+
+def _active_offers_cache_key(retailer_id):
+    return f"active_offers:{retailer_id}"
+
+
+def get_cached_active_offers(retailer_id):
+    """
+    Returns lightweight offer objects compatible with serializer expectations.
+    """
+    cache_key = _active_offers_cache_key(retailer_id)
+    serialized_offers = cache.get(cache_key)
+
+    if serialized_offers is None:
+        from offers.models import Offer
+
+        now = timezone.now()
+        offers = Offer.objects.filter(
+            retailer_id=retailer_id,
+            is_active=True,
+            start_date__lte=now
+        ).filter(
+            Q(end_date__isnull=True) | Q(end_date__gte=now)
+        ).order_by('-priority').prefetch_related('targets')
+
+        serialized_offers = []
+        for offer in offers:
+            serialized_offers.append({
+                'id': offer.id,
+                'name': offer.name,
+                'description': offer.description,
+                'offer_type': offer.offer_type,
+                'value': str(offer.value) if offer.value is not None else None,
+                'targets': [
+                    {
+                        'target_type': target.target_type,
+                        'is_excluded': target.is_excluded,
+                        'product_id': target.product_id,
+                        'category_id': target.category_id,
+                        'brand_id': target.brand_id,
+                    }
+                    for target in offer.targets.all()
+                ],
+            })
+
+        cache.set(cache_key, serialized_offers, ACTIVE_OFFERS_CACHE_TTL_SECONDS)
+
+    cached_offers = []
+    for offer in serialized_offers:
+        targets = [
+            SimpleNamespace(
+                target_type=target['target_type'],
+                is_excluded=target['is_excluded'],
+                product_id=target['product_id'],
+                category_id=target['category_id'],
+                brand_id=target['brand_id'],
+            )
+            for target in offer['targets']
+        ]
+        cached_offers.append(
+            SimpleNamespace(
+                id=offer['id'],
+                name=offer['name'],
+                description=offer['description'],
+                offer_type=offer['offer_type'],
+                value=Decimal(offer['value']) if offer['value'] is not None else None,
+                targets=_CachedTargets(targets),
+            )
+        )
+
+    return cached_offers
 
 def get_cached_category_tree():
     """
@@ -316,16 +401,7 @@ def get_retailer_products(request):
         if search:
             products = smart_product_search(products, search)
 
-        # Pre-fetch active offers for N+1 optimization in serializer
-        from offers.models import Offer
-        from django.utils import timezone
-        active_offers = list(Offer.objects.filter(
-            retailer=retailer,
-            is_active=True,
-            start_date__lte=timezone.now()
-        ).filter(
-            Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
-        ).order_by('-priority').prefetch_related('targets'))
+        active_offers = get_cached_active_offers(retailer.id)
 
         # Pagination
         paginator = ProductPagination()
@@ -912,16 +988,7 @@ def get_retailer_products_public(request, retailer_id):
         if ordering in ['name', '-name', 'price', '-price', 'created_at', '-created_at']:
             products = products.order_by(ordering)
 
-        # Pre-fetch active offers for N+1 optimization in serializer
-        from offers.models import Offer
-        from django.utils import timezone
-        active_offers = list(Offer.objects.filter(
-            retailer=retailer,
-            is_active=True,
-            start_date__lte=timezone.now()
-        ).filter(
-            Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
-        ).order_by('-priority').prefetch_related('targets'))
+        active_offers = get_cached_active_offers(retailer.id)
 
         # Pagination
         paginator = ProductPagination()
