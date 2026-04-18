@@ -1,6 +1,8 @@
 import time
 from django.test import TestCase
 from django.db import connection
+from django.urls import reverse
+from rest_framework.test import APIClient
 from retailers.models import RetailerProfile
 from products.models import Product, ProductCategory, ProductBrand, MasterProduct, SearchTelemetry
 from django.contrib.auth import get_user_model
@@ -72,6 +74,19 @@ class ProductSearchTestCase(TestCase):
             is_active=True
         )
 
+        # Product 4: fallback-only term in description (substring, not full-text token match)
+        self.p4 = Product.objects.create(
+            retailer=self.retailer,
+            name="Special Dairy Item",
+            description="ultrararetoken",
+            price=Decimal("30.00"),
+            original_price=Decimal("30.00"),
+            quantity=5,
+            category=self.cat_dairy,
+            is_active=True
+        )
+        self.client = APIClient()
+
     def test_search_typo_tolerance_trigram(self):
         """Test that a typo (e.g. 'amull milk') still returns the correct product via pg_trgm."""
         from products.views import smart_product_search
@@ -111,3 +126,40 @@ class ProductSearchTestCase(TestCase):
         log = SearchTelemetry.objects.last()
         self.assertEqual(log.query, "testing telemetry")
         self.assertEqual(log.result_count, 5)
+
+    def test_smart_product_search_fallback_still_returns_icontains_matches(self):
+        """Regression: fallback branch remains compatible when smart scoring yields no rows."""
+        from products.views import smart_product_search
+        queryset = Product.objects.filter(retailer=self.retailer, is_active=True)
+
+        results = list(smart_product_search(queryset, "raretok"))
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].id, self.p4.id)
+
+    def test_search_products_response_schema_and_ordering_regression(self):
+        """Regression: authenticated search keeps response schema/facets and ranking order."""
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.get(reverse('search_products'), {'search': 'milk', 'limit': 2})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(set(response.data.keys()), {'results', 'facets'})
+        self.assertEqual(set(response.data['facets'].keys()), {'categories', 'brands'})
+
+        result_ids = [item['id'] for item in response.data['results']]
+        self.assertEqual(result_ids, [self.p1.id, self.p2.id])
+
+    def test_search_products_public_response_schema_and_ordering_regression(self):
+        """Regression: public search keeps response schema/facets and ranking order."""
+        response = self.client.get(
+            reverse('search_products_public', args=[self.retailer.id]),
+            {'search': 'milk', 'limit': 2}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(set(response.data.keys()), {'results', 'facets'})
+        self.assertEqual(set(response.data['facets'].keys()), {'categories', 'brands'})
+
+        result_ids = [item['id'] for item in response.data['results']]
+        self.assertEqual(result_ids, [self.p1.id, self.p2.id])
