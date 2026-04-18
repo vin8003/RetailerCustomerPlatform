@@ -393,3 +393,5 @@ if 'test' in sys.argv or 'pytest' in sys.modules:
         'DEFAULT_PAGINATION_CLASS': 'common.pagination.StandardResultsSetPagination',
         'PAGE_SIZE': 20,
     }
+
+    PASSWORD_HASHERS = ['django.contrib.auth.hashers.MD5PasswordHasher',]
