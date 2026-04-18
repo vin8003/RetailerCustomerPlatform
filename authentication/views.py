@@ -912,7 +912,7 @@ def reset_password(request):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            if not verify_otp_helper(otp_verification.secret_key, otp_code):
+            if not verify_otp_helper(otp_verification.otp_code, otp_code):
                 otp_verification.attempts += 1
                 otp_verification.save()
                 return Response(
