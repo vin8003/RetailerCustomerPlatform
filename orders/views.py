@@ -20,7 +20,7 @@ from .serializers import (
     OrderStatsSerializer, OrderModificationSerializer, OrderChatMessageSerializer,
     RetailerRatingSerializer
 )
-from retailers.models import RetailerProfile, RetailerReview, RetailerRewardConfig
+from retailers.models import RetailerProfile, RetailerReview, RetailerRewardConfig, RetailerCustomerMapping
 from retailers.serializers import RetailerReviewSerializer
 from customers.models import CustomerAddress, CustomerLoyalty
 from django.db.models import Exists, OuterRef, Prefetch
@@ -33,6 +33,32 @@ class OrderPagination(PageNumberPagination):
     page_size = 20
     page_size_query_param = 'page_size'
     max_page_size = 100
+
+
+def _build_nickname_map(orders):
+    """
+    Build nickname lookup map for (retailer_id, customer_id) pairs in a single query.
+    """
+    pair_set = {
+        (order.retailer_id, order.customer_id)
+        for order in orders
+        if order.retailer_id and order.customer_id
+    }
+    if not pair_set:
+        return {}
+
+    retailer_ids = {retailer_id for retailer_id, _ in pair_set}
+    customer_ids = {customer_id for _, customer_id in pair_set}
+
+    mappings = RetailerCustomerMapping.objects.filter(
+        retailer_id__in=retailer_ids,
+        customer_id__in=customer_ids
+    ).only('retailer_id', 'customer_id', 'nickname')
+
+    return {
+        (mapping.retailer_id, mapping.customer_id): mapping.nickname
+        for mapping in mappings
+    }
 
 
 @api_view(['POST'])
@@ -170,10 +196,20 @@ def get_current_orders(request):
         page = paginator.paginate_queryset(orders, request)
         
         if page is not None:
-            serializer = OrderListSerializer(page, many=True)
+            nickname_map = _build_nickname_map(page)
+            serializer = OrderListSerializer(
+                page,
+                many=True,
+                context={'nickname_map': nickname_map}
+            )
             return paginator.get_paginated_response(serializer.data)
-        
-        serializer = OrderListSerializer(orders, many=True)
+
+        nickname_map = _build_nickname_map(orders)
+        serializer = OrderListSerializer(
+            orders,
+            many=True,
+            context={'nickname_map': nickname_map}
+        )
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     except Exception as e:
@@ -258,10 +294,20 @@ def get_order_history(request):
         page = paginator.paginate_queryset(orders, request)
         
         if page is not None:
-            serializer = OrderListSerializer(page, many=True)
+            nickname_map = _build_nickname_map(page)
+            serializer = OrderListSerializer(
+                page,
+                many=True,
+                context={'nickname_map': nickname_map}
+            )
             return paginator.get_paginated_response(serializer.data)
-        
-        serializer = OrderListSerializer(orders, many=True)
+
+        nickname_map = _build_nickname_map(orders)
+        serializer = OrderListSerializer(
+            orders,
+            many=True,
+            context={'nickname_map': nickname_map}
+        )
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     except Exception as e:
@@ -321,7 +367,11 @@ def get_order_detail(request, order_id):
             if last_updated == current_updated or last_updated == order.updated_at.isoformat():
                 return Response(status=status.HTTP_304_NOT_MODIFIED)
         
-        serializer = OrderDetailSerializer(order, context={'request': request})
+        nickname_map = _build_nickname_map([order])
+        serializer = OrderDetailSerializer(
+            order,
+            context={'request': request, 'nickname_map': nickname_map}
+        )
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     except Exception as e:
