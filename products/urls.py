@@ -13,6 +13,7 @@ urlpatterns = [
     path('erp/search-pos-customers/', api_erp_views.search_pos_customers, name='search_pos_customers'),
     path('erp/inventory-ledger/', api_erp_views.get_inventory_ledger, name='get_inventory_ledger'),
     path('erp/daily-sales-summary/', api_erp_views.get_daily_sales_summary, name='get_daily_sales_summary'),
+    path('erp/dashboard/summary/', api_erp_views.erp_dashboard_summary, name='erp_dashboard_summary'),
     # Retailer product management
     path('', views.get_retailer_products, name='get_retailer_products'),
     path('search/', views.search_products, name='search_products'),

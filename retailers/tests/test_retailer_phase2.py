@@ -23,6 +23,10 @@ class TestRetailerPhase2:
         data = {
             'shop_name': 'New Shop',
             'business_type': 'Retail',
+            'address_line1': '123 Test',
+            'state': 'TestState',
+            'latitude': 10.0,
+            'longitude': 20.0,
             'city': 'NewCity',
             'pincode': '654321'
         }
@@ -199,7 +203,7 @@ class TestRetailerPhase2:
     def test_search_retailers_by_city(self, api_client, retailer):
         # Trigger city filter in search_retailers (Line 241)
         url = reverse('search_retailers')
-        response = api_client.get(url, {'city': retailer.city})
+        response = api_client.get(url, {'q': 'Shop', 'city': retailer.city})
         assert response.status_code == status.HTTP_200_OK
 
     def test_get_other_retailer_details(self, api_client, retailer):

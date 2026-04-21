@@ -140,6 +140,8 @@ class TestCustomerPhase2:
         # Trigger get_retailer_customers and get_customer_details_for_retailer
         from orders.models import Order
         from decimal import Decimal
+        from retailers.models import RetailerCustomerMapping
+        RetailerCustomerMapping.objects.create(retailer=retailer, customer=customer, customer_type='online')
         Order.objects.create(
             customer=customer,
             retailer=retailer,

@@ -23,7 +23,7 @@ class TestCommonUtils:
     def test_generate_upload_path(self):
         instance = MockInstance()
         path = generate_upload_path(instance, "image.jpg")
-        assert "uploads/testmodel/" in path.lower()
+        assert "uploads/testmodel/" in path.lower().replace('\\', '/')
         assert path.endswith(".jpg")
 
     def test_validate_image_file(self):

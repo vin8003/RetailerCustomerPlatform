@@ -48,6 +48,36 @@ class PurchaseInvoiceViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         retailer = RetailerProfile.objects.get(user=self.request.user)
         invoice = serializer.save(retailer=retailer)
+        
+    def perform_destroy(self, instance):
+        retailer = RetailerProfile.objects.get(user=self.request.user)
+        # Ensure retailer ownership
+        if instance.retailer != retailer:
+            raise ValidationError("You do not have permission to delete this invoice.")
+        
+        with transaction.atomic():
+            # 1. Reverse stock
+            old_items = list(instance.items.all())
+            for old_item in old_items:
+                product = old_item.product
+                if product:
+                    Product.objects.filter(id=product.id, retailer=retailer).update(
+                        quantity=F('quantity') - old_item.quantity
+                    )
+                    product.refresh_from_db()
+                    ProductInventoryLog.objects.create(
+                        product=product,
+                        created_by=self.request.user,
+                        quantity_change=-old_item.quantity,
+                        previous_quantity=product.quantity + old_item.quantity,
+                        new_quantity=product.quantity,
+                        log_type='removed',
+                        reason=f'Purchase Invoice Deleted: #{instance.invoice_number}'
+                    )
+            
+            # 2. Delete invoice 
+            # (Ledger entries cascade implicitly, and Signal updates balance_due automatically!)
+            instance.delete()
 
 
 class SupplierLedgerViewSet(viewsets.ModelViewSet):
@@ -76,18 +106,7 @@ class SupplierLedgerViewSet(viewsets.ModelViewSet):
 
         with transaction.atomic():
             ledger_entry = serializer.save(supplier=supplier)
-            
-            # Use atomic F() expressions to prevent stale in-memory balance issues
-            # CREDIT (Stock Received) increases balance_due
-            # DEBIT (Payment Made) decreases balance_due
-            if ledger_entry.transaction_type == 'CREDIT':
-                Supplier.objects.filter(id=ledger_entry.supplier.id, retailer=retailer).update(
-                    balance_due=F('balance_due') + ledger_entry.amount
-                )
-            elif ledger_entry.transaction_type == 'DEBIT':
-                Supplier.objects.filter(id=ledger_entry.supplier.id, retailer=retailer).update(
-                    balance_due=F('balance_due') - ledger_entry.amount
-                )
+            # The signal sync_supplier_ledger_balances now handles balance_due logic mathematically.
 
 
 @api_view(['POST'])
@@ -428,3 +447,28 @@ def get_daily_sales_summary(request):
     }
     
     return Response(res)
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def erp_dashboard_summary(request):
+    try:
+        retailer = RetailerProfile.objects.get(user=request.user)
+    except RetailerProfile.DoesNotExist:
+        return Response({'error': 'Unauthorized'}, status=status.HTTP_403_FORBIDDEN)
+
+    suppliers = Supplier.objects.filter(retailer=retailer)
+    
+    total_debt = 0
+    total_advance = 0
+    
+    for s in suppliers:
+        if s.balance_due > 0:
+            total_debt += s.balance_due
+        elif s.balance_due < 0:
+            total_advance += abs(s.balance_due)
+            
+    return Response({
+        'total_outstanding_debt': float(total_debt),
+        'total_advance_paid': float(total_advance),
+        'total_suppliers': suppliers.count()
+    })

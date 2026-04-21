@@ -599,7 +599,7 @@ class PurchaseInvoice(models.Model):
         null=True,
         related_name='purchase_invoices'
     )
-    invoice_number = models.CharField(max_length=100)
+    invoice_number = models.CharField(max_length=100, blank=True, null=True)
     invoice_date = models.DateField()
     
     total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
@@ -671,7 +671,7 @@ class SupplierLedger(models.Model):
     # Optional links
     reference_invoice = models.ForeignKey(
         PurchaseInvoice, 
-        on_delete=models.SET_NULL, 
+        on_delete=models.CASCADE, 
         null=True, 
         blank=True,
         related_name='ledger_entries'

@@ -672,6 +672,9 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
             'notes', 'created_at', 'items'
         ]
         read_only_fields = ['id', 'retailer', 'created_at']
+        extra_kwargs = {
+            'invoice_number': {'required': False, 'allow_blank': True}
+        }
 
     def _validate_invoice_products_for_retailer(self, items_data, retailer):
         """
@@ -706,6 +709,14 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
             # Calculate total from items to ensure accuracy
             calculated_total = sum(Decimal(str(item['quantity'])) * Decimal(str(item['purchase_price'])) for item in items_data)
             
+            # Auto-generate invoice_number if missing
+            invoice_num = validated_data.get('invoice_number', '') or ''
+            if not invoice_num.strip():
+                from django.utils.timezone import now
+                import random, string
+                hasher = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
+                validated_data['invoice_number'] = f"INV-{now().strftime('%y%m%d')}-{hasher}"
+
             # 1. Create Invoice (overwrite total_amount with calculated value)
             validated_data['total_amount'] = calculated_total
             invoice = PurchaseInvoice.objects.create(**validated_data)
@@ -745,13 +756,7 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
                     reason=f'Purchase Inward: Invoice #{invoice.invoice_number}'
                 )
 
-            # 5. Update Supplier Balance (Atomically)
-            if supplier:
-                unpaid_amount = invoice.total_amount - invoice.paid_amount
-                from retailers.models import Supplier
-                Supplier.objects.filter(id=supplier.id).update(
-                    balance_due=F('balance_due') + unpaid_amount
-                )
+            # (Balance updates are now handled strictly by Django Signals mathematically on Ledger)
                 
                 # 6. Create Ledger Entry (Credit)
                 SupplierLedger.objects.create(
@@ -807,14 +812,7 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
                     reason=f'Purchase Edit (Reversal): Invoice #{instance.invoice_number}'
                 )
 
-            # Reverse Supplier Balance (From OLD Supplier - Atomically)
-            if instance.supplier:
-                old_unpaid = instance.total_amount - instance.paid_amount
-                from retailers.models import Supplier
-                Supplier.objects.filter(id=instance.supplier.id).update(
-                    balance_due=F('balance_due') - old_unpaid
-                )
-
+            # (Reversal balance updates are now handled strictly by Django Signals via cascade deletes)
             # Clean Up Related Data
             instance.items.all().delete()
             SupplierLedger.objects.filter(reference_invoice=instance).delete()
@@ -862,14 +860,7 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
                     reason=f'Purchase Updated: Invoice #{instance.invoice_number}'
                 )
 
-            # Apply New Supplier Balance (To NEW Supplier - Atomically)
-            if new_supplier:
-                new_unpaid = instance.total_amount - instance.paid_amount
-                from retailers.models import Supplier
-                Supplier.objects.filter(id=new_supplier.id).update(
-                    balance_due=F('balance_due') + new_unpaid
-                )
-                
+            # (New balance updates are now handled strictly by Django Signals on Ledger creation)                
                 # Re-create Ledger
                 SupplierLedger.objects.create(
                     supplier=new_supplier,
@@ -896,7 +887,11 @@ class SupplierLedgerSerializer(serializers.ModelSerializer):
     """
     Serializer for Supplier Ledger
     """
+    reference_invoice_number = serializers.CharField(source='reference_invoice.invoice_number', read_only=True)
+
     class Meta:
         model = SupplierLedger
+        fields = '__all__'
+        read_only_fields = ['id', 'created_at']
         fields = '__all__'
         read_only_fields = ['id', 'created_at']

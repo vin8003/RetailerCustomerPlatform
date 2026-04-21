@@ -252,6 +252,7 @@ class Order(models.Model):
                         transaction_type='redeem', # Negative adjust
                         description=f"Reverted earned points (Order #{self.order_number} cancelled after delivery)"
                     )
+                    self.points_earned = 0
                 except Exception as e:
                      import logging
                      logger = logging.getLogger(__name__)

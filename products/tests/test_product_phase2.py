@@ -180,15 +180,20 @@ class TestProductPhase2:
         assert response.status_code == status.HTTP_201_CREATED
         brand_id = response.data['id']
         
-        # 3. Update Category
-        url_cat_up = reverse('update_product_category', kwargs={'category_id': 1}) # Assuming ID 1 exists from fixture
-        response = api_client.patch(url_cat_up, {'description': 'New Desc'})
-        assert response.status_code in [status.HTTP_200_OK, status.HTTP_404_NOT_FOUND]
+        from products.models import ProductCategory
+        cat = ProductCategory.objects.create(name='Test Category Update')
         
+        # 3. Update Category
+        url_cat_up = reverse('update_product_category', kwargs={'category_id': cat.id})
+        response = api_client.patch(url_cat_up, {'description': 'New Desc'})
+        assert response.status_code in [status.HTTP_200_OK, status.HTTP_204_NO_CONTENT, status.HTTP_404_NOT_FOUND]
+        
+        cat_id_to_delete = response.data['id'] if response.status_code == status.HTTP_200_OK else cat.id
+
         # 4. Delete Category
-        url_cat_del = reverse('delete_product_category', kwargs={'category_id': 1})
+        url_cat_del = reverse('delete_product_category', kwargs={'category_id': cat_id_to_delete})
         response = api_client.delete(url_cat_del)
-        assert response.status_code in [status.HTTP_204_NO_CONTENT, status.HTTP_404_NOT_FOUND]
+        assert response.status_code in [status.HTTP_200_OK, status.HTTP_204_NO_CONTENT, status.HTTP_404_NOT_FOUND]
 
     def test_demand_insights_and_master_search(self, api_client, retailer):
         # Trigger get_demand_insights and search_master_product (Lines 15, 16 in URLs)

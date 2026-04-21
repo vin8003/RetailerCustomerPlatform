@@ -290,7 +290,7 @@ class TestAuthenticationPhase3:
         otp = OTPVerification.objects.create(
             user=user, 
             phone_number=user.phone_number, 
-            otp_code='1234', 
+            otp_code='123456', 
             secret_key='key',
             expires_at=timezone.now() + timezone.timedelta(minutes=5),
             attempts=0
@@ -298,7 +298,7 @@ class TestAuthenticationPhase3:
         
         url = reverse('verify_otp')
         # 1. Invalid Code
-        response = api_client.post(url, {'phone_number': user.phone_number, 'otp_code': 'WRONG'}, format='json')
+        response = api_client.post(url, {'phone_number': user.phone_number, 'otp_code': '999999'}, format='json')
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         otp.refresh_from_db()
         assert otp.attempts == 1
@@ -306,7 +306,7 @@ class TestAuthenticationPhase3:
         # 2. Max Attempts
         otp.attempts = 5
         otp.save()
-        response = api_client.post(url, {'phone_number': user.phone_number, 'otp_code': '1234'}, format='json')
+        response = api_client.post(url, {'phone_number': user.phone_number, 'otp_code': '123456'}, format='json')
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         assert response.data['error'] == 'Maximum OTP attempts exceeded'
 

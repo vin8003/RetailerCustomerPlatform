@@ -1,0 +1,207 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.13.7, pytest-9.0.3, pluggy-1.6.0
+django: version: 5.2.9, settings: ordering_platform.settings (from env)
+rootdir: C:\Users\user\Desktop\online_files\ordereasy_140226\RetailerCustomerPlatform
+configfile: pytest.ini
+plugins: anyio-4.12.0, Faker-40.13.0, cov-7.1.0, django-4.12.0, mock-3.15.1, xdist-3.8.0
+collected 444 items
+
+authentication\tests\test_auth_edges.py ....                             [  0%]
+authentication\tests\test_auth_flows.py ...........                      [  3%]
+authentication\tests\test_auth_phase3.py ......F........F.               [  7%]
+authentication\tests\test_auth_views_extended.py ....                    [  8%]
+authentication\tests\test_firebase_auth.py ...                           [  8%]
+authentication\tests\test_models.py ......                               [ 10%]
+authentication\tests\test_serializers.py ................                [ 13%]
+authentication\tests\test_verification.py ...s.                          [ 14%]
+cart\tests\test_cart_edges.py .....                                      [ 15%]
+cart\tests\test_models.py ...................                            [ 20%]
+cart\tests\test_views.py ............................................    [ 30%]
+common\tests\test_common_edges.py ......                                 [ 31%]
+common\tests\test_permissions.py .                                       [ 31%]
+common\tests\test_utils.py F.........                                    [ 34%]
+customers\tests\test_customer_edges.py ....                              [ 34%]
+customers\tests\test_customer_phase2.py .......F.                        [ 36%]
+customers\tests\test_models.py ...........                               [ 39%]
+customers\tests\test_serializers.py ...                                  [ 40%]
+customers\tests\test_views.py .........                                  [ 42%]
+offers\tests\test_engine.py ..........                                   [ 44%]
+offers\tests\test_serializers.py ..                                      [ 44%]
+offers\tests\test_views.py ...                                           [ 45%]
+orders\tests\test_models.py .......F...........                          [ 49%]
+orders\tests\test_order_edges.py ..                                      [ 50%]
+orders\tests\test_views.py ............................................. [ 60%]
+..                                                                       [ 60%]
+products\tests\test_models.py ...........................                [ 66%]
+products\tests\test_product_edges.py ....                                [ 67%]
+products\tests\test_product_phase2.py ..........F....                    [ 71%]
+products\tests\test_serializers.py ..........                            [ 73%]
+products\tests\test_views.py ......................................      [ 81%]
+retailers\tests\test_models.py ..........                                [ 84%]
+retailers\tests\test_retailer_edges.py ...                               [ 84%]
+retailers\tests\test_retailer_phase2.py .F..........F....                [ 88%]
+retailers\tests\test_serializers.py .......                              [ 90%]
+retailers\tests\test_views.py .......                                    [ 91%]
+authentication\tests\test_utils.py .................                     [ 95%]
+common\tests\test_error_utils.py .....                                   [ 96%]
+common\tests\test_notifications.py ...                                   [ 97%]
+common\tests\test_pagination.py ..                                       [ 97%]
+common\tests\test_permissions.py ......                                  [ 99%]
+products\tests\test_serializers.py ..                                    [ 99%]
+test_claiming.py F                                                       [100%]
+
+================================== FAILURES ===================================
+__________ TestAuthenticationPhase3.test_password_flows_forgot_reset __________
+authentication\tests\test_auth_phase3.py:158: in test_password_flows_forgot_reset
+    pytest.fail(f"Reset Password Error: {response.data}")
+E   Failed: Reset Password Error: {'error': 'Invalid OTP'}
+---------------------------- Captured stderr call -----------------------------
+INFO 2026-04-18 20:44:14,946 utils 27356 28580 SMS sent successfully to +919876543210
+INFO 2026-04-18 20:44:14,946 views 27356 8700 Password reset OTP sent to +919876543210
+WARNING 2026-04-18 20:44:14,952 log 27356 8700 Bad Request: /api/auth/password/reset/
+------------------------------ Captured log call ------------------------------
+INFO     authentication.utils:utils.py:149 SMS sent successfully to +919876543210
+INFO     authentication.views:views.py:830 Password reset OTP sent to +919876543210
+___________ TestAuthenticationPhase3.test_verify_otp_full_failures ____________
+authentication\tests\test_auth_phase3.py:304: in test_verify_otp_full_failures
+    assert otp.attempts == 1
+E   assert 0 == 1
+E    +  where 0 = <OTPVerification: OTP for +916667778889>.attempts
+---------------------------- Captured stderr call -----------------------------
+WARNING 2026-04-18 20:44:15,596 log 27356 8700 Bad Request: /api/auth/customer/verify-otp/
+__________________ TestCommonUtils.test_generate_upload_path __________________
+common\tests\test_utils.py:26: in test_generate_upload_path
+    assert "uploads/testmodel/" in path.lower()
+E   AssertionError: assert 'uploads/testmodel/' in 'uploads\\testmodel\\2026/04/18\\4e3c31a7bdca41099e01c7a1bfd89636.jpg'
+E    +  where 'uploads\\testmodel\\2026/04/18\\4e3c31a7bdca41099e01c7a1bfd89636.jpg' = <built-in method lower of str object at 0x00000215A341FC90>()
+E    +    where <built-in method lower of str object at 0x00000215A341FC90> = 'uploads\\testmodel\\2026/04/18\\4e3c31a7bdca41099e01c7a1bfd89636.jpg'.lower
+_______ TestCustomerPhase2.test_get_retailer_customer_management_views ________
+customers\tests\test_customer_phase2.py:163: in test_get_retailer_customer_management_views
+    assert response.status_code == status.HTTP_200_OK
+E   assert 500 == 200
+E    +  where 500 = <Response status_code=500, "application/json">.status_code
+E    +  and   200 = status.HTTP_200_OK
+---------------------------- Captured stderr call -----------------------------
+ERROR 2026-04-18 20:44:21,914 views 27356 8700 Error getting customer details: No RetailerCustomerMapping matches the given query.
+ERROR 2026-04-18 20:44:21,915 log 27356 8700 Internal Server Error: /api/customer/retailer/details/2/
+------------------------------ Captured log call ------------------------------
+ERROR    customers.views:views.py:1046 Error getting customer details: No RetailerCustomerMapping matches the given query.
+_________ TestOrderModel.test_update_status_cancelled_reverts_earned __________
+orders\tests\test_models.py:90: in test_update_status_cancelled_reverts_earned
+    assert order.points_earned == 0
+E   AssertionError: assert Decimal('10.00') == 0
+E    +  where Decimal('10.00') = <Order: Order #ORD-1776525263-359 - order_customer>.points_earned
+____________ TestProductPhase2.test_category_and_brand_management _____________
+products\tests\test_product_phase2.py:186: in test_category_and_brand_management
+    assert response.status_code in [status.HTTP_200_OK, status.HTTP_404_NOT_FOUND]
+E   assert 500 in [200, 404]
+E    +  where 500 = <Response status_code=500, "application/json">.status_code
+---------------------------- Captured stderr call -----------------------------
+INFO 2026-04-18 20:44:28,235 views 27356 8700 Brand created: New Tech Brand by prod_retailer
+ERROR 2026-04-18 20:44:28,448 views 27356 8700 Error updating category: No ProductCategory matches the given query.
+ERROR 2026-04-18 20:44:28,449 log 27356 8700 Internal Server Error: /api/products/categories/1/update/
+------------------------------ Captured log call ------------------------------
+INFO     products.views:views.py:1699 Brand created: New Tech Brand by prod_retailer
+ERROR    products.views:views.py:1795 Error updating category: No ProductCategory matches the given query.
+____________ TestRetailerPhase2.test_create_retailer_profile_logic ____________
+retailers\tests\test_retailer_phase2.py:30: in test_create_retailer_profile_logic
+    assert response.status_code == status.HTTP_201_CREATED
+E   assert 400 == 201
+E    +  where 400 = <Response status_code=400, "application/json">.status_code
+E    +  and   201 = status.HTTP_201_CREATED
+---------------------------- Captured stderr call -----------------------------
+WARNING 2026-04-18 20:44:32,000 log 27356 8700 Bad Request: /api/retailers/profile/create/
+______________ TestRetailerPhase2.test_search_retailers_by_city _______________
+retailers\tests\test_retailer_phase2.py:203: in test_search_retailers_by_city
+    assert response.status_code == status.HTTP_200_OK
+E   assert 400 == 200
+E    +  where 400 = <Response status_code=400, "application/json">.status_code
+E    +  and   200 = status.HTTP_200_OK
+---------------------------- Captured stderr call -----------------------------
+WARNING 2026-04-18 20:44:32,563 log 27356 8700 Bad Request: /api/retailers/search/
+____________________________ test_account_claiming ____________________________
+test_claiming.py:16: in test_account_claiming
+    User.objects.filter(phone_number__endswith="7777777777").delete()
+..\..\..\..\AppData\Roaming\Python\Python313\site-packages\django\db\models\query.py:1200: in delete
+    collector.collect(del_query)
+..\..\..\..\AppData\Roaming\Python\Python313\site-packages\django\db\models\deletion.py:281: in collect
+    new_objs = self.add(
+..\..\..\..\AppData\Roaming\Python\Python313\site-packages\django\db\models\deletion.py:124: in add
+    if not objs:
+           ^^^^
+..\..\..\..\AppData\Roaming\Python\Python313\site-packages\django\db\models\query.py:400: in __bool__
+    self._fetch_all()
+..\..\..\..\AppData\Roaming\Python\Python313\site-packages\django\db\models\query.py:1954: in _fetch_all
+    self._result_cache = list(self._iterable_class(self))
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\..\..\..\AppData\Roaming\Python\Python313\site-packages\django\db\models\query.py:93: in __iter__
+    results = compiler.execute_sql(
+..\..\..\..\AppData\Roaming\Python\Python313\site-packages\django\db\models\sql\compiler.py:1621: in execute_sql
+    cursor = self.connection.cursor()
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+..\..\..\..\AppData\Roaming\Python\Python313\site-packages\django\utils\asyncio.py:26: in inner
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+..\..\..\..\AppData\Roaming\Python\Python313\site-packages\django\db\backends\base\base.py:320: in cursor
+    return self._cursor()
+           ^^^^^^^^^^^^^^
+..\..\..\..\AppData\Roaming\Python\Python313\site-packages\django\db\backends\base\base.py:296: in _cursor
+    self.ensure_connection()
+E   RuntimeError: Database access not allowed, use the "django_db" mark, or the "db" or "transactional_db" fixtures to enable it.
+============================== warnings summary ===============================
+customers/tests/test_customer_edges.py::TestCustomerViewEdges::test_get_all_customer_loyalty_with_data
+  C:\Users\user\AppData\Roaming\Python\Python313\site-packages\django\db\models\fields\__init__.py:1671: RuntimeWarning: DateTimeField LoyaltyTransaction.expiry_date received a naive datetime (2030-01-01 00:00:00) while time zone support is active.
+    warnings.warn(
+
+orders/tests/test_views.py::TestGetCurrentOrders::test_current_orders_with_search
+  C:\Python313\Lib\wsgiref\headers.py:123: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x00000215A36597B0>
+    def items(self):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+orders/tests/test_views.py::TestOrderChat::test_send_message_retailer
+  C:\Python313\Lib\wsgiref\headers.py:64: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x00000215A3659E40>
+    self._headers[:] = [kv for kv in self._headers if kv[0].lower() != name]
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+orders/tests/test_views.py::TestOrderChat::test_send_empty_message
+  C:\Python313\Lib\wsgiref\headers.py:41: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x00000215A3659C60>
+    def _convert_string_type(self, value):
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+orders/tests/test_views.py::TestPaymentFlow::test_submit_payment_non_upi
+  C:\Users\user\AppData\Roaming\Python\Python313\site-packages\whitenoise\responders.py:276: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x00000215A365BF10>
+    raise MissingFileError(path)
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+orders/tests/test_views.py::TestPaymentFlow::test_verify_payment_fail
+  C:\Python313\Lib\wsgiref\headers.py:64: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x00000215A36596C0>
+    self._headers[:] = [kv for kv in self._headers if kv[0].lower() != name]
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+orders/tests/test_views.py::TestPaymentFlow::test_verify_payment_invalid_action
+  C:\Users\user\AppData\Roaming\Python\Python313\site-packages\whitenoise\responders.py:267: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x00000215A3658D60>
+    @staticmethod
+  Enable tracemalloc to get traceback where the object was allocated.
+  See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=============================== tests coverage ================================
+_______________ coverage: platform win32, python 3.13.7-final-0 _______________
+
+Coverage HTML written to dir htmlcov
+=========================== short test summary info ===========================
+FAILED authentication/tests/test_auth_phase3.py::TestAuthenticationPhase3::test_password_flows_forgot_reset
+FAILED authentication/tests/test_auth_phase3.py::TestAuthenticationPhase3::test_verify_otp_full_failures
+FAILED common/tests/test_utils.py::TestCommonUtils::test_generate_upload_path
+FAILED customers/tests/test_customer_phase2.py::TestCustomerPhase2::test_get_retailer_customer_management_views
+FAILED orders/tests/test_models.py::TestOrderModel::test_update_status_cancelled_reverts_earned
+FAILED products/tests/test_product_phase2.py::TestProductPhase2::test_category_and_brand_management
+FAILED retailers/tests/test_retailer_phase2.py::TestRetailerPhase2::test_create_retailer_profile_logic
+FAILED retailers/tests/test_retailer_phase2.py::TestRetailerPhase2::test_search_retailers_by_city
+FAILED test_claiming.py::test_account_claiming - RuntimeError: Database acces...
+============ 9 failed, 434 passed, 1 skipped, 7 warnings in 25.60s ============

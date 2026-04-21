@@ -84,6 +84,7 @@ class TestOrderModel:
     @patch("common.notifications.send_push_notification")
     @patch("common.notifications.send_silent_update")
     def test_update_status_cancelled_reverts_earned(self, mock_silent, mock_push, order, retailer):
+        order.status = 'delivered'
         order.points_earned = Decimal("10.00")
         order.save()
         order.update_status("cancelled", user=None)
