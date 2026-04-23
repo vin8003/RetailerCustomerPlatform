@@ -52,35 +52,37 @@ class Cart(models.Model):
         self.items.all().delete()
         self.save()
     
-    def add_item(self, product, quantity=1):
+    def add_item(self, product, quantity=1, batch=None):
         """Add item to cart or update quantity if exists"""
         try:
-            cart_item = self.items.get(product=product)
+            cart_item = self.items.get(product=product, batch=batch)
             cart_item.quantity += quantity
             cart_item.save()
             return cart_item
         except CartItem.DoesNotExist:
+            unit_price = batch.price if batch else product.price
             cart_item = CartItem.objects.create(
                 cart=self,
                 product=product,
+                batch=batch,
                 quantity=quantity,
-                unit_price=product.price
+                unit_price=unit_price
             )
             return cart_item
     
-    def remove_item(self, product):
+    def remove_item(self, product, batch=None):
         """Remove item from cart"""
         try:
-            cart_item = self.items.get(product=product)
+            cart_item = self.items.get(product=product, batch=batch)
             cart_item.delete()
             return True
         except CartItem.DoesNotExist:
             return False
     
-    def update_item_quantity(self, product, quantity):
+    def update_item_quantity(self, product, quantity, batch=None):
         """Update quantity of specific item"""
         try:
-            cart_item = self.items.get(product=product)
+            cart_item = self.items.get(product=product, batch=batch)
             if quantity <= 0:
                 cart_item.delete()
             else:
@@ -104,6 +106,12 @@ class CartItem(models.Model):
         'products.Product', 
         on_delete=models.CASCADE
     )
+    batch = models.ForeignKey(
+        'products.ProductBatch',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True
+    )
     quantity = models.PositiveIntegerField(
         default=1,
         validators=[MinValueValidator(1)]
@@ -118,7 +126,7 @@ class CartItem(models.Model):
     
     class Meta:
         db_table = 'cart_item'
-        unique_together = ['cart', 'product']
+        unique_together = ['cart', 'product', 'batch']
         indexes = [
             models.Index(fields=['cart', 'added_at']),
             models.Index(fields=['product']),
@@ -138,9 +146,9 @@ class CartItem(models.Model):
         return self.product.can_order_quantity(self.quantity)
     
     def save(self, *args, **kwargs):
-        """Override save to update unit price from product"""
+        """Override save to update unit price from product/batch"""
         if not self.unit_price:
-            self.unit_price = self.product.price
+            self.unit_price = self.batch.price if self.batch else self.product.price
         super().save(*args, **kwargs)
         
         # Update cart's updated_at timestamp

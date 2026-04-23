@@ -235,6 +235,18 @@ def send_email_otp(email, otp_code):
         return False
 
 
+def normalize_phone_number(phone_number):
+    """
+    Standardize phone number to last 10 digits for consistent matching across POS and App.
+    """
+    if not phone_number:
+        return ""
+    # Remove all non-digit characters
+    digits = ''.join(char for char in str(phone_number) if char.isdigit())
+    # Return last 10 digits
+    return digits[-10:] if len(digits) >= 10 else digits
+
+
 def clean_phone_number(phone_number):
     """
     Clean and format phone number

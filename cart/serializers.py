@@ -13,7 +13,8 @@ class CartItemSerializer(serializers.ModelSerializer):
     product_image = serializers.CharField(source='product.image_display_url', read_only=True)
     product_price = serializers.DecimalField(source='product.price', max_digits=10, decimal_places=2, read_only=True)
     product_unit = serializers.CharField(source='product.unit', read_only=True)
-    stock_quantity = serializers.IntegerField(source='product.quantity', read_only=True)
+    batch_number = serializers.CharField(source='batch.batch_number', read_only=True)
+    stock_quantity = serializers.SerializerMethodField()
     minimum_order_quantity = serializers.IntegerField(source='product.minimum_order_quantity', read_only=True)
     maximum_order_quantity = serializers.IntegerField(source='product.maximum_order_quantity', read_only=True)
     is_available = serializers.BooleanField(read_only=True)
@@ -23,11 +24,16 @@ class CartItemSerializer(serializers.ModelSerializer):
         model = CartItem
         fields = [
             'id', 'product', 'product_name', 'product_image', 'product_price',
-            'product_unit', 'quantity', 'unit_price', 'total_price', 'is_available',
+            'product_unit', 'batch', 'batch_number', 'quantity', 'unit_price', 'total_price', 'is_available',
             'stock_quantity', 'minimum_order_quantity', 'maximum_order_quantity',
             'added_at', 'updated_at'
         ]
         read_only_fields = ['id', 'unit_price', 'total_price', 'added_at', 'updated_at']
+
+    def get_stock_quantity(self, obj):
+        if obj.batch:
+            return obj.batch.quantity
+        return obj.product.quantity
     
     def validate_quantity(self, value):
         """Validate quantity is positive"""
@@ -120,7 +126,7 @@ class AddToCartSerializer(serializers.Serializer):
         return data
     
     def create(self, validated_data):
-        """Add item to cart"""
+        """Add item to cart with batch-aware fulfillment for multi-batch products"""
         customer = self.context['customer']
         product = Product.objects.get(id=validated_data['product_id'])
         quantity = validated_data['quantity']
@@ -131,8 +137,42 @@ class AddToCartSerializer(serializers.Serializer):
             retailer=product.retailer
         )
         
-        # Add item to cart
-        cart_item = cart.add_item(product, quantity)
+        last_item = None
+        if product.has_batches:
+            # Smart Fulfillment: Use cheapest batches first
+            remaining = quantity
+            # Get active batches that are allowed on app and have stock
+            batches = product.batches.filter(
+                is_active=True, 
+                show_on_app=True, 
+                quantity__gt=0
+            ).order_by('price', 'created_at')
+            
+            for batch in batches:
+                if remaining <= 0: break
+                
+                # Check if we already have this batch in cart to avoid duplicates
+                existing_item = cart.items.filter(product=product, batch=batch).first()
+                existing_qty = existing_item.quantity if existing_item else 0
+                
+                # How much more can we take from this batch?
+                available_in_batch = batch.quantity - existing_qty
+                if available_in_batch <= 0: continue
+                
+                take = min(remaining, available_in_batch)
+                last_item = cart.add_item(product, take, batch)
+                remaining -= take
+            
+            # If still remaining (stock issues or no batches), add to generic/last batch?
+            # Actually, validation should have prevented this, but as a fallback:
+            if remaining > 0:
+                # Fallback to FIFO or just the first available batch even if it's over its limit
+                # (The order validation will stop it later if track_inventory is ON)
+                batch = product.batches.filter(is_active=True).order_by('price').first()
+                last_item = cart.add_item(product, remaining, batch)
+        else:
+            # Standard single-price product
+            last_item = cart.add_item(product, quantity)
         
         # Log cart history
         CartHistory.objects.create(
@@ -141,10 +181,10 @@ class AddToCartSerializer(serializers.Serializer):
             product=product,
             action='add',
             quantity=quantity,
-            price=product.price
+            price=last_item.unit_price if last_item else product.price
         )
         
-        return cart_item
+        return last_item
 
 
 class UpdateCartItemSerializer(serializers.Serializer):

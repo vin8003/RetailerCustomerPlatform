@@ -56,6 +56,7 @@ INSTALLED_APPS = [
     'offers',
     'common',
     'fcm_django',
+    'returns',
 ]
 
 MIDDLEWARE = [

@@ -6,6 +6,8 @@ from .models import Order, OrderItem, OrderStatusLog, OrderDelivery, OrderFeedba
 from customers.models import CustomerAddress
 from products.models import Product
 from cart.models import Cart, CartItem
+from returns.models import SalesReturnItem
+from django.db.models import Sum
 
 
 class OrderItemSerializer(serializers.ModelSerializer):
@@ -18,9 +20,19 @@ class OrderItemSerializer(serializers.ModelSerializer):
         model = OrderItem
         fields = [
             'id', 'product', 'product_name', 'product_image', 'product_price', 'product_unit',
-            'quantity', 'unit_price', 'total_price', 'created_at'
+            'quantity', 'unit_price', 'total_price', 'created_at', 'net_quantity', 'returned_quantity'
         ]
         read_only_fields = ['id', 'total_price', 'created_at']
+
+    returned_quantity = serializers.SerializerMethodField()
+    net_quantity = serializers.SerializerMethodField()
+
+    def get_returned_quantity(self, obj):
+        return SalesReturnItem.objects.filter(order_item=obj).aggregate(total=Sum('quantity'))['total'] or 0
+
+    def get_net_quantity(self, obj):
+        returned = self.get_returned_quantity(obj)
+        return max(0, obj.quantity - returned)
 
 
 class OrderListSerializer(serializers.ModelSerializer):
@@ -39,9 +51,24 @@ class OrderListSerializer(serializers.ModelSerializer):
         model = Order
         fields = [
             'id', 'order_number', 'retailer', 'retailer_name', 'customer_name', 'delivery_mode', 'payment_mode',
-            'status', 'total_amount', 'items_count', 'created_at', 'updated_at', 'has_customer_feedback', 'has_retailer_rating', 'feedback',
+            'status', 'total_amount', 'refund_amount', 'net_amount', 'is_returned', 'items_count', 'created_at', 'updated_at', 
+            'has_customer_feedback', 'has_retailer_rating', 'feedback',
             'preparation_time_minutes', 'estimated_ready_time', 'expected_processing_start', 'cancelled_by', 'customer_average_rating', 'source'
         ]
+
+    refund_amount = serializers.SerializerMethodField()
+    net_amount = serializers.SerializerMethodField()
+    is_returned = serializers.SerializerMethodField()
+
+    def get_refund_amount(self, obj):
+        return obj.returns.aggregate(total=Sum('refund_amount'))['total'] or Decimal('0.00')
+
+    def get_net_amount(self, obj):
+        refund = self.get_refund_amount(obj)
+        return obj.total_amount - refund
+
+    def get_is_returned(self, obj):
+        return obj.returns.exists()
     
     def get_items_count(self, obj):
         """Get number of items in order"""
@@ -143,19 +170,22 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     customer_average_rating = serializers.FloatField(source='customer.customer_profile.average_rating', read_only=True)
     
     applied_offers = serializers.SerializerMethodField()
+    sales_returns = serializers.SerializerMethodField()
+    refund_amount = serializers.SerializerMethodField()
+    net_amount = serializers.SerializerMethodField()
     
     class Meta:
         model = Order
         fields = [
-            'id', 'order_number', 'customer_name', 'customer_phone', 'customer_email',
+            'id', 'order_number', 'customer', 'customer_name', 'customer_phone', 'customer_email',
             'retailer', 'retailer_name', 'retailer_phone',
             'retailer_address', 'retailer_upi_id', 'retailer_upi_qr_code', 'delivery_mode', 'payment_mode', 'status',
-            'subtotal', 'delivery_fee', 'discount_amount', 'discount_from_points', 'points_redeemed', 'points_earned', 'total_amount',
+            'subtotal', 'delivery_fee', 'discount_amount', 'discount_from_points', 'points_redeemed', 'points_earned', 'total_amount', 'refund_amount', 'net_amount',
             'special_instructions', 'cancellation_reason', 'cancelled_by', 
             'payment_reference_id', 'payment_status', 'payment_edit_count', 'is_payment_locked',
             'delivery_address_text', 'retailer_gst_number', 'retailer_receipt_footer', 'retailer_show_gst',
             'delivery_latitude', 'delivery_longitude',
-            'items', 'applied_offers', 'created_at', 'updated_at', 'confirmed_at', 'delivered_at',
+            'items', 'sales_returns', 'applied_offers', 'created_at', 'updated_at', 'confirmed_at', 'delivered_at',
             'cancelled_at', 'unread_messages_count',
             'has_customer_feedback', 'has_retailer_rating', 'feedback',
             'preparation_time_minutes', 'estimated_ready_time', 'expected_processing_start', 'customer_average_rating', 'source'
@@ -221,6 +251,17 @@ class OrderDetailSerializer(serializers.ModelSerializer):
 
     def get_has_retailer_rating(self, obj):
         return hasattr(obj, 'retailer_rating')
+
+    def get_sales_returns(self, obj):
+        from returns.serializers import SalesReturnSerializer
+        return SalesReturnSerializer(obj.returns.all(), many=True).data
+
+    def get_refund_amount(self, obj):
+        return obj.returns.aggregate(total=Sum('refund_amount'))['total'] or Decimal('0.00')
+
+    def get_net_amount(self, obj):
+        refund = self.get_refund_amount(obj)
+        return obj.total_amount - refund
 
 
 class OrderCreateSerializer(serializers.Serializer):

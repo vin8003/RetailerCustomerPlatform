@@ -139,6 +139,65 @@ class MasterProductImage(models.Model):
         return f"Image for {self.master_product.name}"
 
 
+class ProductBatch(models.Model):
+    """
+    Specific inventory batches for products with independent pricing and stock
+    """
+    product = models.ForeignKey(
+        'Product', 
+        on_delete=models.CASCADE, 
+        related_name='batches'
+    )
+    retailer = models.ForeignKey(
+        'retailers.RetailerProfile', 
+        on_delete=models.CASCADE,
+        related_name='product_batches'
+    )
+    batch_number = models.CharField(max_length=100, blank=True, null=True)
+    barcode = models.CharField(max_length=50, blank=True, null=True, db_index=True)
+    
+    # Pricing
+    purchase_price = models.DecimalField(
+        max_digits=10, 
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal('0.00'))]
+    )
+    price = models.DecimalField(
+        max_digits=10, 
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal('0.01'))]
+    )
+    original_price = models.DecimalField(
+        max_digits=10, 
+        decimal_places=2,
+        null=True, 
+        blank=True,
+        validators=[MinValueValidator(Decimal('0.01'))]
+    )
+    
+    # Inventory
+    quantity = models.IntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    show_on_app = models.BooleanField(default=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'product_batch'
+        indexes = [
+            models.Index(fields=['product', 'is_active']),
+            models.Index(fields=['retailer', 'barcode']),
+            models.Index(fields=['created_at']),
+        ]
+        unique_together = ['product', 'batch_number'] if 'batch_number' else []
+
+    def __str__(self):
+        return f"{self.product.name} - Batch {self.batch_number or self.id} (MRP: {self.original_price})"
+
+
 class Product(models.Model):
     """
     Product model for retailer products
@@ -218,7 +277,7 @@ class Product(models.Model):
     )
     
     # Inventory
-    quantity = models.PositiveIntegerField(default=0)
+    quantity = models.IntegerField(default=0)
     track_inventory = models.BooleanField(default=True)
     unit = models.CharField(max_length=20, choices=UNIT_CHOICES, default='piece')
     minimum_order_quantity = models.PositiveIntegerField(default=1)
@@ -243,6 +302,7 @@ class Product(models.Model):
     is_available = models.BooleanField(default=True)
     is_draft = models.BooleanField(default=False)  # For incomplete products
     is_seasonal = models.BooleanField(default=False) # For Seasonal Picks lane
+    has_batches = models.BooleanField(default=False)
     
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
@@ -276,6 +336,20 @@ class Product(models.Model):
             resize_image(self.image)
             
         super().save(*args, **kwargs)
+
+    def sync_inventory_from_batches(self):
+        """Update product quantity from sum of active batches"""
+        if self.has_batches:
+            active_batches = self.batches.filter(is_active=True)
+            self.quantity = active_batches.aggregate(total=models.Sum('quantity'))['total'] or 0
+            
+            # Also sync lowest selling price and its MRP for App visibility
+            best_batch = active_batches.filter(quantity__gt=0, show_on_app=True).order_by('price', '-original_price').first()
+            if best_batch:
+                self.price = best_batch.price
+                self.original_price = best_batch.original_price
+            
+            self.save(update_fields=['quantity', 'price', 'original_price', 'discount_percentage'])
     
     @property
     def is_in_stock(self):
@@ -311,8 +385,8 @@ class Product(models.Model):
             return self.original_price - self.price
         return Decimal('0.00')
     
-    def can_order_quantity(self, quantity):
-        """Check if requested quantity can be ordered"""
+    def can_order_quantity(self, quantity, batch=None):
+        """Check if requested quantity can be ordered, optionally from a specific batch"""
         if quantity < self.minimum_order_quantity:
             return False
         if self.maximum_order_quantity and quantity > self.maximum_order_quantity:
@@ -321,22 +395,79 @@ class Product(models.Model):
         if not self.track_inventory:
             return self.is_available
             
+        if self.has_batches and batch:
+            return batch.quantity >= quantity
+            
         return quantity <= self.quantity
     
-    def reduce_quantity(self, quantity):
-        """Reduce product quantity"""
+    def reduce_quantity(self, quantity, batch=None, allow_negative=False):
+        """Reduce product quantity, prioritizing a specific batch if provided"""
         if not self.track_inventory:
             return True
             
-        if self.quantity >= quantity:
-            self.quantity -= quantity
-            self.save()
-            return True
+        if self.has_batches:
+            if batch:
+                if allow_negative or batch.quantity >= quantity:
+                    batch.quantity -= quantity
+                    batch.save()
+                    self.sync_inventory_from_batches()
+                    return True
+            else:
+                # FIFO: Reduce from oldest active batches with stock
+                remaining = quantity
+                batches = self.batches.filter(is_active=True, quantity__gt=0).order_by('created_at')
+                
+                if not allow_negative and self.quantity < quantity:
+                    return False
+                    
+                for b in batches:
+                    if remaining <= 0: break
+                    reduction = min(b.quantity, remaining)
+                    b.quantity -= reduction
+                    b.save()
+                    remaining -= reduction
+                
+                # If still remaining and allow_negative is True, take from the latest batch
+                if remaining > 0 and allow_negative:
+                    latest_batch = self.batches.filter(is_active=True).order_by('-created_at').first()
+                    if latest_batch:
+                        latest_batch.quantity -= remaining
+                        latest_batch.save()
+                        remaining = 0
+
+                self.sync_inventory_from_batches()
+                return remaining <= 0
+        else:
+            if allow_negative or self.quantity >= quantity:
+                self.quantity -= quantity
+                self.save()
+                return True
         return False
     
-    def increase_quantity(self, quantity):
-        """Increase product quantity"""
+    def increase_quantity(self, quantity, batch=None):
+        """Increase product quantity, optionally for a specific batch"""
         if not self.track_inventory:
+            return True
+            
+        if self.has_batches:
+            if batch:
+                batch.quantity += quantity
+                batch.save()
+            else:
+                # If no batch provided but has_batches is True, we might need a default batch
+                # For now, if no batch, we can't easily increase without knowing which one
+                # or we just create/update a default one. But usually increase is via purchase/return.
+                b = self.batches.filter(is_active=True).order_by('-created_at').first()
+                if b:
+                    b.quantity += quantity
+                    b.save()
+                else:
+                    return False
+            self.sync_inventory_from_batches()
+            return True
+        else:
+            self.quantity += quantity
+            self.save()
             return True
             
         self.quantity += quantity
@@ -424,10 +555,17 @@ class ProductInventoryLog(models.Model):
         on_delete=models.CASCADE, 
         related_name='inventory_logs'
     )
+    batch = models.ForeignKey(
+        ProductBatch,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='inventory_logs'
+    )
     log_type = models.CharField(max_length=20, choices=LOG_TYPES)
     quantity_change = models.IntegerField()
-    previous_quantity = models.PositiveIntegerField()
-    new_quantity = models.PositiveIntegerField()
+    previous_quantity = models.IntegerField()
+    new_quantity = models.IntegerField()
     reason = models.TextField(blank=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, 

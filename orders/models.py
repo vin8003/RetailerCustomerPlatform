@@ -371,6 +371,10 @@ class Order(models.Model):
                 )
                 loyalty.points += total_to_award
                 loyalty.save()
+                
+                # Update order to reflect actual points earned
+                self.points_earned = total_to_award
+                self.save(update_fields=['points_earned'])
 
                 # Create Transaction
                 LoyaltyTransaction.objects.create(
@@ -451,6 +455,12 @@ class OrderItem(models.Model):
     product = models.ForeignKey(
         'products.Product', 
         on_delete=models.CASCADE
+    )
+    batch = models.ForeignKey(
+        'products.ProductBatch',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True
     )
     
     # Product details at time of order
@@ -745,9 +755,10 @@ def update_customer_rating_stats(sender, instance, created, **kwargs):
         )
     
     # 2. Update Average Rating
-    if created or instance.rating > 0: # Even if 0, it counts towards average?
-        # Requirement: "Customer average rating = (0 + 4) / 2 = 2 stars" -> YES, 0 counts.
-        customer_profile = instance.customer.customer_profile
+    if created or instance.rating >= 0: 
+        from customers.models import CustomerProfile
+        # Ensure CustomerProfile exists (especially for shadow users)
+        customer_profile, _ = CustomerProfile.objects.get_or_create(user=instance.customer)
         
         avg_rating = RetailerRating.objects.filter(customer=instance.customer).aggregate(Avg('rating'))['rating__avg'] or 0
         total_count = RetailerRating.objects.filter(customer=instance.customer).count()

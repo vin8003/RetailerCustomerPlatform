@@ -4,6 +4,8 @@ from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Count, Sum, Q
 from django.shortcuts import get_object_or_404
+from django.db.models import Sum, Q, Count, Avg
+from common.pagination import StandardResultsSetPagination
 from django.utils import timezone
 from datetime import timedelta
 import logging
@@ -889,10 +891,26 @@ def get_retailer_customers(request):
         
         # 1. Get all customer mappings for this retailer
         # This includes Shadow users, App users who ordered, and Blacklisted users
-        mappings = RetailerCustomerMapping.objects.filter(retailer=retailer).select_related('customer')
+        mappings = RetailerCustomerMapping.objects.filter(retailer=retailer).select_related('customer').order_by('-created_at')
+        
+        # 2. Apply Search Filter if present
+        search = request.query_params.get('search')
+        if search:
+            mappings = mappings.filter(
+                Q(nickname__icontains=search) |
+                Q(customer__first_name__icontains=search) |
+                Q(customer__last_name__icontains=search) |
+                Q(customer__phone_number__icontains=search)
+            )
+
+        # 3. Apply Pagination
+        paginator = StandardResultsSetPagination()
+        page = paginator.paginate_queryset(mappings, request)
+        
+        target_mappings = page if page is not None else mappings
         
         data = []
-        for mapping in mappings:
+        for mapping in target_mappings:
             user = mapping.customer
             
             # Helper: Get Stats
@@ -935,6 +953,9 @@ def get_retailer_customers(request):
             })
             
         serializer = RetailerCustomerListSerializer(data, many=True)
+        if page is not None:
+            return paginator.get_paginated_response(serializer.data)
+            
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     except Exception as e:

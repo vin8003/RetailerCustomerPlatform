@@ -307,9 +307,11 @@ def get_retailer_products(request):
 
         if in_stock is not None:
             if in_stock.lower() == 'true':
-                products = products.filter(quantity__gt=0)
+                # In Stock: (Tracked and Qty > 0) OR (Not Tracked)
+                products = products.filter(Q(track_inventory=False) | Q(quantity__gt=0))
             else:
-                products = products.filter(quantity=0)
+                # Out of Stock: (Tracked and Qty == 0)
+                products = products.filter(track_inventory=True, quantity=0)
                 
         low_stock = request.query_params.get('low_stock')
         if low_stock and low_stock.lower() == 'true':
@@ -903,8 +905,11 @@ def get_retailer_products_public(request, retailer_id):
             except ValueError:
                 pass
 
-        if in_stock and in_stock.lower() == 'true':
-            products = products.filter(quantity__gt=0)
+        if in_stock is not None:
+            if in_stock.lower() == 'true':
+                products = products.filter(Q(track_inventory=False) | Q(quantity__gt=0))
+            else:
+                products = products.filter(track_inventory=True, quantity=0)
 
         # Search functionality
         search = request.query_params.get('search')

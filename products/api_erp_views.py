@@ -5,17 +5,16 @@ from rest_framework.response import Response
 from django.utils import timezone
 from rest_framework.decorators import action, api_view, permission_classes
 from django.db import transaction
-from rest_framework.decorators import action
 from retailers.models import Supplier, RetailerProfile, RetailerCustomerMapping
 from retailers.serializers import SupplierSerializer
 from products.models import PurchaseInvoice, PurchaseItem, SupplierLedger, Product, ProductInventoryLog
 from orders.models import Order, OrderItem
 from django.db.models import Sum, Q, Count, F
-from django.db import transaction
 from products.serializers import PurchaseInvoiceSerializer, SupplierLedgerSerializer
-from orders.models import Order, OrderItem
 from orders.serializers import OrderDetailSerializer
 from common.permissions import IsRetailerOwner
+from authentication.utils import normalize_phone_number
+from customers.models import CustomerProfile
 
 class SupplierViewSet(viewsets.ModelViewSet):
     serializer_class = SupplierSerializer
@@ -23,7 +22,9 @@ class SupplierViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         retailer = RetailerProfile.objects.get(user=self.request.user)
-        return Supplier.objects.filter(retailer=retailer)
+        return Supplier.objects.filter(retailer=retailer).order_by('-id')
+    
+    search_fields = ['company_name', 'contact_person', 'phone_number', 'email']
 
     def perform_create(self, serializer):
         retailer = RetailerProfile.objects.get(user=self.request.user)
@@ -44,6 +45,8 @@ class PurchaseInvoiceViewSet(viewsets.ModelViewSet):
         if end_date:
             qs = qs.filter(invoice_date__lte=end_date)
         return qs
+
+    search_fields = ['invoice_number', 'supplier_name']
 
     def perform_create(self, serializer):
         retailer = RetailerProfile.objects.get(user=self.request.user)
@@ -139,14 +142,14 @@ def create_pos_order(request):
     if customer_mobile:
         from django.contrib.auth import get_user_model
         User = get_user_model()
-        # Robust phone matching: strip formatting and match last 10 digits
-        clean_mobile = ''.join(filter(str.isdigit, customer_mobile))
-        last_10 = clean_mobile[-10:] if len(clean_mobile) >= 10 else clean_mobile
         
-        if last_10:
+        # Robust phone matching using normalized 10 digits
+        mobile_match_id = normalize_phone_number(customer_mobile)
+        
+        if mobile_match_id:
             user_query = (
-                User.objects.filter(username__endswith=last_10) | 
-                User.objects.filter(phone_number__endswith=last_10)
+                User.objects.filter(username__endswith=mobile_match_id) | 
+                User.objects.filter(phone_number__endswith=mobile_match_id)
             )
             order_customer = user_query.first()
         
@@ -162,6 +165,10 @@ def create_pos_order(request):
             )
             order_customer.set_password(secrets.token_urlsafe(12))
             order_customer.save()
+            
+        # Ensure Shadow/Registered User has a CustomerProfile for rating synchronization
+        if order_customer:
+            CustomerProfile.objects.get_or_create(user=order_customer)
 
     try:
         from retailers.models import RetailerCustomerMapping
@@ -177,8 +184,6 @@ def create_pos_order(request):
 
             order = Order.objects.create(
                 customer=order_customer,
-                # We no longer strictly need guest_name/mobile since it's in the User object, 
-                # but keeping for backward compatibility in the model for now.
                 guest_name=customer_name if not order_customer else None,
                 guest_mobile=customer_mobile if not order_customer else None,
                 retailer=retailer,
@@ -215,14 +220,30 @@ def create_pos_order(request):
             # Create Order Items and Reduce Inventory
             for item in items_data:
                 product = Product.objects.select_for_update().get(id=item['product_id'], retailer=retailer)
-                qty = int(item['quantity'])
-                unit_price = float(item['unit_price'])
+                batch_id = item.get('batch_id')
+                batch = None
+                if batch_id:
+                    batch = ProductBatch.objects.select_for_update().get(id=batch_id, product=product)
                 
+                qty = int(item['quantity'])
+                unit_price = Decimal(str(item['unit_price']))
+                
+                # Calculate previous quantity for logging
+                prev_qty = batch.quantity if (batch and product.track_inventory) else product.quantity
+                
+                # Reduce inventory using the model method (handles FIFO if batch is None)
+                # POS allows negative stock (allow_negative=True)
+                if not product.reduce_quantity(qty, batch=batch, allow_negative=True):
+                    raise ValueError(f"Unexpected error reducing stock for {product.name}")
+                
+                new_qty = batch.quantity if (batch and product.track_inventory) else product.quantity
+
                 OrderItem.objects.create(
                     order=order,
                     product=product,
+                    batch=batch,
                     product_name=product.name,
-                    product_price=product.price,
+                    product_price=batch.price if batch else product.price,
                     product_unit=product.unit,
                     quantity=qty,
                     unit_price=unit_price,
@@ -230,22 +251,17 @@ def create_pos_order(request):
                 )
 
                 if product.track_inventory:
-                    if product.quantity >= qty:
-                        product.quantity -= qty
-                        product.save()
-                        
-                        # Log inventory
-                        ProductInventoryLog.objects.create(
-                            product=product,
-                            created_by=request.user,
-                            quantity_change=-qty,
-                            previous_quantity=product.quantity + qty,
-                            new_quantity=product.quantity,
-                            log_type='sold',
-                            reason=f'POS Sale: Order #{order.order_number}'
-                        )
-                    else:
-                        raise ValueError(f"Not enough stock for {product.name}")
+                    # Log inventory
+                    ProductInventoryLog.objects.create(
+                        product=product,
+                        batch=batch,
+                        created_by=request.user,
+                        quantity_change=-qty,
+                        previous_quantity=prev_qty,
+                        new_quantity=new_qty,
+                        log_type='sold',
+                        reason=f'POS Sale: Order #{order.order_number}'
+                    )
 
         response_data = {
             'message': 'POS Order created successfully!',
@@ -275,10 +291,13 @@ def verify_pos_customer(request):
     from django.contrib.auth import get_user_model
     User = get_user_model()
     
-    # Check Unified User Table
-    clean_mobile = mobile_number.replace('+91', '')
-    user_query = User.objects.filter(username=mobile_number) | User.objects.filter(phone_number=mobile_number) | User.objects.filter(username=f"+91{clean_mobile}")
-    existing_user = user_query.first()
+    # Check Unified User Table using robust matching
+    last_10 = normalize_phone_number(mobile_number)
+    existing_user = None
+    if last_10:
+        existing_user = User.objects.filter(
+            Q(username__endswith=last_10) | Q(phone_number__endswith=last_10)
+        ).first()
     
     if existing_user:
         name = existing_user.get_full_name() or existing_user.username
@@ -296,10 +315,10 @@ def verify_pos_customer(request):
             'is_app_user': existing_user.registration_status == 'registered'
         })
         
-    # Check legacy POS walk-in data (to be migrated)
+    # Check legacy POS walk-in data
     past_order = Order.objects.filter(
         retailer=retailer,
-        guest_mobile=mobile_number
+        guest_mobile__endswith=last_10 if last_10 else 'NON_EXISTENT'
     ).exclude(guest_name__isnull=True).exclude(guest_name='').order_by('-created_at').first()
     
     if past_order and past_order.guest_name:
@@ -330,22 +349,25 @@ def search_pos_customers(request):
     seen_mobiles = set()
     
     # 1. Search Online list
-    if len(query) == 10:
+    if len(query) >= 10:
         # Full match: search globally across all app users
-        clean_mobile = query.replace('+91', '')
-        user_query = User.objects.filter(username=query) | User.objects.filter(username=f"+91{clean_mobile}")
-        online_users = user_query.exclude(is_staff=True)[:5]
+        last_10 = normalize_phone_number(query)
+        online_users = User.objects.filter(
+            Q(username__endswith=last_10) | Q(phone_number__endswith=last_10)
+        ).exclude(is_staff=True)[:5]
     else:
-        # Partial match: strictly search only users who have ordered from this specific retailer
-        my_app_customer_ids = Order.objects.filter(retailer=retailer, customer__isnull=False).values_list('customer_id', flat=True).distinct()
-        online_users = User.objects.filter(id__in=my_app_customer_ids, username__icontains=query).exclude(is_staff=True)[:5]
+        # Partial match
+        online_users = User.objects.filter(
+            Q(username__icontains=query) | Q(phone_number__icontains=query)
+        ).exclude(is_staff=True)[:5]
+
     for u in online_users:
-        mobile = u.username.replace('+91', '')
+        mobile = normalize_phone_number(u.username)
         if mobile not in seen_mobiles:
             suggestions.append({
                 'mobile': mobile,
                 'name': u.get_full_name() or u.username,
-                'status': 'verified'
+                'status': 'verified' if u.registration_status == 'registered' else 'shadow'
             })
             seen_mobiles.add(mobile)
             
@@ -356,7 +378,7 @@ def search_pos_customers(request):
     ).exclude(guest_name__isnull=True).exclude(guest_name='').order_by('-created_at')[:30]
     
     for o in guest_orders:
-        mobile = o.guest_mobile
+        mobile = normalize_phone_number(o.guest_mobile)
         if mobile and mobile not in seen_mobiles:
             suggestions.append({
                 'mobile': mobile,
@@ -413,14 +435,13 @@ def get_daily_sales_summary(request):
     except RetailerProfile.DoesNotExist:
         return Response({'error': 'Unauthorized'}, status=status.HTTP_403_FORBIDDEN)
         
-    today = timezone.now().date()
+    today = timezone.localtime(timezone.now()).date()
     # Filter orders for today for this retailer
     todays_orders = Order.objects.filter(
         retailer=retailer,
         created_at__date=today
     ).exclude(status='cancelled')
     
-    # Aggregations
     summary = todays_orders.aggregate(
         total_sales=Sum('total_amount'),
         order_count=Count('id'),
@@ -434,15 +455,37 @@ def get_daily_sales_summary(request):
         online_sales=Sum('total_amount', filter=Q(source='app') | Q(source__isnull=True))
     )
     
+    # 2. Subtract Returns
+    from returns.models import SalesReturn
+    today_returns = SalesReturn.objects.filter(retailer=retailer, created_at__date=today).aggregate(
+        cash_returns=Sum('refund_amount', filter=Q(refund_payment_mode='cash')),
+        upi_returns=Sum('refund_amount', filter=Q(refund_payment_mode='upi')),
+        pos_returns=Sum('refund_amount', filter=Q(order__source='pos') | Q(order__isnull=True)),
+        online_returns=Sum('refund_amount', filter=Q(order__source='app'))
+    )
+    
+    cash_refunds = float(today_returns['cash_returns'] or 0)
+    upi_refunds = float(today_returns['upi_returns'] or 0)
+    pos_refunds = float(today_returns['pos_returns'] or 0)
+    online_refunds = float(today_returns['online_returns'] or 0)
+    
+    cash_sales = float(summary['cash_sales'] or 0) - cash_refunds
+    digital_sales = float(summary['digital_sales'] or 0) - upi_refunds
+    total_sales = float(summary['total_sales'] or 0) - (cash_refunds + upi_refunds)
+    pos_sales = float(summary['pos_sales'] or 0) - pos_refunds
+    online_sales = float(summary['online_sales'] or 0) - online_refunds
+    
     # Defaults and Formatting
     res = {
         'date': today,
-        'total_sales': float(summary['total_sales'] or 0),
+        'total_sales': total_sales,
         'order_count': summary['order_count'] or 0,
-        'cash_sales': float(summary['cash_sales'] or 0),
-        'digital_sales': float(summary['digital_sales'] or 0),
-        'pos_sales': float(summary['pos_sales'] or 0),
-        'online_sales': float(summary['online_sales'] or 0),
+        'cash_sales': cash_sales,
+        'digital_sales': digital_sales,
+        'pos_sales': pos_sales,
+        'online_sales': online_sales,
+        'cash_refunds': cash_refunds,
+        'upi_refunds': upi_refunds,
         'shop_name': retailer.shop_name
     }
     
