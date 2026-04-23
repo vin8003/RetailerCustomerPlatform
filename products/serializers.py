@@ -657,9 +657,9 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
                 batch_fields = {
                     'batch_number': batch_item.get('batch_number'),
                     'barcode': batch_item.get('barcode') or instance.barcode,
-                    'price': batch_item.get('price'),
-                    'original_price': batch_item.get('original_price'),
-                    'purchase_price': batch_item.get('purchase_price'),
+                    'price': batch_item.get('price') or instance.price,
+                    'original_price': batch_item.get('original_price') or instance.original_price,
+                    'purchase_price': batch_item.get('purchase_price') or instance.purchase_price,
                     'quantity': batch_item.get('quantity', 0),
                     'is_active': batch_item.get('is_active', True),
                     'show_on_app': batch_item.get('show_on_app', True),
@@ -680,15 +680,20 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
                 batch = ProductBatch.objects.create(
                     product=instance, 
                     retailer=instance.retailer,
-                    batch_number='INITIAL-STOCK'
+                    batch_number='INITIAL-STOCK',
+                    price=instance.price,
+                    original_price=instance.original_price,
+                    purchase_price=instance.purchase_price,
+                    quantity=instance.quantity,
+                    barcode=instance.barcode
                 )
-            
-            batch.price = instance.price
-            batch.original_price = instance.original_price
-            batch.purchase_price = instance.purchase_price
-            batch.quantity = instance.quantity
-            batch.barcode = instance.barcode
-            batch.save()
+            else:
+                batch.price = instance.price
+                batch.original_price = instance.original_price
+                batch.purchase_price = instance.purchase_price
+                batch.quantity = instance.quantity
+                batch.barcode = instance.barcode
+                batch.save()
             
         return instance
 

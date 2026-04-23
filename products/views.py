@@ -2808,6 +2808,18 @@ class CommitUploadSessionView(APIView):
                         
                         new_prod.save()
                         created_count += 1
+                        
+                        # Create inventory log for new product
+                        if new_prod.quantity > 0:
+                            ProductInventoryLog.objects.create(
+                                product=new_prod,
+                                log_type='added',
+                                quantity_change=new_prod.quantity,
+                                previous_quantity=0,
+                                new_quantity=new_prod.quantity,
+                                reason='Bulk session upload (Created)',
+                                created_by=request.user
+                            )
                     
                     item.is_processed = True
                     item.save()

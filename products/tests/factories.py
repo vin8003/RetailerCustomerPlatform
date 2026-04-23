@@ -1,6 +1,6 @@
 import factory
 from factory.django import DjangoModelFactory
-from ..models import Product, ProductCategory, ProductBrand, MasterProduct
+from ..models import Product, ProductCategory, ProductBrand, MasterProduct, ProductBatch
 from decimal import Decimal
 
 class ProductCategoryFactory(DjangoModelFactory):
@@ -37,3 +37,16 @@ class ProductFactory(DjangoModelFactory):
     track_inventory = True
     is_active = True
     is_available = True
+
+class ProductBatchFactory(DjangoModelFactory):
+    class Meta:
+        model = ProductBatch
+    
+    product = factory.SubFactory(ProductFactory)
+    retailer = factory.SelfAttribute('product.retailer')
+    batch_number = factory.Sequence(lambda n: f"BATCH-{n}")
+    price = Decimal('90.00')
+    original_price = Decimal('100.00')
+    quantity = 10
+    is_active = True
+

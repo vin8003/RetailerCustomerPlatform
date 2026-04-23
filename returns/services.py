@@ -4,6 +4,7 @@ from products.models import Product, ProductBatch, ProductInventoryLog, Supplier
 from retailers.models import RetailerCustomerMapping
 from .models import SalesReturn, SalesReturnItem, PurchaseReturn, PurchaseReturnItem
 from django.db.models import Sum
+from decimal import Decimal
 
 def process_sales_return(retailer, order, items_data, refund_payment_mode, reason, created_by):
     """
@@ -85,7 +86,6 @@ def process_sales_return(retailer, order, items_data, refund_payment_mode, reaso
         # 4. Update Loyalty Points if order/customer exists
         if order and order.customer and order.points_earned > 0:
             from customers.models import CustomerLoyalty, LoyaltyTransaction
-            from decimal import Decimal
             
             # Proportional points reduction
             # points_to_revert = (total_refund / subtotal) * points_earned
