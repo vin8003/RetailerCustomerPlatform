@@ -131,10 +131,16 @@ def process_purchase_return(retailer, supplier, invoice, items_data, notes, crea
     4. Create DEBIT entry in SupplierLedger
     """
     with transaction.atomic():
+        from django.utils.timezone import now
+        import random, string
+        hasher = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
+        return_number = f"RET-{now().strftime('%y%m%d')}-{hasher}"
+
         purchase_return = PurchaseReturn.objects.create(
             retailer=retailer,
             supplier=supplier,
             invoice=invoice,
+            return_number=return_number,
             notes=notes,
             created_by=created_by
         )

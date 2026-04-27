@@ -43,5 +43,5 @@ class PurchaseReturnSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = PurchaseReturn
-        fields = ['id', 'supplier', 'supplier_name', 'invoice', 'invoice_number', 'total_amount', 'notes', 'return_date', 'processed_by_name', 'created_at', 'items']
-        read_only_fields = ['id', 'created_at', 'total_amount', 'return_date']
+        fields = ['id', 'return_number', 'supplier', 'supplier_name', 'invoice', 'invoice_number', 'total_amount', 'notes', 'return_date', 'processed_by_name', 'created_at', 'items']
+        read_only_fields = ['id', 'return_number', 'created_at', 'total_amount', 'return_date']

@@ -168,6 +168,8 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     has_retailer_rating = serializers.SerializerMethodField()
     feedback = serializers.SerializerMethodField()
     customer_average_rating = serializers.FloatField(source='customer.customer_profile.average_rating', read_only=True)
+    retailer_delivery_charge = serializers.DecimalField(source='retailer.delivery_charge', max_digits=10, decimal_places=2, read_only=True)
+    retailer_free_delivery_threshold = serializers.DecimalField(source='retailer.free_delivery_threshold', max_digits=10, decimal_places=2, read_only=True)
     
     applied_offers = serializers.SerializerMethodField()
     sales_returns = serializers.SerializerMethodField()
@@ -188,7 +190,8 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'items', 'sales_returns', 'applied_offers', 'created_at', 'updated_at', 'confirmed_at', 'delivered_at',
             'cancelled_at', 'unread_messages_count',
             'has_customer_feedback', 'has_retailer_rating', 'feedback',
-            'preparation_time_minutes', 'estimated_ready_time', 'expected_processing_start', 'customer_average_rating', 'source'
+            'preparation_time_minutes', 'estimated_ready_time', 'expected_processing_start', 'customer_average_rating', 'source',
+            'retailer_delivery_charge', 'retailer_free_delivery_threshold'
         ]
     
     def get_customer_name(self, obj):
@@ -878,15 +881,23 @@ class OrderModificationSerializer(serializers.Serializer):
             # Update delivery mode
             if delivery_mode:
                 instance.delivery_mode = delivery_mode
-                # Recalculate delivery fee logic if needed (e.g. 50 for delivery, 0 for pickup)
-                if delivery_mode == 'delivery':
-                     instance.delivery_fee = 50 # Fixed for now as per OrderCreate
-                     if not instance.delivery_address:
-                         # Requires address? If switching to delivery without address, this might be issue.
-                         # Assuming address exists or validation handled.
-                         pass
+            
+            # Always recalculate delivery fee based on current delivery_mode and retailer settings
+            # This ensures correct fee whether mode changed or items changed
+            retailer = instance.retailer
+            current_subtotal = Decimal(sum(item.total_price for item in instance.items.all())).quantize(Decimal('0.01'))
+            
+            if instance.delivery_mode == 'delivery':
+                if retailer.delivery_charge > 0:
+                    # Check free delivery threshold
+                    if retailer.free_delivery_threshold > 0 and current_subtotal >= retailer.free_delivery_threshold:
+                        instance.delivery_fee = Decimal('0.00')
+                    else:
+                        instance.delivery_fee = retailer.delivery_charge
                 else:
-                    instance.delivery_fee = 0
+                    instance.delivery_fee = Decimal('0.00')
+            else:
+                instance.delivery_fee = Decimal('0.00')
             
             # Update discount
             if discount_amount is not None:

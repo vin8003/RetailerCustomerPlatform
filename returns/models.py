@@ -112,6 +112,7 @@ class PurchaseReturn(models.Model):
         related_name='returns'
     )
     
+    return_number = models.CharField(max_length=100, blank=True, null=True)
     total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     notes = models.TextField(blank=True)
     
