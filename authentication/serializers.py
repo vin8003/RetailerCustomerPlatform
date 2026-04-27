@@ -12,6 +12,9 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, validators=[validate_password])
     password_confirm = serializers.CharField(write_only=True)
     
+    # We define these explicitly to remove the default UniqueValidators, 
+    # so we can handle "Shadow User" collisions manually in validate()
+    username = serializers.CharField(max_length=150)
     phone_number = serializers.CharField(max_length=15, required=False)
 
     class Meta:
@@ -22,14 +25,56 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         if attrs['password'] != attrs['password_confirm']:
             raise serializers.ValidationError({"password": "Passwords don't match"})
         
+        username = attrs.get('username')
         phone_number = attrs.get('phone_number')
-        if phone_number and User.objects.filter(phone_number=phone_number).exists():
-            raise serializers.ValidationError({"phone_number": "Phone number already registered"})
+
+        # Check for Username collisions
+        if username:
+            existing_user = User.objects.filter(username=username).first()
+            if existing_user and existing_user.registration_status != 'shadow':
+                raise serializers.ValidationError({"username": "A user with that username already exists."})
+
+        # Check for Phone Number collisions
+        if phone_number:
+            # Normalize phone for consistent lookup (last 10 digits)
+            clean_phone = ''.join(filter(str.isdigit, phone_number))
+            last_10 = clean_phone[-10:] if len(clean_phone) >= 10 else clean_phone
+            
+            existing_user = User.objects.filter(phone_number__endswith=last_10).first()
+            if existing_user and existing_user.registration_status != 'shadow':
+                raise serializers.ValidationError({"phone_number": "Phone number already registered"})
             
         return attrs
     
     def create(self, validated_data):
         validated_data.pop('password_confirm')
+        username = validated_data.get('username')
+        phone_number = validated_data.get('phone_number')
+        
+        # Check for existing shadow user to "claim" (Match by normalized phone OR username)
+        existing_user = None
+        
+        if phone_number:
+            clean_phone = ''.join(filter(str.isdigit, phone_number))
+            last_10 = clean_phone[-10:] if len(clean_phone) >= 10 else clean_phone
+            existing_user = User.objects.filter(phone_number__endswith=last_10, registration_status='shadow').first()
+            
+        if not existing_user and username:
+            existing_user = User.objects.filter(username=username, registration_status='shadow').first()
+
+        if existing_user:
+            # Update existing shadow user to full registered user
+            for attr, value in validated_data.items():
+                if attr == 'password':
+                    existing_user.set_password(value)
+                else:
+                    setattr(existing_user, attr, value)
+            
+            existing_user.registration_status = 'registered'
+            existing_user.save()
+            return existing_user
+        
+        # Otherwise create a new user
         user = User.objects.create_user(**validated_data)
         return user
 
@@ -102,6 +147,10 @@ class OTPVerificationSerializer(serializers.Serializer):
     firebase_token = serializers.CharField(required=False)
     name = serializers.CharField(max_length=150, required=False)
     
+    def validate_phone_number(self, value):
+        from .utils import clean_phone_number
+        return clean_phone_number(value)
+
     def validate(self, attrs):
         otp_code = attrs.get('otp_code')
         firebase_token = attrs.get('firebase_token')
@@ -216,6 +265,10 @@ class ResetPasswordConfirmSerializer(serializers.Serializer):
     firebase_token = serializers.CharField(required=False)
     new_password = serializers.CharField(write_only=True, validators=[validate_password])
     confirm_password = serializers.CharField(write_only=True)
+
+    def validate_phone_number(self, value):
+        from .utils import clean_phone_number
+        return clean_phone_number(value)
 
     def validate(self, attrs):
         if attrs['new_password'] != attrs['confirm_password']:

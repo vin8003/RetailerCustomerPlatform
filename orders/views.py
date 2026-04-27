@@ -228,6 +228,9 @@ def get_order_history(request):
         # Apply filters
         status_filter = request.query_params.get('status')
         if status_filter:
+            # Handle aliases for frontend compatibility
+            if status_filter == 'shipped':
+                status_filter = 'out_for_delivery'
             orders = orders.filter(status=status_filter)
         
         # Date range filtering
@@ -569,16 +572,54 @@ def get_order_stats(request):
             delivered_orders=Count('id', filter=Q(status='delivered')),
             cancelled_orders=Count('id', filter=Q(status='cancelled')),
             total_revenue=Sum('total_amount', filter=Q(status='delivered')),
-            avg_order_value=Avg('total_amount', filter=Q(status='delivered'))
+            avg_order_value=Avg('total_amount', filter=Q(status='delivered')),
+            
+            # Payment Breakdown (respecting current filters)
+            cash_sales=Sum('total_amount', filter=Q(status='delivered') & (Q(payment_mode='cash') | Q(payment_mode='cash_pickup'))),
+            digital_sales=Sum('total_amount', filter=Q(status='delivered') & (Q(payment_mode='upi') | Q(payment_mode='online') | Q(payment_mode='card'))),
+            
+            # Channel Performance (respecting current filters)
+            pos_sales=Sum('total_amount', filter=Q(status='delivered') & Q(source='pos')),
+            online_sales=Sum('total_amount', filter=Q(status='delivered') & Q(source='app') | Q(source__isnull=True))
         )
+        
+        # Aggregate Returns for correctly calculating NET revenue
+        from returns.models import SalesReturn
+        returns_qs = SalesReturn.objects.filter(retailer=retailer)
+        if time_range == 'today':
+            returns_qs = returns_qs.filter(created_at__date=today)
+        elif time_range == 'this_week':
+            start_of_week = today - timedelta(days=today.weekday())
+            returns_qs = returns_qs.filter(created_at__date__gte=start_of_week)
+        elif time_range == 'this_month':
+            returns_qs = returns_qs.filter(created_at__year=today.year, created_at__month=today.month)
+        elif time_range == 'custom':
+            if 'start_date_obj' in locals():
+                returns_qs = returns_qs.filter(created_at__date__gte=start_date_obj)
+            if 'end_date_obj' in locals():
+                returns_qs = returns_qs.filter(created_at__date__lte=end_date_obj)
+
+        returns_stats = returns_qs.aggregate(
+            total_refund=Sum('refund_amount'),
+            cash_refund=Sum('refund_amount', filter=Q(refund_payment_mode='cash')),
+            upi_refund=Sum('refund_amount', filter=Q(refund_payment_mode='upi')),
+            pos_refund=Sum('refund_amount', filter=Q(order__source='pos') | Q(order__isnull=True)),
+            online_refund=Sum('refund_amount', filter=Q(order__source='app'))
+        )
+
+        total_refund = returns_stats['total_refund'] or 0
+        cash_refund = returns_stats['cash_refund'] or 0
+        upi_refund = returns_stats['upi_refund'] or 0
+        pos_refund = returns_stats['pos_refund'] or 0
+        online_refund = returns_stats['online_refund'] or 0
         
         today_stats = orders.filter(created_at__date=today).aggregate(
             today_orders=Count('id'),
             today_revenue=Sum('total_amount', filter=Q(status='delivered'))
         )
         
-        # Top customers
-        top_customers = orders.filter(status='delivered').values(
+        # Top customers (only for identified customers)
+        top_customers = orders.filter(status='delivered', customer__isnull=False).values(
             'customer__first_name', 'customer__id'
         ).annotate(
             order_count=Count('id'),
@@ -592,7 +633,7 @@ def get_order_stats(request):
             recent_orders_data.append({
                 'id': order.id,
                 'order_number': order.order_number,
-                'customer_name': order.customer.first_name,
+                'customer_name': order.customer.first_name if order.customer else (order.guest_name or "Walk-in Customer"),
                 'total_amount': order.total_amount,
                 'status': order.status,
                 'created_at': order.created_at
@@ -617,15 +658,19 @@ def get_order_stats(request):
             'confirmed_orders': stats['confirmed_orders'] or 0,
             'delivered_orders': stats['delivered_orders'] or 0,
             'cancelled_orders': stats['cancelled_orders'] or 0,
-            'total_revenue': stats['total_revenue'] or 0,
+            'total_revenue': float(stats['total_revenue'] or 0) - float(total_refund),
             'today_orders': today_stats['today_orders'] or 0,
-            'today_revenue': today_stats['today_revenue'] or 0,
+            'today_revenue': float(today_stats['today_revenue'] or 0), # Today summary handled as partial elsewhere
             'average_order_value': stats['avg_order_value'] or 0,
             'top_customers': list(top_customers),
             'recent_orders': recent_orders_data,
             'total_products': total_products,
             'average_rating': float(retailer.average_rating),
-            'recent_reviews': recent_reviews_data
+            'recent_reviews': recent_reviews_data,
+            'cash_sales': float(stats['cash_sales'] or 0) - float(cash_refund),
+            'digital_sales': float(stats['digital_sales'] or 0) - float(upi_refund),
+            'pos_sales': float(stats['pos_sales'] or 0) - float(pos_refund),
+            'online_sales': float(stats['online_sales'] or 0) - float(online_refund)
         }
         
         serializer = OrderStatsSerializer(stats_data)

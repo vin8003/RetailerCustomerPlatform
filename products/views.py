@@ -11,6 +11,10 @@ from django.utils import timezone
 import logging
 import json
 from common.error_utils import format_exception
+import pandas as pd
+import os
+from django.conf import settings
+from datetime import datetime
 
 from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -303,9 +307,11 @@ def get_retailer_products(request):
 
         if in_stock is not None:
             if in_stock.lower() == 'true':
-                products = products.filter(quantity__gt=0)
+                # In Stock: (Tracked and Qty > 0) OR (Not Tracked)
+                products = products.filter(Q(track_inventory=False) | Q(quantity__gt=0))
             else:
-                products = products.filter(quantity=0)
+                # Out of Stock: (Tracked and Qty == 0)
+                products = products.filter(track_inventory=True, quantity=0)
                 
         low_stock = request.query_params.get('low_stock')
         if low_stock and low_stock.lower() == 'true':
@@ -899,8 +905,11 @@ def get_retailer_products_public(request, retailer_id):
             except ValueError:
                 pass
 
-        if in_stock and in_stock.lower() == 'true':
-            products = products.filter(quantity__gt=0)
+        if in_stock is not None:
+            if in_stock.lower() == 'true':
+                products = products.filter(Q(track_inventory=False) | Q(quantity__gt=0))
+            else:
+                products = products.filter(track_inventory=True, quantity=0)
 
         # Search functionality
         search = request.query_params.get('search')
@@ -2799,6 +2808,18 @@ class CommitUploadSessionView(APIView):
                         
                         new_prod.save()
                         created_count += 1
+                        
+                        # Create inventory log for new product
+                        if new_prod.quantity > 0:
+                            ProductInventoryLog.objects.create(
+                                product=new_prod,
+                                log_type='added',
+                                quantity_change=new_prod.quantity,
+                                previous_quantity=0,
+                                new_quantity=new_prod.quantity,
+                                reason='Bulk session upload (Created)',
+                                created_by=request.user
+                            )
                     
                     item.is_processed = True
                     item.save()

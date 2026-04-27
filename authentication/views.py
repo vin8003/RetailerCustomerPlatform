@@ -72,16 +72,7 @@ def retailer_signup(request):
                 is_active=False,  # Inactive until profile is completed
             )
 
-            # Create default operating hours (Monday to Sunday, 9 AM to 9 PM)
-            days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
-            for day in days:
-                RetailerOperatingHours.objects.create(
-                    retailer=profile,
-                    day_of_week=day,
-                    is_open=True,
-                    opening_time='09:00',
-                    closing_time='21:00'
-                )
+            # (Removed manual hours creation to test for duplicates)
 
             # Generate JWT tokens
             refresh = RefreshToken.for_user(user)
@@ -103,7 +94,7 @@ def retailer_signup(request):
     except Exception as e:
         logger.error(f"Error in retailer signup: {str(e)}")
         return Response(
-            {'error': 'Internal server error'},
+            {'error': 'An error occurred during retailer registration'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -168,10 +159,12 @@ def customer_signup(request):
         incoming_phone      = data.get('phone_number', '').strip()
         incoming_email      = data.get('email', '').strip()
 
-        # --- Purge stale unverified accounts ---
         # Match on username, phone_number, or email for customer accounts that
-        # have never verified email (is_email_verified=False).
-        stale_qs = User.objects.filter(user_type='customer', is_email_verified=False)
+        # have never verified email (is_email_verified=False) AND are not POS shadow users.
+        stale_qs = User.objects.filter(
+            user_type='customer', 
+            is_email_verified=False
+        ).exclude(registration_status='shadow')
         if incoming_username:
             stale_qs = stale_qs.filter(username=incoming_username)
         elif incoming_phone:
@@ -919,7 +912,7 @@ def reset_password(request):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            if not verify_otp_helper(otp_verification.secret_key, otp_code):
+            if str(otp_verification.otp_code) != str(otp_code):
                 otp_verification.attempts += 1
                 otp_verification.save()
                 return Response(

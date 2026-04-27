@@ -435,7 +435,6 @@ def get_retailer_status(retailer):
     based on their timezone and operating hours.
     """
     import pytz
-    from datetime import datetime
     
     # Get retailer timezone
     tz_name = getattr(retailer, 'timezone', 'Asia/Kolkata')

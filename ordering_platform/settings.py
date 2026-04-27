@@ -56,6 +56,7 @@ INSTALLED_APPS = [
     'offers',
     'common',
     'fcm_django',
+    'returns',
 ]
 
 MIDDLEWARE = [
@@ -104,6 +105,15 @@ DATABASES = {
     }
 
 }
+
+# Testing override: Use SQLite for faster and environment-independent tests
+import sys
+# Production adjustments for PostgreSQL
+if 'postgresql' in DATABASES['default'].get('ENGINE', ''):
+    DATABASES['default'].setdefault('OPTIONS', {})
+    # Render and many production environments require SSL
+    if not DEBUG:
+        DATABASES['default']['OPTIONS']['sslmode'] = 'require'
 
 
 # Custom user model
@@ -313,17 +323,25 @@ if not firebase_admin._apps:
             firebase_admin.initialize_app(options={'projectId': 'ordereasy-win'})
     except Exception as e:
         print(f"Warning: Firebase Admin SDK could not be initialized: {e}")
+if not ('test' in sys.argv or 'pytest' in sys.modules):
+    if not firebase_admin._apps:
+        try:
+            # Check for service account JSON
+            cred_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+            
+            if cred_path and os.path.exists(cred_path):
+                cred = credentials.Certificate(cred_path)
+                firebase_admin.initialize_app(cred)
+            else:
+                # Default initialization (uses GOOGLE_APPLICATION_CREDENTIALS if set)
+                firebase_admin.initialize_app(options={'projectId': 'buyeasy-4003f'})
+        except Exception as e:
+            print(f"Warning: Firebase Admin SDK could not be initialized: {e}")
+else:
+     # Mock or skip during tests
+     pass
 
 
-CSRF_TRUSTED_ORIGINS = [
-    "https://customer.ordereasy.win",
-    "https://retailer.ordereasy.win",
-]
-
-SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
-CONN_MAX_AGE = 600
-
-# oracle bucket configuration
 AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID', '')
 AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY', '')
 
@@ -364,3 +382,38 @@ AWS_S3_CLIENT_CONFIG = Config(
     response_checksum_validation='when_required',
     s3={'addressing_style': 'path'}
 )
+
+if 'test' in sys.argv or 'pytest' in sys.modules:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': ':memory:',
+        }
+    }
+    # Skip migrations for speed and environment independence in tests
+    MIGRATION_MODULES = {app: None for app in INSTALLED_APPS}
+    
+    # Disable cache to avoid state persistence between tests
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.dummy.DummyCache',
+        }
+    }
+    
+    REST_FRAMEWORK = {
+        'DEFAULT_AUTHENTICATION_CLASSES': [
+            'rest_framework_simplejwt.authentication.JWTAuthentication',
+        ],
+        'DEFAULT_PERMISSION_CLASSES': [
+            'rest_framework.permissions.IsAuthenticated',
+        ],
+        'DEFAULT_THROTTLE_CLASSES': [],
+        'DEFAULT_THROTTLE_RATES': {
+            'login': '10000/minute',
+            'otp': '10000/minute',
+            'anon': '10000/minute',
+            'user': '10000/minute',
+        },
+        'DEFAULT_PAGINATION_CLASS': 'common.pagination.StandardResultsSetPagination',
+        'PAGE_SIZE': 20,
+    }

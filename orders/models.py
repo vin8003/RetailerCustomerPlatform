@@ -44,16 +44,25 @@ class Order(models.Model):
         ('failed', 'Failed'),
     ]
     
+    ORDER_SOURCE_CHOICES = [
+        ('app', 'Online App'),
+        ('pos', 'POS (Walk-in)'),
+    ]
+    
     # Order identification
     order_number = models.CharField(max_length=20, unique=True, editable=False)
-    source = models.CharField(max_length=50, default='app')
+    source = models.CharField(max_length=50, choices=ORDER_SOURCE_CHOICES, default='app')
     
     # Relationships
     customer = models.ForeignKey(
         settings.AUTH_USER_MODEL, 
         on_delete=models.CASCADE, 
-        related_name='orders'
+        related_name='orders',
+        null=True,
+        blank=True
     )
+    guest_name = models.CharField(max_length=255, blank=True, null=True)
+    guest_mobile = models.CharField(max_length=15, blank=True, null=True)
     retailer = models.ForeignKey(
         'retailers.RetailerProfile', 
         on_delete=models.CASCADE, 
@@ -143,7 +152,8 @@ class Order(models.Model):
         ordering = ['-created_at']
     
     def __str__(self):
-        return f"Order #{self.order_number} - {self.customer.username}"
+        customer_name = self.customer.username if self.customer else (self.guest_name or "Walk-in")
+        return f"Order #{self.order_number} - {customer_name}"
     
     def save(self, *args, **kwargs):
         """Generate order number if not exists"""
@@ -179,7 +189,7 @@ class Order(models.Model):
         return self.status in ['delivered', 'cancelled', 'returned']
     
     def update_status(self, new_status, user=None):
-        """Update order status with timestamp"""
+        """Update order status with timestamp and handle associated business logic"""
         from django.utils import timezone
         
         old_status = self.status
@@ -193,104 +203,13 @@ class Order(models.Model):
             
             # Award cashback points
             if old_status != 'delivered':
-                from decimal import Decimal
-                from datetime import timedelta
-                from retailers.models import RetailerRewardConfig
-                from customers.models import CustomerLoyalty, LoyaltyTransaction
-                
-                expiry_date = timezone.now() + timedelta(days=90)
-                
-                total_to_award = self.points_earned # From specific offers if any
-                
-                try:
-                    config = RetailerRewardConfig.objects.filter(retailer=self.retailer).first()
-                    if config and config.is_active:
-                        # 0. Calculate Rule-Based Points (Separated from Offers)
-                        if self.subtotal >= config.loyalty_min_order_value:
-                            if config.earning_type == 'percentage':
-                                rule_points = (self.subtotal * config.loyalty_earning_value) / Decimal('100.00')
-                                total_to_award += rule_points
-                            elif config.earning_type == 'points_per_amount' and config.loyalty_earning_value > 0:
-                                rule_points = self.subtotal // config.loyalty_earning_value
-                                total_to_award += Decimal(str(rule_points))
-
-                        # 1. Award Total Points (Rule Points + Offer Points)
-                        if total_to_award > 0:
-                            loyalty, _ = CustomerLoyalty.objects.get_or_create(
-                                customer=self.customer,
-                                retailer=self.retailer
-                            )
-                            loyalty.points += total_to_award
-                            loyalty.save()
-                            
-                            # Create Transaction
-                            LoyaltyTransaction.objects.create(
-                                customer=self.customer,
-                                retailer=self.retailer,
-                                amount=total_to_award,
-                                transaction_type='earn',
-                                description=f"Earned from order #{self.order_number}",
-                                expiry_date=expiry_date
-                            )
-
-                        # 2. Process Referral Reward
-                        if config.is_referral_enabled:
-                            from customers.models import CustomerReferral
-                            referral = CustomerReferral.objects.filter(
-                                retailer=self.retailer,
-                                referee=self.customer,
-                                is_rewarded=False
-                            ).first()
-
-                            if referral and self.total_amount >= config.min_referral_order_amount:
-                                # Reward Referrer
-                                referrer_loyalty, _ = CustomerLoyalty.objects.get_or_create(
-                                    customer=referral.referrer,
-                                    retailer=self.retailer
-                                )
-                                referrer_loyalty.points += config.referral_reward_points
-                                referrer_loyalty.save()
-                                
-                                # Log referer earned transaction
-                                LoyaltyTransaction.objects.create(
-                                    customer=referral.referrer,
-                                    retailer=self.retailer,
-                                    amount=config.referral_reward_points,
-                                    transaction_type='earn',
-                                    description=f"Referral reward (for referee {self.customer.username})",
-                                    expiry_date=expiry_date
-                                )
-
-                                # Reward Referee
-                                referee_loyalty, _ = CustomerLoyalty.objects.get_or_create(
-                                    customer=self.customer,
-                                    retailer=self.retailer
-                                )
-                                referee_loyalty.points += config.referee_reward_points
-                                referee_loyalty.save()
-                                
-                                # Log referee earned transaction
-                                LoyaltyTransaction.objects.create(
-                                    customer=self.customer,
-                                    retailer=self.retailer,
-                                    amount=config.referee_reward_points,
-                                    transaction_type='earn',
-                                    description=f"Referral reward (referred by {referral.referrer.username})",
-                                    expiry_date=expiry_date
-                                )
-
-                                # Mark referral as rewarded
-                                referral.is_rewarded = True
-                                referral.save()
-                        
-                except Exception as e:
-                    print(f"Error awarding points: {e}")
+                self.award_loyalty_points()
                     
         elif new_status == 'cancelled':
             self.cancelled_at = timezone.now()
             
             # Refund points if order used any
-            if old_status != 'cancelled' and self.points_redeemed > 0:
+            if old_status != 'cancelled' and self.points_redeemed > 0 and self.customer:
                 from customers.models import CustomerLoyalty, LoyaltyTransaction
                 try:
                     loyalty, _ = CustomerLoyalty.objects.get_or_create(
@@ -309,10 +228,12 @@ class Order(models.Model):
                         description=f"Refund from cancelled order #{self.order_number}"
                     )
                 except Exception as e:
-                    print(f"Error refunding points: {e}")
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.error(f"Error refunding points: {e}")
                 
             # Revert earned points if accidentally marked delivered then cancelled
-            if self.points_earned > 0:
+            if old_status == 'delivered' and self.points_earned > 0 and self.customer:
                 from customers.models import CustomerLoyalty, LoyaltyTransaction
                 try:
                     loyalty, _ = CustomerLoyalty.objects.get_or_create(
@@ -324,17 +245,18 @@ class Order(models.Model):
                         loyalty.points = 0
                     loyalty.save()
                     
-                    # Revert means we might need a "correction" transaction
                     LoyaltyTransaction.objects.create(
                         customer=self.customer,
                         retailer=self.retailer,
                         amount=self.points_earned,
-                        transaction_type='redeem',
-                        description=f"Reverted earned points (Order #{self.order_number} cancelled)"
+                        transaction_type='redeem', # Negative adjust
+                        description=f"Reverted earned points (Order #{self.order_number} cancelled after delivery)"
                     )
                     self.points_earned = 0
                 except Exception as e:
-                     print(f"Error reverting points: {e}")
+                     import logging
+                     logger = logging.getLogger(__name__)
+                     logger.error(f"Error reverting points: {e}")
         
         self.save()
         
@@ -360,7 +282,7 @@ class Order(models.Model):
             'waiting_for_customer_approval': 'Order modifications require your approval'
         }
         
-        if new_status in status_messages:
+        if new_status in status_messages and self.customer:
             msg = status_messages[new_status]
             CustomerNotification.objects.create(
                 customer=self.customer,
@@ -410,6 +332,115 @@ class Order(models.Model):
                         'status': new_status
                     }
                 )
+        
+        return True
+
+    def award_loyalty_points(self):
+        """Awards loyalty points to the customer linked to this order"""
+        if not self.customer:
+            return False
+
+        from decimal import Decimal
+        from datetime import timedelta
+        from django.utils import timezone
+        from retailers.models import RetailerRewardConfig
+        from customers.models import CustomerLoyalty, LoyaltyTransaction
+
+        expiry_date = timezone.now() + timedelta(days=90)
+        total_to_award = self.points_earned  # From specific offers if any
+
+        try:
+            config = RetailerRewardConfig.objects.filter(retailer=self.retailer).first()
+            if not (config and config.is_active):
+                return False
+
+            # 0. Calculate Rule-Based Points (Separated from Offers)
+            if self.subtotal >= config.loyalty_min_order_value:
+                if config.earning_type == 'percentage':
+                    rule_points = (self.subtotal * config.loyalty_earning_value) / Decimal('100.00')
+                    total_to_award += rule_points
+                elif config.earning_type == 'points_per_amount' and config.loyalty_earning_value > 0:
+                    rule_points = self.subtotal // config.loyalty_earning_value
+                    total_to_award += Decimal(str(rule_points))
+
+            # 1. Award Total Points (Rule Points + Offer Points)
+            if total_to_award > 0:
+                loyalty, _ = CustomerLoyalty.objects.get_or_create(
+                    customer=self.customer,
+                    retailer=self.retailer
+                )
+                loyalty.points += total_to_award
+                loyalty.save()
+                
+                # Update order to reflect actual points earned
+                self.points_earned = total_to_award
+                self.save(update_fields=['points_earned'])
+
+                # Create Transaction
+                LoyaltyTransaction.objects.create(
+                    customer=self.customer,
+                    retailer=self.retailer,
+                    amount=total_to_award,
+                    transaction_type='earn',
+                    description=f"Earned from order #{self.order_number}",
+                    expiry_date=expiry_date
+                )
+
+            # 2. Process Referral Reward
+            if config.is_referral_enabled:
+                from customers.models import CustomerReferral
+                referral = CustomerReferral.objects.filter(
+                    retailer=self.retailer,
+                    referee=self.customer,
+                    is_rewarded=False
+                ).first()
+                
+                if referral and self.total_amount >= config.min_referral_order_amount:
+                    # Reward Referrer
+                    referrer_loyalty, _ = CustomerLoyalty.objects.get_or_create(
+                        customer=referral.referrer,
+                        retailer=self.retailer
+                    )
+                    referrer_loyalty.points += config.referral_reward_points
+                    referrer_loyalty.save()
+                    
+                    # Log referer earned transaction
+                    LoyaltyTransaction.objects.create(
+                        customer=referral.referrer,
+                        retailer=self.retailer,
+                        amount=config.referral_reward_points,
+                        transaction_type='earn',
+                        description=f"Referral reward (for referee {self.customer.username})",
+                        expiry_date=expiry_date
+                    )
+
+                    # Reward Referee
+                    referee_loyalty, _ = CustomerLoyalty.objects.get_or_create(
+                        customer=self.customer,
+                        retailer=self.retailer
+                    )
+                    referee_loyalty.points += config.referee_reward_points
+                    referee_loyalty.save()
+                    
+                    # Log referee earned transaction
+                    LoyaltyTransaction.objects.create(
+                        customer=self.customer,
+                        retailer=self.retailer,
+                        amount=config.referee_reward_points,
+                        transaction_type='earn',
+                        description=f"Referral reward (referred by {referral.referrer.username})",
+                        expiry_date=expiry_date
+                    )
+
+                    # Mark referral as rewarded
+                    referral.is_rewarded = True
+                    referral.save()
+            return True
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error awarding points: {e}")
+            return False
 
 
 class OrderItem(models.Model):
@@ -424,6 +455,12 @@ class OrderItem(models.Model):
     product = models.ForeignKey(
         'products.Product', 
         on_delete=models.CASCADE
+    )
+    batch = models.ForeignKey(
+        'products.ProductBatch',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True
     )
     
     # Product details at time of order
@@ -718,9 +755,10 @@ def update_customer_rating_stats(sender, instance, created, **kwargs):
         )
     
     # 2. Update Average Rating
-    if created or instance.rating > 0: # Even if 0, it counts towards average?
-        # Requirement: "Customer average rating = (0 + 4) / 2 = 2 stars" -> YES, 0 counts.
-        customer_profile = instance.customer.customer_profile
+    if created or instance.rating >= 0: 
+        from customers.models import CustomerProfile
+        # Ensure CustomerProfile exists (especially for shadow users)
+        customer_profile, _ = CustomerProfile.objects.get_or_create(user=instance.customer)
         
         avg_rating = RetailerRating.objects.filter(customer=instance.customer).aggregate(Avg('rating'))['rating__avg'] or 0
         total_count = RetailerRating.objects.filter(customer=instance.customer).count()

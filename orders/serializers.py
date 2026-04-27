@@ -6,6 +6,8 @@ from .models import Order, OrderItem, OrderStatusLog, OrderDelivery, OrderFeedba
 from customers.models import CustomerAddress
 from products.models import Product
 from cart.models import Cart, CartItem
+from returns.models import SalesReturnItem
+from django.db.models import Sum
 
 
 class OrderItemSerializer(serializers.ModelSerializer):
@@ -18,9 +20,19 @@ class OrderItemSerializer(serializers.ModelSerializer):
         model = OrderItem
         fields = [
             'id', 'product', 'product_name', 'product_image', 'product_price', 'product_unit',
-            'quantity', 'unit_price', 'total_price', 'created_at'
+            'quantity', 'unit_price', 'total_price', 'created_at', 'net_quantity', 'returned_quantity'
         ]
         read_only_fields = ['id', 'total_price', 'created_at']
+
+    returned_quantity = serializers.SerializerMethodField()
+    net_quantity = serializers.SerializerMethodField()
+
+    def get_returned_quantity(self, obj):
+        return SalesReturnItem.objects.filter(order_item=obj).aggregate(total=Sum('quantity'))['total'] or 0
+
+    def get_net_quantity(self, obj):
+        returned = self.get_returned_quantity(obj)
+        return max(0, obj.quantity - returned)
 
 
 class OrderListSerializer(serializers.ModelSerializer):
@@ -28,7 +40,7 @@ class OrderListSerializer(serializers.ModelSerializer):
     Serializer for order list view
     """
     retailer_name = serializers.CharField(source='retailer.shop_name', read_only=True)
-    customer_name = serializers.CharField(source='customer.first_name', read_only=True)
+    customer_name = serializers.SerializerMethodField()
     items_count = serializers.SerializerMethodField()
     has_customer_feedback = serializers.SerializerMethodField()
     has_retailer_rating = serializers.SerializerMethodField()
@@ -39,14 +51,56 @@ class OrderListSerializer(serializers.ModelSerializer):
         model = Order
         fields = [
             'id', 'order_number', 'retailer', 'retailer_name', 'customer_name', 'delivery_mode', 'payment_mode',
-            'status', 'total_amount', 'items_count', 'created_at', 'updated_at', 'has_customer_feedback', 'has_retailer_rating', 'feedback',
-            'preparation_time_minutes', 'estimated_ready_time', 'expected_processing_start', 'cancelled_by', 'customer_average_rating'
+            'status', 'total_amount', 'refund_amount', 'net_amount', 'is_returned', 'items_count', 'created_at', 'updated_at', 
+            'has_customer_feedback', 'has_retailer_rating', 'feedback',
+            'preparation_time_minutes', 'estimated_ready_time', 'expected_processing_start', 'cancelled_by', 'customer_average_rating', 'source'
         ]
+
+    refund_amount = serializers.SerializerMethodField()
+    net_amount = serializers.SerializerMethodField()
+    is_returned = serializers.SerializerMethodField()
+
+    def get_refund_amount(self, obj):
+        return obj.returns.aggregate(total=Sum('refund_amount'))['total'] or Decimal('0.00')
+
+    def get_net_amount(self, obj):
+        refund = self.get_refund_amount(obj)
+        return obj.total_amount - refund
+
+    def get_is_returned(self, obj):
+        return obj.returns.exists()
     
     def get_items_count(self, obj):
         """Get number of items in order"""
         # Fallback for when serializer used without annotation
         return getattr(obj, 'items_count_annotated', obj.items.count())
+
+    def get_customer_name(self, obj):
+        """Get unified customer name based on priority"""
+        from retailers.models import RetailerCustomerMapping
+        
+        # 1. Try mapping nickname
+        if obj.customer and obj.retailer:
+            mapping = RetailerCustomerMapping.objects.filter(
+                retailer=obj.retailer,
+                customer=obj.customer
+            ).first()
+            if mapping and mapping.nickname:
+                return mapping.nickname
+
+        # 2. Try customer first name
+        if obj.customer and obj.customer.first_name:
+            return obj.customer.first_name
+
+        # 3. Try guest name (POS legacy or provided name)
+        if obj.guest_name:
+            return obj.guest_name
+
+        # 4. Fallback
+        if obj.customer:
+            return obj.customer.username
+            
+        return "Walk-in"
 
     def get_has_customer_feedback(self, obj):
         """Check if order has customer feedback safely"""
@@ -100,7 +154,10 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     retailer_address = serializers.CharField(source='retailer.full_address', read_only=True)
     retailer_upi_id = serializers.CharField(source='retailer.upi_id', read_only=True)
     retailer_upi_qr_code = serializers.ImageField(source='retailer.upi_qr_code', read_only=True)
-    customer_name = serializers.CharField(source='customer.first_name', read_only=True)
+    retailer_gst_number = serializers.CharField(source='retailer.gst_number', read_only=True)
+    retailer_receipt_footer = serializers.CharField(source='retailer.receipt_footer', read_only=True)
+    retailer_show_gst = serializers.BooleanField(source='retailer.show_gst_on_receipt', read_only=True)
+    customer_name = serializers.SerializerMethodField()
     customer_phone = serializers.CharField(source='customer.phone_number', read_only=True)
     customer_email = serializers.CharField(source='customer.email', read_only=True)
     delivery_address_text = serializers.CharField(source='delivery_address.full_address', read_only=True)
@@ -111,26 +168,59 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     has_retailer_rating = serializers.SerializerMethodField()
     feedback = serializers.SerializerMethodField()
     customer_average_rating = serializers.FloatField(source='customer.customer_profile.average_rating', read_only=True)
+    retailer_delivery_charge = serializers.DecimalField(source='retailer.delivery_charge', max_digits=10, decimal_places=2, read_only=True)
+    retailer_free_delivery_threshold = serializers.DecimalField(source='retailer.free_delivery_threshold', max_digits=10, decimal_places=2, read_only=True)
     
     applied_offers = serializers.SerializerMethodField()
+    sales_returns = serializers.SerializerMethodField()
+    refund_amount = serializers.SerializerMethodField()
+    net_amount = serializers.SerializerMethodField()
     
     class Meta:
         model = Order
         fields = [
-            'id', 'order_number', 'customer_name', 'customer_phone', 'customer_email',
+            'id', 'order_number', 'customer', 'customer_name', 'customer_phone', 'customer_email',
             'retailer', 'retailer_name', 'retailer_phone',
             'retailer_address', 'retailer_upi_id', 'retailer_upi_qr_code', 'delivery_mode', 'payment_mode', 'status',
-            'subtotal', 'delivery_fee', 'discount_amount', 'discount_from_points', 'points_redeemed', 'points_earned', 'total_amount',
+            'subtotal', 'delivery_fee', 'discount_amount', 'discount_from_points', 'points_redeemed', 'points_earned', 'total_amount', 'refund_amount', 'net_amount',
             'special_instructions', 'cancellation_reason', 'cancelled_by', 
             'payment_reference_id', 'payment_status', 'payment_edit_count', 'is_payment_locked',
-            'delivery_address_text',
+            'delivery_address_text', 'retailer_gst_number', 'retailer_receipt_footer', 'retailer_show_gst',
             'delivery_latitude', 'delivery_longitude',
-            'items', 'applied_offers', 'created_at', 'updated_at', 'confirmed_at', 'delivered_at',
+            'items', 'sales_returns', 'applied_offers', 'created_at', 'updated_at', 'confirmed_at', 'delivered_at',
             'cancelled_at', 'unread_messages_count',
             'has_customer_feedback', 'has_retailer_rating', 'feedback',
-            'preparation_time_minutes', 'estimated_ready_time', 'expected_processing_start', 'customer_average_rating'
+            'preparation_time_minutes', 'estimated_ready_time', 'expected_processing_start', 'customer_average_rating', 'source',
+            'retailer_delivery_charge', 'retailer_free_delivery_threshold'
         ]
     
+    def get_customer_name(self, obj):
+        """Get unified customer name based on priority"""
+        from retailers.models import RetailerCustomerMapping
+        
+        # 1. Try mapping nickname
+        if obj.customer and obj.retailer:
+            mapping = RetailerCustomerMapping.objects.filter(
+                retailer=obj.retailer,
+                customer=obj.customer
+            ).first()
+            if mapping and mapping.nickname:
+                return mapping.nickname
+
+        # 2. Try customer first name
+        if obj.customer and obj.customer.first_name:
+            return obj.customer.first_name
+
+        # 3. Try guest name (POS legacy or provided name)
+        if obj.guest_name:
+            return obj.guest_name
+
+        # 4. Fallback
+        if obj.customer:
+            return obj.customer.username
+            
+        return "Walk-in"
+
     def get_applied_offers(self, obj):
         # Return list of applied offers with details
         offers = []
@@ -164,6 +254,17 @@ class OrderDetailSerializer(serializers.ModelSerializer):
 
     def get_has_retailer_rating(self, obj):
         return hasattr(obj, 'retailer_rating')
+
+    def get_sales_returns(self, obj):
+        from returns.serializers import SalesReturnSerializer
+        return SalesReturnSerializer(obj.returns.all(), many=True).data
+
+    def get_refund_amount(self, obj):
+        return obj.returns.aggregate(total=Sum('refund_amount'))['total'] or Decimal('0.00')
+
+    def get_net_amount(self, obj):
+        refund = self.get_refund_amount(obj)
+        return obj.total_amount - refund
 
 
 class OrderCreateSerializer(serializers.Serializer):
@@ -653,6 +754,12 @@ class OrderStatsSerializer(serializers.Serializer):
     total_products = serializers.IntegerField(required=False)
     average_rating = serializers.FloatField(required=False)
     recent_reviews = serializers.ListField(required=False)
+    
+    # New breakdown fields
+    cash_sales = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
+    digital_sales = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
+    pos_sales = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
+    online_sales = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
 
 
 class OrderModificationSerializer(serializers.Serializer):
@@ -774,15 +881,23 @@ class OrderModificationSerializer(serializers.Serializer):
             # Update delivery mode
             if delivery_mode:
                 instance.delivery_mode = delivery_mode
-                # Recalculate delivery fee logic if needed (e.g. 50 for delivery, 0 for pickup)
-                if delivery_mode == 'delivery':
-                     instance.delivery_fee = 50 # Fixed for now as per OrderCreate
-                     if not instance.delivery_address:
-                         # Requires address? If switching to delivery without address, this might be issue.
-                         # Assuming address exists or validation handled.
-                         pass
+            
+            # Always recalculate delivery fee based on current delivery_mode and retailer settings
+            # This ensures correct fee whether mode changed or items changed
+            retailer = instance.retailer
+            current_subtotal = Decimal(sum(item.total_price for item in instance.items.all())).quantize(Decimal('0.01'))
+            
+            if instance.delivery_mode == 'delivery':
+                if retailer.delivery_charge > 0:
+                    # Check free delivery threshold
+                    if retailer.free_delivery_threshold > 0 and current_subtotal >= retailer.free_delivery_threshold:
+                        instance.delivery_fee = Decimal('0.00')
+                    else:
+                        instance.delivery_fee = retailer.delivery_charge
                 else:
-                    instance.delivery_fee = 0
+                    instance.delivery_fee = Decimal('0.00')
+            else:
+                instance.delivery_fee = Decimal('0.00')
             
             # Update discount
             if discount_amount is not None:

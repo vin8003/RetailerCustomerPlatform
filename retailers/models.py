@@ -1,3 +1,4 @@
+from decimal import Decimal
 from django.db import models
 from django.conf import settings
 from django.core.validators import RegexValidator
@@ -73,6 +74,8 @@ class RetailerProfile(models.Model):
     
     # Store Configuration
     timezone = models.CharField(max_length=50, default='Asia/Kolkata')
+    receipt_footer = models.TextField(blank=True, help_text="Custom message at the bottom of thermal receipts")
+    show_gst_on_receipt = models.BooleanField(default=True)
     
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
@@ -310,3 +313,85 @@ class RetailerBlacklist(models.Model):
     
     def __str__(self):
         return f"{self.customer.username} blacklisted by {self.retailer.shop_name}"
+
+
+class Supplier(models.Model):
+    """
+    Distributor/Wholesaler for purchasing goods
+    """
+    retailer = models.ForeignKey(
+        RetailerProfile, 
+        on_delete=models.CASCADE, 
+        related_name='suppliers'
+    )
+    company_name = models.CharField(max_length=255)
+    contact_person = models.CharField(max_length=255, blank=True)
+    phone_number = models.CharField(max_length=20, blank=True)
+    gst_number = models.CharField(max_length=15, blank=True)
+    address = models.TextField(blank=True)
+    balance_due = models.DecimalField(max_digits=12, decimal_places=2, default=0.0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'supplier'
+        indexes = [
+            models.Index(fields=['retailer', 'company_name']),
+        ]
+
+    def __str__(self):
+        return f"{self.company_name} ({self.retailer.shop_name})"
+
+
+class RetailerCustomerMapping(models.Model):
+    """
+    Manages the relationship between a retailer and their customers (CRM).
+    Supports both Shadow (Walk-in) and Registered (App) customers.
+    """
+    CUSTOMER_TYPE_CHOICES = [
+        ('walk_in', 'Walk-in'),
+        ('online', 'Online'),
+        ('hybrid', 'Hybrid'),
+    ]
+
+    retailer = models.ForeignKey(
+        RetailerProfile, 
+        on_delete=models.CASCADE, 
+        related_name='customer_mappings'
+    )
+    customer = models.ForeignKey(
+        settings.AUTH_USER_MODEL, 
+        on_delete=models.CASCADE, 
+        related_name='retailer_mappings'
+    )
+    
+    # Custom retailer-controlled metadata
+    nickname = models.CharField(max_length=255, blank=True, null=True, help_text="Retailer's own name for the customer")
+    notes = models.TextField(blank=True, null=True)
+    tags = models.CharField(max_length=255, blank=True, null=True, help_text="Comma separated tags e.g. VIP, Credit, Regular")
+    
+    customer_type = models.CharField(
+        max_length=20, 
+        choices=CUSTOMER_TYPE_CHOICES, 
+        default='walk_in'
+    )
+    
+    # Stats
+    total_orders = models.PositiveIntegerField(default=0)
+    total_spent = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    last_order_date = models.DateTimeField(null=True, blank=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'retailer_customer_mapping'
+        unique_together = ['retailer', 'customer']
+        indexes = [
+            models.Index(fields=['retailer', 'customer']),
+            models.Index(fields=['customer_type']),
+        ]
+
+    def __str__(self):
+        return f"{self.retailer.shop_name} - {self.customer.username} ({self.nickname or ''})"
