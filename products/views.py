@@ -259,56 +259,7 @@ def get_retailer_products(request):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        # Fast path for POS (all products, no pagination, lightweight serialization)
-        if request.query_params.get('no_page') == 'true':
-            pos_products = Product.objects.filter(
-                retailer=retailer,
-                is_active=True
-            ).select_related('category').prefetch_related('batches')
-            
-            data = []
-            for p in pos_products:
-                batches = []
-                if p.has_batches:
-                    for b in p.batches.all():
-                        if b.is_active:
-                            batches.append({
-                                'id': b.id,
-                                'batch_number': b.batch_number,
-                                'barcode': b.barcode,
-                                'price': b.price,
-                                'original_price': b.original_price,
-                                'quantity': b.quantity
-                            })
-                
-                img_url = None
-                try:
-                    img_url = p.image.url if p.image else p.image_url
-                except Exception:
-                    img_url = p.image_url
-
-                data.append({
-                    'id': p.id,
-                    'name': p.name,
-                    'price': p.price,
-                    'discounted_price': p.discounted_price or p.price,
-                    'original_price': p.original_price,
-                    'quantity': p.quantity,
-                    'track_inventory': p.track_inventory,
-                    'image': img_url,
-                    'category_name': p.category.name if p.category else 'Uncategorized',
-                    'barcode': p.barcode,
-                    'has_batches': p.has_batches,
-                    'batches': batches
-                })
-            return Response(data, status=status.HTTP_200_OK)
-
-        products = Product.objects.select_related(
-            'retailer', 'category', 'brand', 'master_product'
-        ).annotate(
-            average_rating_annotated=Avg('reviews__rating'),
-            review_count_annotated=Count('reviews')
-        ).filter(retailer=retailer).order_by('-created_at')
+        products = Product.objects.filter(retailer=retailer).order_by('-created_at')
 
         # Apply filters
         category = request.query_params.get('category')
@@ -365,6 +316,55 @@ def get_retailer_products(request):
         search = request.query_params.get('search')
         if search:
             products = smart_product_search(products, search)
+
+        # Fast path for POS / Bulk Select All (all products, no pagination, lightweight serialization)
+        if request.query_params.get('no_page') == 'true':
+            pos_products = products.select_related('category').prefetch_related('batches')
+            
+            data = []
+            for p in pos_products:
+                batches = []
+                if p.has_batches:
+                    for b in p.batches.all():
+                        if b.is_active:
+                            batches.append({
+                                'id': b.id,
+                                'batch_number': b.batch_number,
+                                'barcode': b.barcode,
+                                'price': b.price,
+                                'original_price': b.original_price,
+                                'quantity': b.quantity
+                            })
+                
+                img_url = None
+                try:
+                    img_url = p.image.url if p.image else p.image_url
+                except Exception:
+                    img_url = p.image_url
+
+                data.append({
+                    'id': p.id,
+                    'name': p.name,
+                    'price': p.price,
+                    'discounted_price': p.discounted_price or p.price,
+                    'original_price': p.original_price,
+                    'quantity': p.quantity,
+                    'track_inventory': p.track_inventory,
+                    'image': img_url,
+                    'category_name': p.category.name if p.category else 'Uncategorized',
+                    'barcode': p.barcode,
+                    'has_batches': p.has_batches,
+                    'batches': batches
+                })
+            return Response(data, status=status.HTTP_200_OK)
+
+        # Apply expensive annotations for normal paginated path
+        products = products.select_related(
+            'retailer', 'category', 'brand', 'master_product'
+        ).annotate(
+            average_rating_annotated=Avg('reviews__rating'),
+            review_count_annotated=Count('reviews')
+        )
 
         # Pre-fetch active offers for N+1 optimization in serializer
         from offers.models import Offer
