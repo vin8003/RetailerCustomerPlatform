@@ -130,10 +130,10 @@ class Order(models.Model):
     )
     
     # Payment Breakdown (for Split/POS)
-    cash_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
-    upi_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
-    card_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
-    credit_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
+    cash_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), null=True, blank=True)
+    upi_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), null=True, blank=True)
+    card_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), null=True, blank=True)
+    credit_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), null=True, blank=True)
     
     # Additional info
     special_instructions = models.TextField(blank=True)
