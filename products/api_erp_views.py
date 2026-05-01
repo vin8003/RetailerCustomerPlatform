@@ -182,12 +182,18 @@ def create_pos_order(request):
             rounded_discount = raw_discount.quantize(Decimal('1'), rounding='ROUND_HALF_UP')
             rounded_total = raw_total.quantize(Decimal('1'), rounding='ROUND_HALF_UP')
 
-            # Payment Breakdown Logic
+            # Payment Breakdown Logic (Initialized to 0 to avoid NULL constraints)
+            cash_amount = Decimal('0')
+            upi_amount = Decimal('0')
+            card_amount = Decimal('0')
+            credit_amount = Decimal('0')
+            
             payment_details = data.get('payment_details', {})
-            cash_amount = Decimal(str(payment_details.get('cash', 0)))
-            upi_amount = Decimal(str(payment_details.get('upi', 0)))
-            card_amount = Decimal(str(payment_details.get('card', 0)))
-            credit_amount = Decimal(str(payment_details.get('credit', 0)))
+            if payment_details and isinstance(payment_details, dict):
+                cash_amount = Decimal(str(payment_details.get('cash', 0) or 0))
+                upi_amount = Decimal(str(payment_details.get('upi', 0) or 0))
+                card_amount = Decimal(str(payment_details.get('card', 0) or 0))
+                credit_amount = Decimal(str(payment_details.get('credit', 0) or 0))
             
             # If no payment_details provided, fallback to legacy payment_mode
             if not payment_details:
