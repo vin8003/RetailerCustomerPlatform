@@ -469,7 +469,11 @@ class OrderItem(models.Model):
     product_unit = models.CharField(max_length=20)
     
     # Order item details
-    quantity = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+    quantity = models.DecimalField(
+        max_digits=12, 
+        decimal_places=3, 
+        validators=[MinValueValidator(Decimal('0.001'))]
+    )
     unit_price = models.DecimalField(max_digits=10, decimal_places=2)
     total_price = models.DecimalField(max_digits=10, decimal_places=2)
     

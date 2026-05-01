@@ -178,7 +178,7 @@ class ProductBatch(models.Model):
     )
     
     # Inventory
-    quantity = models.IntegerField(default=0)
+    quantity = models.DecimalField(max_digits=12, decimal_places=3, default=0)
     is_active = models.BooleanField(default=True)
     show_on_app = models.BooleanField(default=True)
     additional_barcodes = models.JSONField(default=list, blank=True)
@@ -279,11 +279,11 @@ class Product(models.Model):
     )
     
     # Inventory
-    quantity = models.IntegerField(default=0)
+    quantity = models.DecimalField(max_digits=12, decimal_places=3, default=0)
     track_inventory = models.BooleanField(default=True)
     unit = models.CharField(max_length=20, choices=UNIT_CHOICES, default='piece')
-    minimum_order_quantity = models.PositiveIntegerField(default=1)
-    maximum_order_quantity = models.PositiveIntegerField(null=True, blank=True)
+    minimum_order_quantity = models.DecimalField(max_digits=12, decimal_places=3, default=1)
+    maximum_order_quantity = models.DecimalField(max_digits=12, decimal_places=3, null=True, blank=True)
     
     # Product details
     image = models.ImageField(upload_to=generate_upload_path, blank=True, null=True)
@@ -582,9 +582,9 @@ class ProductInventoryLog(models.Model):
         related_name='inventory_logs'
     )
     log_type = models.CharField(max_length=20, choices=LOG_TYPES)
-    quantity_change = models.IntegerField()
-    previous_quantity = models.IntegerField()
-    new_quantity = models.IntegerField()
+    quantity_change = models.DecimalField(max_digits=12, decimal_places=3)
+    previous_quantity = models.DecimalField(max_digits=12, decimal_places=3)
+    new_quantity = models.DecimalField(max_digits=12, decimal_places=3)
     reason = models.TextField(blank=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, 

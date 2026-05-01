@@ -225,7 +225,7 @@ def create_pos_order(request):
                 if batch_id:
                     batch = ProductBatch.objects.select_for_update().get(id=batch_id, product=product)
                 
-                qty = int(item['quantity'])
+                qty = Decimal(str(item['quantity']))
                 unit_price = Decimal(str(item['unit_price']))
                 
                 # Price validation: ensure frontend price matches actual price
