@@ -382,8 +382,41 @@ class RetailerCustomerMapping(models.Model):
     total_spent = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     last_order_date = models.DateTimeField(null=True, blank=True)
     
+    # Credit Management
+    credit_limit = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    current_balance = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'), help_text="Outstanding amount the customer owes to this retailer")
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    def record_transaction(self, transaction_type, amount, order=None, payment_mode=None, notes=None):
+        """
+        Record a transaction in the ledger and update current balance atomically.
+        transaction_type: 'SALE', 'PAYMENT', 'RETURN', 'ADJUSTMENT'
+        amount: positive decimal
+        """
+        from django.db import transaction
+        with transaction.atomic():
+            # Refresh to get latest balance and lock the row
+            mapping = RetailerCustomerMapping.objects.select_for_update().get(pk=self.pk)
+            
+            if transaction_type in ['SALE', 'ADJUSTMENT']:
+                mapping.current_balance += amount
+            elif transaction_type in ['PAYMENT', 'RETURN']:
+                mapping.current_balance -= amount
+            
+            mapping.save(update_fields=['current_balance', 'updated_at'])
+            self.current_balance = mapping.current_balance # Update local instance
+            
+            return CustomerLedger.objects.create(
+                mapping=mapping,
+                transaction_type=transaction_type,
+                amount=amount,
+                balance_after=mapping.current_balance,
+                order=order,
+                payment_mode=payment_mode,
+                notes=notes
+            )
 
     class Meta:
         db_table = 'retailer_customer_mapping'
@@ -395,3 +428,49 @@ class RetailerCustomerMapping(models.Model):
 
     def __str__(self):
         return f"{self.retailer.shop_name} - {self.customer.username} ({self.nickname or ''})"
+
+
+class CustomerLedger(models.Model):
+    """
+    Detailed ledger for customer credit transactions (Khata)
+    """
+    TRANSACTION_TYPES = [
+        ('SALE', 'Credit Sale'),
+        ('PAYMENT', 'Payment Received'),
+        ('RETURN', 'Sales Return Credit'),
+        ('ADJUSTMENT', 'Balance Adjustment'),
+    ]
+
+    mapping = models.ForeignKey(
+        RetailerCustomerMapping, 
+        on_delete=models.CASCADE, 
+        related_name='ledger_entries'
+    )
+    transaction_type = models.CharField(max_length=20, choices=TRANSACTION_TYPES)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    balance_after = models.DecimalField(max_digits=12, decimal_places=2)
+    
+    # Optional link to order
+    order = models.ForeignKey(
+        'orders.Order', 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True,
+        related_name='ledger_entries'
+    )
+    
+    payment_mode = models.CharField(max_length=50, blank=True, null=True) # e.g. cash, upi
+    notes = models.TextField(blank=True, null=True)
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'customer_ledger'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['mapping', 'created_at']),
+            models.Index(fields=['transaction_type']),
+        ]
+
+    def __str__(self):
+        return f"{self.mapping.customer.username} - {self.transaction_type} - {self.amount}"

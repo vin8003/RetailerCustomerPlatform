@@ -178,9 +178,10 @@ class ProductBatch(models.Model):
     )
     
     # Inventory
-    quantity = models.IntegerField(default=0)
+    quantity = models.DecimalField(max_digits=12, decimal_places=3, default=0)
     is_active = models.BooleanField(default=True)
     show_on_app = models.BooleanField(default=True)
+    additional_barcodes = models.JSONField(default=list, blank=True)
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -248,6 +249,7 @@ class Product(models.Model):
         related_name='retailer_products'
     )
     barcode = models.CharField(max_length=50, blank=True, null=True, db_index=True)
+    additional_barcodes = models.JSONField(default=list, blank=True)
     
     # Pricing
     purchase_price = models.DecimalField(
@@ -277,11 +279,11 @@ class Product(models.Model):
     )
     
     # Inventory
-    quantity = models.IntegerField(default=0)
+    quantity = models.DecimalField(max_digits=12, decimal_places=3, default=0)
     track_inventory = models.BooleanField(default=True)
     unit = models.CharField(max_length=20, choices=UNIT_CHOICES, default='piece')
-    minimum_order_quantity = models.PositiveIntegerField(default=1)
-    maximum_order_quantity = models.PositiveIntegerField(null=True, blank=True)
+    minimum_order_quantity = models.DecimalField(max_digits=12, decimal_places=3, default=1)
+    maximum_order_quantity = models.DecimalField(max_digits=12, decimal_places=3, null=True, blank=True)
     
     # Product details
     image = models.ImageField(upload_to=generate_upload_path, blank=True, null=True)
@@ -338,18 +340,35 @@ class Product(models.Model):
         super().save(*args, **kwargs)
 
     def sync_inventory_from_batches(self):
-        """Update product quantity from sum of active batches"""
+        """Update product quantity from sum of active batches (concurrency-safe)"""
         if self.has_batches:
-            active_batches = self.batches.filter(is_active=True)
-            self.quantity = active_batches.aggregate(total=models.Sum('quantity'))['total'] or 0
-            
-            # Also sync lowest selling price and its MRP for App visibility
-            best_batch = active_batches.filter(quantity__gt=0, show_on_app=True).order_by('price', '-original_price').first()
-            if best_batch:
-                self.price = best_batch.price
-                self.original_price = best_batch.original_price
-            
-            self.save(update_fields=['quantity', 'price', 'original_price', 'discount_percentage'])
+            from django.db import transaction
+            with transaction.atomic():
+                # Lock the product row to prevent concurrent updates from overwriting
+                locked_self = Product.objects.select_for_update().get(pk=self.pk)
+                
+                active_batches = locked_self.batches.filter(is_active=True)
+                locked_self.quantity = active_batches.aggregate(total=models.Sum('quantity'))['total'] or 0
+                
+                # Sync lowest selling price and its MRP for App visibility
+                best_batch = active_batches.filter(quantity__gt=0, show_on_app=True).order_by('price', '-original_price').first()
+                if best_batch:
+                    locked_self.price = best_batch.price
+                    locked_self.original_price = best_batch.original_price
+                else:
+                    # Fallback: all batches out of stock, use latest active batch price
+                    # so App pricing stays up-to-date rather than freezing forever
+                    latest_batch = active_batches.order_by('-created_at').first()
+                    if latest_batch:
+                        locked_self.price = latest_batch.price
+                        locked_self.original_price = latest_batch.original_price
+                
+                locked_self.save(update_fields=['quantity', 'price', 'original_price', 'discount_percentage'])
+                
+                # Refresh self from the locked row
+                self.quantity = locked_self.quantity
+                self.price = locked_self.price
+                self.original_price = locked_self.original_price
     
     @property
     def is_in_stock(self):
@@ -563,9 +582,9 @@ class ProductInventoryLog(models.Model):
         related_name='inventory_logs'
     )
     log_type = models.CharField(max_length=20, choices=LOG_TYPES)
-    quantity_change = models.IntegerField()
-    previous_quantity = models.IntegerField()
-    new_quantity = models.IntegerField()
+    quantity_change = models.DecimalField(max_digits=12, decimal_places=3)
+    previous_quantity = models.DecimalField(max_digits=12, decimal_places=3)
+    new_quantity = models.DecimalField(max_digits=12, decimal_places=3)
     reason = models.TextField(blank=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, 

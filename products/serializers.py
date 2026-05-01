@@ -544,7 +544,9 @@ class ProductCreateSerializer(serializers.ModelSerializer):
             if data['original_price'] < data['price']:
                 raise serializers.ValidationError("Original price cannot be less than current price")
         
-        if data.get('track_inventory', True) and data.get('minimum_order_quantity', 1) > data.get('quantity', 0):
+        quantity = data.get('quantity', 0)
+        min_order_qty = data.get('minimum_order_quantity', 1)
+        if data.get('track_inventory', True) and quantity > 0 and min_order_qty > quantity:
             raise serializers.ValidationError("Minimum order quantity cannot be greater than available quantity")
         
         if data.get('maximum_order_quantity') and data.get('minimum_order_quantity'):
@@ -709,7 +711,7 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
             min_quantity = data.get('minimum_order_quantity', self.instance.minimum_order_quantity)
             
             track_inv = data.get('track_inventory', self.instance.track_inventory)
-            if track_inv and min_quantity > current_quantity:
+            if track_inv and current_quantity > 0 and min_quantity > current_quantity:
                 raise serializers.ValidationError("Minimum order quantity cannot be greater than available quantity")
         
         max_quantity = data.get('maximum_order_quantity', self.instance.maximum_order_quantity)
