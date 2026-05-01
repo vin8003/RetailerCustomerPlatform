@@ -3,7 +3,7 @@ from rest_framework import status, permissions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
-from django.db.models import Q, Sum, Count, Avg
+from django.db.models import Q, Sum, Count, Avg, F
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.http import Http404
@@ -574,13 +574,14 @@ def get_order_stats(request):
             total_revenue=Sum('total_amount', filter=Q(status='delivered')),
             avg_order_value=Avg('total_amount', filter=Q(status='delivered')),
             
-            # Payment Breakdown (respecting current filters)
-            cash_sales=Sum('total_amount', filter=Q(status='delivered') & (Q(payment_mode='cash') | Q(payment_mode='cash_pickup'))),
-            digital_sales=Sum('total_amount', filter=Q(status='delivered') & (Q(payment_mode='upi') | Q(payment_mode='online') | Q(payment_mode='card'))),
+            # Accurate Payment Breakdown (respecting current filters)
+            cash_sales=Sum('cash_amount', filter=Q(status='delivered')),
+            digital_sales=Sum(F('upi_amount') + F('card_amount'), filter=Q(status='delivered')),
+            credit_sales=Sum('credit_amount', filter=Q(status='delivered')),
             
             # Channel Performance (respecting current filters)
             pos_sales=Sum('total_amount', filter=Q(status='delivered') & Q(source='pos')),
-            online_sales=Sum('total_amount', filter=Q(status='delivered') & Q(source='app') | Q(source__isnull=True))
+            online_sales=Sum('total_amount', filter=Q(status='delivered') & (Q(source='app') | Q(source__isnull=True)))
         )
         
         # Aggregate Returns for correctly calculating NET revenue
@@ -669,6 +670,7 @@ def get_order_stats(request):
             'recent_reviews': recent_reviews_data,
             'cash_sales': float(stats['cash_sales'] or 0) - float(cash_refund),
             'digital_sales': float(stats['digital_sales'] or 0) - float(upi_refund),
+            'credit_sales': float(stats['credit_sales'] or 0),
             'pos_sales': float(stats['pos_sales'] or 0) - float(pos_refund),
             'online_sales': float(stats['online_sales'] or 0) - float(online_refund)
         }

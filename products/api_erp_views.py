@@ -182,6 +182,49 @@ def create_pos_order(request):
             rounded_discount = raw_discount.quantize(Decimal('1'), rounding='ROUND_HALF_UP')
             rounded_total = raw_total.quantize(Decimal('1'), rounding='ROUND_HALF_UP')
 
+            # Payment Breakdown Logic
+            payment_details = data.get('payment_details', {})
+            cash_amount = Decimal(str(payment_details.get('cash', 0)))
+            upi_amount = Decimal(str(payment_details.get('upi', 0)))
+            card_amount = Decimal(str(payment_details.get('card', 0)))
+            credit_amount = Decimal(str(payment_details.get('credit', 0)))
+            
+            # If no payment_details provided, fallback to legacy payment_mode
+            if not payment_details:
+                legacy_mode = data.get('payment_mode', 'cash')
+                if legacy_mode == 'cash':
+                    cash_amount = rounded_total
+                elif legacy_mode == 'upi':
+                    upi_amount = rounded_total
+                elif legacy_mode == 'card':
+                    card_amount = rounded_total
+                elif legacy_mode == 'credit':
+                    credit_amount = rounded_total
+
+            # Verify total matches
+            sum_payments = cash_amount + upi_amount + card_amount + credit_amount
+            if abs(sum_payments - rounded_total) > Decimal('0.01'):
+                 # If it doesn't match perfectly, adjust cash if it's a small rounding diff, or error out
+                 if abs(sum_payments - rounded_total) <= Decimal('1.00') and not payment_details:
+                     # Auto-adjust for legacy
+                     cash_amount = rounded_total
+                 else:
+                     raise ValueError(f"Total payment {sum_payments} does not match order total {rounded_total}")
+
+            # Determine payment mode label
+            payment_mode = data.get('payment_mode', 'cash')
+            modes_count = sum(1 for v in [cash_amount, upi_amount, card_amount, credit_amount] if v > 0)
+            if modes_count > 1:
+                payment_mode = 'split'
+            elif credit_amount > 0:
+                payment_mode = 'credit'
+            elif upi_amount > 0:
+                payment_mode = 'upi'
+            elif card_amount > 0:
+                payment_mode = 'card'
+            else:
+                payment_mode = 'cash'
+
             order = Order.objects.create(
                 customer=order_customer,
                 guest_name=customer_name if not order_customer else None,
@@ -189,13 +232,17 @@ def create_pos_order(request):
                 retailer=retailer,
                 source='pos',
                 delivery_mode='pickup',
-                payment_mode=data.get('payment_mode', 'cash'),
+                payment_mode=payment_mode,
                 status='delivered',
                 subtotal=rounded_subtotal,
                 delivery_fee=0,
                 discount_amount=rounded_discount,
                 total_amount=rounded_total,
-                payment_status='verified' if data.get('payment_mode') == 'cash' else 'pending_verification',
+                cash_amount=cash_amount,
+                upi_amount=upi_amount,
+                card_amount=card_amount,
+                credit_amount=credit_amount,
+                payment_status='verified' if payment_mode in ['cash', 'split'] else 'pending_verification',
                 confirmed_at=timezone.now(),
                 delivered_at=timezone.now()
             )
@@ -203,7 +250,7 @@ def create_pos_order(request):
             # Award Loyalty Points
             order.award_loyalty_points()
 
-            # CRM Mapping Update
+            # CRM Mapping and Credit Ledger Update
             if order_customer:
                 mapping, created = RetailerCustomerMapping.objects.get_or_create(
                     retailer=retailer,
@@ -215,7 +262,17 @@ def create_pos_order(request):
                 mapping.total_orders += 1
                 mapping.total_spent += rounded_total
                 mapping.last_order_date = timezone.now()
-                mapping.save()
+                
+                # Record Credit Transaction if any
+                if credit_amount > 0:
+                    mapping.record_transaction(
+                        transaction_type='SALE',
+                        amount=credit_amount,
+                        order=order,
+                        notes=f"POS Udhaar for Order #{order.order_number}"
+                    )
+                else:
+                    mapping.save()
 
             # Create Order Items and Reduce Inventory
             for item in items_data:
@@ -454,9 +511,10 @@ def get_daily_sales_summary(request):
         total_sales=Sum('total_amount'),
         order_count=Count('id'),
         
-        # Cash vs Digital
-        cash_sales=Sum('total_amount', filter=Q(payment_mode='cash') | Q(payment_mode='cash_pickup')),
-        digital_sales=Sum('total_amount', filter=Q(payment_mode='upi') | Q(payment_mode='online') | Q(payment_mode='card')),
+        # Accurate Breakdown from Order fields
+        cash_sales=Sum('cash_amount'),
+        digital_sales=Sum(F('upi_amount') + F('card_amount')),
+        credit_sales=Sum('credit_amount'),
         
         # Source (POS vs Online)
         pos_sales=Sum('total_amount', filter=Q(source='pos')),
@@ -490,6 +548,7 @@ def get_daily_sales_summary(request):
         'order_count': summary['order_count'] or 0,
         'cash_sales': cash_sales,
         'digital_sales': digital_sales,
+        'credit_sales': float(summary['credit_sales'] or 0),
         'pos_sales': pos_sales,
         'online_sales': online_sales,
         'cash_refunds': cash_refunds,

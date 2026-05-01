@@ -760,6 +760,7 @@ class OrderStatsSerializer(serializers.Serializer):
     digital_sales = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
     pos_sales = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
     online_sales = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
+    credit_sales = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
 
 
 class OrderModificationSerializer(serializers.Serializer):

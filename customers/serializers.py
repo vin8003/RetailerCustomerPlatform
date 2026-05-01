@@ -2,6 +2,7 @@ from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from .models import CustomerProfile, CustomerAddress, CustomerWishlist, CustomerNotification
 from products.models import Product
+from retailers.models import CustomerLedger
 
 User = get_user_model()
 
@@ -183,6 +184,7 @@ class RetailerCustomerListSerializer(serializers.Serializer):
     registration_status = serializers.CharField(required=False)
     is_phone_verified = serializers.BooleanField(required=False)
     nickname = serializers.CharField(required=False, allow_null=True)
+    current_balance = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
 
 
 class RetailerCustomerDetailSerializer(serializers.Serializer):
@@ -205,11 +207,28 @@ class RetailerCustomerDetailSerializer(serializers.Serializer):
     is_phone_verified = serializers.BooleanField(required=False)
     nickname = serializers.CharField(allow_null=True)
     notes = serializers.CharField(allow_null=True)
+    credit_limit = serializers.DecimalField(max_digits=12, decimal_places=2)
+    current_balance = serializers.DecimalField(max_digits=12, decimal_places=2)
     
     # Additional detail fields
     recent_orders = serializers.ListField()
     reward_history = serializers.ListField()
     retailer_ratings = serializers.ListField()
+
+
+class CustomerLedgerSerializer(serializers.ModelSerializer):
+    """
+    Serializer for customer ledger entries (Khata)
+    """
+    order_number = serializers.CharField(source='order.order_number', read_only=True, allow_null=True)
+    
+    class Meta:
+        model = CustomerLedger
+        fields = [
+            'id', 'transaction_type', 'amount', 'balance_after', 
+            'order', 'order_number', 'payment_mode', 'notes', 'created_at'
+        ]
+        read_only_fields = ['id', 'balance_after', 'created_at']
 
 
 

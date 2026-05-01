@@ -36,6 +36,11 @@ urlpatterns = [
     path('retailer/update/<int:customer_id>/', views.update_retailer_customer, name='update_retailer_customer'),
     path('retailer/blacklist/toggle/', views.toggle_blacklist, name='toggle_blacklist'),
     
+    # Customer Credit & Ledger (Khata)
+    path('retailer/ledger/<int:customer_id>/', views.get_customer_ledger, name='get_customer_ledger'),
+    path('retailer/payment/record/', views.record_customer_payment, name='record_customer_payment'),
+    path('retailer/credit-limit/update/<int:customer_id>/', views.update_customer_credit_limit, name='update_customer_credit_limit'),
+    
     # Referral
     path('referral/apply/', views.apply_referral_code, name='apply_referral_code'),
     path('referral/stats/', views.get_referral_stats, name='get_referral_stats'),

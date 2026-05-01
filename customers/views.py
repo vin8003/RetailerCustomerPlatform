@@ -16,8 +16,9 @@ from .serializers import (
     CustomerProfileSerializer, CustomerAddressSerializer, CustomerAddressUpdateSerializer,
     CustomerWishlistSerializer, CustomerNotificationSerializer, CustomerDashboardSerializer,
     RetailerCustomerListSerializer, RetailerCustomerDetailSerializer,
+    CustomerLedgerSerializer,
 )
-from retailers.models import RetailerProfile, RetailerRewardConfig, RetailerBlacklist, RetailerCustomerMapping
+from retailers.models import RetailerProfile, RetailerRewardConfig, RetailerBlacklist, RetailerCustomerMapping, CustomerLedger
 from retailers.serializers import RetailerRewardConfigSerializer
 from orders.models import Order, RetailerRating
 from products.models import Product
@@ -949,7 +950,8 @@ def get_retailer_customers(request):
                 'total_spent': total_spent,
                 'is_blacklisted': is_blacklisted,
                 'last_order_date': last_order_date,
-                'joined_date': mapping.created_at
+                'joined_date': mapping.created_at,
+                'current_balance': mapping.current_balance
             })
             
         serializer = RetailerCustomerListSerializer(data, many=True)
@@ -1055,6 +1057,8 @@ def get_customer_details_for_retailer(request, customer_id):
             'joined_date': mapping.created_at,
             'registration_status': user.registration_status,
             'is_phone_verified': user.is_phone_verified,
+            'credit_limit': mapping.credit_limit,
+            'current_balance': mapping.current_balance,
             'recent_orders': recent_orders_data,
             'reward_history': reward_history,
             'retailer_ratings': my_ratings
@@ -1167,4 +1171,122 @@ def update_retailer_customer(request, customer_id):
             {'error': 'Internal server error'}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def get_customer_ledger(request, customer_id):
+    """
+    Get full ledger (Khata) for a customer
+    """
+    try:
+        if request.user.user_type != 'retailer':
+            return Response({'error': 'Only retailers can access this endpoint'}, status=status.HTTP_403_FORBIDDEN)
+            
+        retailer = get_object_or_404(RetailerProfile, user=request.user)
+        user = get_object_or_404(User, id=customer_id)
+        mapping = get_object_or_404(RetailerCustomerMapping, retailer=retailer, customer=user)
+        
+        ledger_entries = mapping.ledger_entries.all()
+        
+        paginator = StandardResultsSetPagination()
+        page = paginator.paginate_queryset(ledger_entries, request)
+        
+        if page is not None:
+            serializer = CustomerLedgerSerializer(page, many=True)
+            return paginator.get_paginated_response(serializer.data)
+            
+        serializer = CustomerLedgerSerializer(ledger_entries, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        logger.error(f"Error getting customer ledger: {str(e)}")
+        return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def record_customer_payment(request):
+    """
+    Record a manual payment from a customer (Credit to Ledger)
+    """
+    try:
+        if request.user.user_type != 'retailer':
+            return Response({'error': 'Only retailers can record payments'}, status=status.HTTP_403_FORBIDDEN)
+            
+        customer_id = request.data.get('customer_id')
+        amount = request.data.get('amount')
+        payment_mode = request.data.get('payment_mode', 'cash')
+        notes = request.data.get('notes', 'Manual payment collection')
+        
+        if not customer_id or not amount:
+            return Response({'error': 'Customer ID and amount are required'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        from decimal import Decimal
+        try:
+            amount = Decimal(str(amount))
+            if amount <= 0:
+                return Response({'error': 'Amount must be positive'}, status=status.HTTP_400_BAD_REQUEST)
+        except:
+            return Response({'error': 'Invalid amount'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        retailer = get_object_or_404(RetailerProfile, user=request.user)
+        user = get_object_or_404(User, id=customer_id)
+        mapping = get_object_or_404(RetailerCustomerMapping, retailer=retailer, customer=user)
+        
+        ledger_entry = mapping.record_transaction(
+            transaction_type='PAYMENT',
+            amount=amount,
+            payment_mode=payment_mode,
+            notes=notes
+        )
+        
+        return Response({
+            'message': 'Payment recorded successfully',
+            'new_balance': mapping.current_balance,
+            'entry': CustomerLedgerSerializer(ledger_entry).data
+        }, status=status.HTTP_201_CREATED)
+        
+    except Exception as e:
+        logger.error(f"Error recording customer payment: {str(e)}")
+        return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['PATCH'])
+@permission_classes([permissions.IsAuthenticated])
+def update_customer_credit_limit(request, customer_id):
+    """
+    Update credit limit for a customer
+    """
+    try:
+        if request.user.user_type != 'retailer':
+            return Response({'error': 'Only retailers can manage credit limits'}, status=status.HTTP_403_FORBIDDEN)
+            
+        credit_limit = request.data.get('credit_limit')
+        if credit_limit is None:
+            return Response({'error': 'Credit limit is required'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        from decimal import Decimal
+        try:
+            credit_limit = Decimal(str(credit_limit))
+            if credit_limit < 0:
+                return Response({'error': 'Credit limit cannot be negative'}, status=status.HTTP_400_BAD_REQUEST)
+        except:
+            return Response({'error': 'Invalid credit limit'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        retailer = get_object_or_404(RetailerProfile, user=request.user)
+        user = get_object_or_404(User, id=customer_id)
+        mapping = get_object_or_404(RetailerCustomerMapping, retailer=retailer, customer=user)
+        
+        mapping.credit_limit = credit_limit
+        mapping.save(update_fields=['credit_limit', 'updated_at'])
+        
+        return Response({
+            'message': 'Credit limit updated successfully',
+            'credit_limit': mapping.credit_limit
+        }, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        logger.error(f"Error updating credit limit: {str(e)}")
+        return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
