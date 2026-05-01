@@ -7,7 +7,7 @@ from rest_framework.decorators import action, api_view, permission_classes
 from django.db import transaction
 from retailers.models import Supplier, RetailerProfile, RetailerCustomerMapping
 from retailers.serializers import SupplierSerializer
-from products.models import PurchaseInvoice, PurchaseItem, SupplierLedger, Product, ProductInventoryLog
+from products.models import PurchaseInvoice, PurchaseItem, SupplierLedger, Product, ProductBatch, ProductInventoryLog
 from orders.models import Order, OrderItem
 from django.db.models import Sum, Q, Count, F
 from products.serializers import PurchaseInvoiceSerializer, SupplierLedgerSerializer
@@ -227,6 +227,14 @@ def create_pos_order(request):
                 
                 qty = int(item['quantity'])
                 unit_price = Decimal(str(item['unit_price']))
+                
+                # Price validation: ensure frontend price matches actual price
+                expected_price = Decimal(str(batch.price)) if batch else Decimal(str(product.price))
+                if unit_price != expected_price:
+                    raise ValueError(
+                        f"Price mismatch for {product.name}: "
+                        f"sent ₹{unit_price}, expected ₹{expected_price}"
+                    )
                 
                 # Calculate previous quantity for logging
                 prev_qty = batch.quantity if (batch and product.track_inventory) else product.quantity

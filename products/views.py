@@ -319,7 +319,7 @@ def get_retailer_products(request):
 
         # Fast path for POS / Bulk Select All (all products, no pagination, lightweight serialization)
         if request.query_params.get('no_page') == 'true':
-            pos_products = products.select_related('category').prefetch_related('batches')
+            pos_products = products.select_related('category').prefetch_related('batches')[:10000]  # OOM safety limit
             
             data = []
             for p in pos_products:
@@ -333,7 +333,9 @@ def get_retailer_products(request):
                                 'barcode': b.barcode,
                                 'price': b.price,
                                 'original_price': b.original_price,
-                                'quantity': b.quantity
+                                'quantity': b.quantity,
+                                'is_active': b.is_active,
+                                'show_on_app': b.show_on_app
                             })
                 
                 img_url = None
@@ -612,50 +614,51 @@ def update_product(request, product_id):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        product = get_object_or_404(Product, id=product_id, retailer=retailer)
-        old_quantity = product.quantity
+        with transaction.atomic():
+            product = Product.objects.select_for_update().get(id=product_id, retailer=retailer)
+            old_quantity = product.quantity
 
-        serializer = ProductUpdateSerializer(
-            product,
-            data=request.data,
-            partial=request.method == 'PATCH'
-        )
+            serializer = ProductUpdateSerializer(
+                product,
+                data=request.data,
+                partial=request.method == 'PATCH'
+            )
 
-        if serializer.is_valid():
-            product = serializer.save()
+            if serializer.is_valid():
+                product = serializer.save()
 
-            # Log inventory change if quantity changed
-            new_quantity = product.quantity
-            if old_quantity != new_quantity:
-                quantity_change = new_quantity - old_quantity
-                log_type = 'added' if quantity_change > 0 else 'removed'
+                # Log inventory change if quantity changed
+                new_quantity = product.quantity
+                if old_quantity != new_quantity:
+                    quantity_change = new_quantity - old_quantity
+                    log_type = 'added' if quantity_change > 0 else 'removed'
 
-                ProductInventoryLog.objects.create(
-                    product=product,
-                    log_type=log_type,
-                    quantity_change=abs(quantity_change),
-                    previous_quantity=old_quantity,
-                    new_quantity=new_quantity,
-                    reason='Product update',
-                    created_by=request.user
-                )
+                    ProductInventoryLog.objects.create(
+                        product=product,
+                        log_type=log_type,
+                        quantity_change=abs(quantity_change),
+                        previous_quantity=old_quantity,
+                        new_quantity=new_quantity,
+                        reason='Product update',
+                        created_by=request.user
+                    )
 
-            # Pre-fetch active offers for optimization
-            from offers.models import Offer
-            from django.utils import timezone
-            active_offers = list(Offer.objects.filter(
-                retailer=retailer,
-                is_active=True,
-                start_date__lte=timezone.now()
-            ).filter(
-                Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
-            ).order_by('-priority').prefetch_related('targets'))
+                # Pre-fetch active offers for optimization
+                from offers.models import Offer
+                from django.utils import timezone
+                active_offers = list(Offer.objects.filter(
+                    retailer=retailer,
+                    is_active=True,
+                    start_date__lte=timezone.now()
+                ).filter(
+                    Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
+                ).order_by('-priority').prefetch_related('targets'))
 
-            response_serializer = ProductDetailSerializer(product, context={'request': request, 'active_offers': active_offers})
-            logger.info(f"Product updated: {product.name} by {retailer.shop_name}")
-            return Response(response_serializer.data, status=status.HTTP_200_OK)
+                response_serializer = ProductDetailSerializer(product, context={'request': request, 'active_offers': active_offers})
+                logger.info(f"Product updated: {product.name} by {retailer.shop_name}")
+                return Response(response_serializer.data, status=status.HTTP_200_OK)
 
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     except Exception as e:
         logger.error(f"Error updating product: {str(e)}")

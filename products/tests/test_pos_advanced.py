@@ -26,13 +26,13 @@ class TestPOSAdvanced:
             "customer_name": "New Walk-in",
             "customer_mobile": mobile,
             "payment_mode": "cash",
-            "subtotal": 100.00,
-            "total_amount": 100.00,
+            "subtotal": 90.00,
+            "total_amount": 90.00,
             "items": [
                 {
                     "product_id": product.id,
                     "quantity": 1,
-                    "unit_price": 100.00
+                    "unit_price": 90.00
                 }
             ]
         }
@@ -53,16 +53,16 @@ class TestPOSAdvanced:
         api_client.force_authenticate(user=retailer_user)
         url = reverse("create_pos_order")
         
-        # Subtotal with decimals
+        # Subtotal with decimals (product.price is 90.00, unit_price must match)
         data = {
-            "subtotal": 100.55,
+            "subtotal": 90.00,
             "discount_amount": 5.25,
-            "total_amount": 95.30, # 100.55 - 5.25 = 95.30 -> should round to 95
+            "total_amount": 84.75,
             "items": [
                 {
                     "product_id": product.id,
                     "quantity": 1,
-                    "unit_price": 100.55
+                    "unit_price": 90.00
                 }
             ]
         }
@@ -71,12 +71,12 @@ class TestPOSAdvanced:
         assert response.status_code == status.HTTP_201_CREATED
         
         order = Order.objects.get(id=response.data['order']['id'])
-        # 100.55 rounds to 101
+        # 90.00 rounds to 90
         # 5.25 rounds to 5
-        # 95.30 rounds to 95
-        assert order.subtotal == Decimal("101.00")
+        # 84.75 rounds to 85
+        assert order.subtotal == Decimal("90.00")
         assert order.discount_amount == Decimal("5.00")
-        assert order.total_amount == Decimal("95.00")
+        assert order.total_amount == Decimal("85.00")
 
     def test_pos_verify_returning_guest(self, api_client, retailer_user, retailer):
         api_client.force_authenticate(user=retailer_user)
