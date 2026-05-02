@@ -618,8 +618,8 @@ def get_all_customer_loyalty(request):
         retailer_ids = [record.retailer.id for record in loyalty_records]
         configs = RetailerRewardConfig.objects.filter(retailer__id__in=retailer_ids)
         config_map = {config.retailer.id: config.conversion_rate for config in configs}
-        print(f"DEBUG: loyalty_records counts={len(loyalty_records)}")
-        print(f"DEBUG: config_map counts={len(config_map)}")
+        logger.debug(f"DEBUG: loyalty_records counts={len(loyalty_records)}")
+        logger.debug(f"DEBUG: config_map counts={len(config_map)}")
         
         # Fetch upcoming expiries
         from django.db.models import Min, Sum
@@ -632,7 +632,7 @@ def get_all_customer_loyalty(request):
             next_expiry=Min('expiry_date'),
             amount=Sum('amount')
         )
-        print(f"DEBUG: expiries counts={len(expiries)}")
+        logger.debug(f"DEBUG: expiries counts={len(expiries)}")
         expiry_map = {e['retailer_id']: {'date': e['next_expiry'], 'amount': e['amount']} for e in expiries}
         
         data = []
@@ -879,7 +879,8 @@ def get_referral_stats(request):
 @permission_classes([permissions.IsAuthenticated])
 def get_retailer_customers(request):
     """
-    Get all customers for the authenticated retailer with rich operational data
+    Get all customers for the authenticated retailer with rich operational data.
+    Optimized with annotations to avoid N+1 queries.
     """
     try:
         if request.user.user_type != 'retailer':
@@ -890,9 +891,28 @@ def get_retailer_customers(request):
             
         retailer = get_object_or_404(RetailerProfile, user=request.user)
         
-        # 1. Get all customer mappings for this retailer
-        # This includes Shadow users, App users who ordered, and Blacklisted users
-        mappings = RetailerCustomerMapping.objects.filter(retailer=retailer).select_related('customer').order_by('-created_at')
+        # 1. Get all customer mappings with annotations
+        from django.db.models import Subquery, OuterRef, Max
+        from django.db.models.functions import Coalesce
+        
+        mappings = RetailerCustomerMapping.objects.filter(
+            retailer=retailer
+        ).select_related('customer', 'customer__customer_profile').annotate(
+            _total_orders=Coalesce(
+                Count('customer__orders', filter=Q(customer__orders__retailer=retailer)),
+                0
+            ),
+            _total_spent=Coalesce(
+                Sum('customer__orders__total_amount', filter=Q(
+                    customer__orders__retailer=retailer,
+                    customer__orders__status='delivered'
+                )),
+                0
+            ),
+            _last_order_date=Max('customer__orders__created_at', filter=Q(
+                customer__orders__retailer=retailer
+            ))
+        ).order_by('-created_at')
         
         # 2. Apply Search Filter if present
         search = request.query_params.get('search')
@@ -910,30 +930,25 @@ def get_retailer_customers(request):
         
         target_mappings = page if page is not None else mappings
         
+        # 4. Pre-fetch loyalty points and blacklist status in bulk (2 queries instead of 2*N)
+        customer_ids = [m.customer_id for m in target_mappings]
+        
+        loyalty_map = dict(
+            CustomerLoyalty.objects.filter(
+                retailer=retailer, customer_id__in=customer_ids
+            ).values_list('customer_id', 'points')
+        )
+        
+        blacklisted_ids = set(
+            RetailerBlacklist.objects.filter(
+                retailer=retailer, customer_id__in=customer_ids
+            ).values_list('customer_id', flat=True)
+        )
+        
         data = []
         for mapping in target_mappings:
             user = mapping.customer
-            
-            # Helper: Get Stats
-            orders = Order.objects.filter(retailer=retailer, customer=user)
-            delivered_orders = orders.filter(status='delivered')
-            
-            total_orders = orders.count()
-            total_spent = delivered_orders.aggregate(Sum('total_amount'))['total_amount__sum'] or 0
-            last_order = orders.order_by('-created_at').first()
-            last_order_date = last_order.created_at if last_order else None
-            
-            # Helper: Get Points
-            loyalty = CustomerLoyalty.objects.filter(retailer=retailer, customer=user).first()
-            points = loyalty.points if loyalty else 0
-            
-            # Helper: Get Blacklist details
-            is_blacklisted = RetailerBlacklist.objects.filter(retailer=retailer, customer=user).exists()
-            
-            # Try to get profile if it exists (Shadow users might not have one)
             profile = getattr(user, 'customer_profile', None)
-            
-            # Identity logic
             customer_name = mapping.nickname or user.get_full_name() or user.username
             
             data.append({
@@ -942,14 +957,14 @@ def get_retailer_customers(request):
                 'nickname': mapping.nickname,
                 'phone_number': user.phone_number,
                 'profile_image': profile.profile_image.url if profile and profile.profile_image else None,
-                'points': points,
+                'points': loyalty_map.get(user.id, 0),
                 'registration_status': user.registration_status if user.registration_status else ('registered' if user.is_phone_verified else 'shadow'),
                 'is_phone_verified': user.is_phone_verified,
                 'average_rating': profile.average_rating if profile else 0,
-                'total_orders': total_orders,
-                'total_spent': total_spent,
-                'is_blacklisted': is_blacklisted,
-                'last_order_date': last_order_date,
+                'total_orders': mapping._total_orders,
+                'total_spent': mapping._total_spent,
+                'is_blacklisted': user.id in blacklisted_ids,
+                'last_order_date': mapping._last_order_date,
                 'joined_date': mapping.created_at,
                 'current_balance': mapping.current_balance
             })

@@ -9,7 +9,7 @@ from retailers.models import Supplier, RetailerProfile, RetailerCustomerMapping
 from retailers.serializers import SupplierSerializer
 from products.models import PurchaseInvoice, PurchaseItem, SupplierLedger, Product, ProductBatch, ProductInventoryLog
 from orders.models import Order, OrderItem
-from django.db.models import Sum, Q, Count, F
+from django.db.models import Sum, Q, Count, F, Case, When, DecimalField
 from products.serializers import PurchaseInvoiceSerializer, SupplierLedgerSerializer
 from orders.serializers import OrderDetailSerializer
 from common.permissions import IsRetailerOwner
@@ -146,25 +146,52 @@ def create_pos_order(request):
         # Robust phone matching using normalized 10 digits
         mobile_match_id = normalize_phone_number(customer_mobile)
         
+        # Also clean the full customer_mobile to remove spaces/dashes for username/phone fields
+        customer_mobile = ''.join(c for c in str(customer_mobile) if c.isdigit())
+        
         if mobile_match_id:
-            user_query = (
-                User.objects.filter(username__endswith=mobile_match_id) | 
-                User.objects.filter(phone_number__endswith=mobile_match_id)
-            )
-            order_customer = user_query.first()
+            # 1. Try last 10 digits match (standard)
+            order_customer = User.objects.filter(
+                Q(username__endswith=mobile_match_id) | 
+                Q(phone_number__endswith=mobile_match_id)
+            ).first()
+            
+            # 2. Try exact match if not found (extra safety)
+            if not order_customer:
+                order_customer = User.objects.filter(
+                    Q(username=customer_mobile) | 
+                    Q(phone_number=customer_mobile) |
+                    Q(username='user_' + customer_mobile) # Common pattern in some systems
+                ).first()
         
         if not order_customer and customer_mobile:
             # Create Shadow User for this walk-in
             import secrets
-            order_customer = User.objects.create(
-                username=customer_mobile,
-                phone_number=customer_mobile,
-                first_name=customer_name or "Walk-in",
-                registration_status='shadow',
-                is_phone_verified=False
-            )
-            order_customer.set_password(secrets.token_urlsafe(12))
-            order_customer.save()
+            from django.db import IntegrityError
+            from django.core.exceptions import ValidationError
+            try:
+                # Use a clean username without prefix if possible
+                username_to_use = customer_mobile
+                
+                with transaction.atomic():
+                    order_customer = User.objects.create(
+                        username=username_to_use,
+                        phone_number=customer_mobile,
+                        first_name=customer_name or "Walk-in",
+                        registration_status='shadow',
+                        is_phone_verified=False,
+                        user_type='customer'
+                    )
+                    order_customer.set_password(secrets.token_urlsafe(12))
+                    order_customer.save()
+            except (IntegrityError, ValidationError):
+                # If creation fails, someone with this number/username exists, find them aggressively
+                order_customer = User.objects.filter(
+                    Q(username__endswith=mobile_match_id) | 
+                    Q(phone_number__endswith=mobile_match_id) |
+                    Q(username__icontains=customer_mobile) |
+                    Q(phone_number__icontains=customer_mobile)
+                ).first()
             
         # Ensure Shadow/Registered User has a CustomerProfile for rating synchronization
         if order_customer:
@@ -271,6 +298,19 @@ def create_pos_order(request):
                 
                 # Record Credit Transaction if any
                 if credit_amount > 0:
+                    # Enforce credit limit if set
+                    if mapping.credit_limit > 0:
+                        available_credit = mapping.credit_limit - mapping.current_balance
+                        if credit_amount > available_credit:
+                            # Rollback: delete the order we just created
+                            order.delete()
+                            raise ValueError(
+                                f"Credit limit exceeded. "
+                                f"Limit: ₹{mapping.credit_limit}, "
+                                f"Current balance: ₹{mapping.current_balance}, "
+                                f"Available: ₹{max(available_credit, 0)}"
+                            )
+                    
                     mapping.record_transaction(
                         transaction_type='SALE',
                         amount=credit_amount,
@@ -517,10 +557,26 @@ def get_daily_sales_summary(request):
         total_sales=Sum('total_amount'),
         order_count=Count('id'),
         
-        # Accurate Breakdown from Order fields
-        cash_sales=Sum('cash_amount'),
-        digital_sales=Sum(F('upi_amount') + F('card_amount')),
-        credit_sales=Sum('credit_amount'),
+        # Accurate Breakdown: use breakdown fields if populated, 
+        # otherwise fall back to total_amount based on payment_mode (legacy orders)
+        cash_sales=Sum(Case(
+            When(cash_amount__gt=0, then=F('cash_amount')),
+            When(payment_mode='cash', cash_amount=0, then=F('total_amount')),
+            default=0,
+            output_field=DecimalField()
+        )),
+        digital_sales=Sum(Case(
+            When(Q(upi_amount__gt=0) | Q(card_amount__gt=0), then=F('upi_amount') + F('card_amount')),
+            When(payment_mode='upi', upi_amount=0, then=F('total_amount')),
+            default=0,
+            output_field=DecimalField()
+        )),
+        credit_sales=Sum(Case(
+            When(credit_amount__gt=0, then=F('credit_amount')),
+            When(payment_mode='credit', credit_amount=0, then=F('total_amount')),
+            default=0,
+            output_field=DecimalField()
+        )),
         
         # Source (POS vs Online)
         pos_sales=Sum('total_amount', filter=Q(source='pos')),
