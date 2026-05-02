@@ -15,10 +15,10 @@ class CartItemSerializer(serializers.ModelSerializer):
     product_unit = serializers.CharField(source='product.unit', read_only=True)
     batch_number = serializers.CharField(source='batch.batch_number', read_only=True)
     stock_quantity = serializers.SerializerMethodField()
-    minimum_order_quantity = serializers.IntegerField(source='product.minimum_order_quantity', read_only=True)
-    maximum_order_quantity = serializers.IntegerField(source='product.maximum_order_quantity', read_only=True)
+    minimum_order_quantity = serializers.SerializerMethodField()
+    maximum_order_quantity = serializers.SerializerMethodField()
     is_available = serializers.BooleanField(read_only=True)
-    total_price = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    total_price = serializers.SerializerMethodField()
     
     class Meta:
         model = CartItem
@@ -28,15 +28,34 @@ class CartItemSerializer(serializers.ModelSerializer):
             'stock_quantity', 'minimum_order_quantity', 'maximum_order_quantity',
             'added_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'unit_price', 'total_price', 'added_at', 'updated_at']
+        read_only_fields = ['id', 'unit_price', 'added_at', 'updated_at']
 
     def get_stock_quantity(self, obj):
-        if obj.batch:
-            return obj.batch.quantity
-        return obj.product.quantity
+        qty = obj.batch.quantity if obj.batch else obj.product.quantity
+        if qty is not None:
+            # If it's a whole number (e.g. 10.000), return as int 10
+            # If it's a fractional number (e.g. 10.500), return 10.5
+            if qty == qty.to_integral_value():
+                return int(qty)
+            return float(qty.normalize())
+        return 0
+    
+    def get_minimum_order_quantity(self, obj):
+        val = obj.product.minimum_order_quantity
+        if val == val.to_integral_value(): return int(val)
+        return float(val.normalize())
+
+    def get_maximum_order_quantity(self, obj):
+        val = obj.product.maximum_order_quantity
+        if val is None: return None
+        if val == val.to_integral_value(): return int(val)
+        return float(val.normalize())
+
+    def get_total_price(self, obj):
+        return float(obj.total_price)
     
     def validate_quantity(self, value):
-        """Validate quantity is positive"""
+        """Validate quantity is positive and handle fractional restrictions"""
         if value <= 0:
             raise serializers.ValidationError("Quantity must be greater than 0")
         return value
@@ -68,10 +87,10 @@ class CartSerializer(serializers.ModelSerializer):
     retailer_name = serializers.CharField(source='retailer.shop_name', read_only=True)
     retailer_address = serializers.CharField(source='retailer.full_address', read_only=True)
     retailer_phone = serializers.CharField(source='retailer.contact_phone', read_only=True)
-    total_items = serializers.IntegerField(read_only=True)
-    total_amount = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    total_items = serializers.SerializerMethodField()
+    total_amount = serializers.SerializerMethodField()
     is_empty = serializers.BooleanField(read_only=True)
-    minimum_order_amount = serializers.DecimalField(source='retailer.minimum_order_amount', max_digits=10, decimal_places=2, read_only=True)
+    minimum_order_amount = serializers.SerializerMethodField()
     
     class Meta:
         model = Cart
@@ -82,13 +101,23 @@ class CartSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'customer', 'created_at', 'updated_at']
 
+    def get_total_items(self, obj):
+        # Ensure it returns a number, not a Decimal string
+        return int(obj.total_items)
+
+    def get_total_amount(self, obj):
+        return float(obj.total_amount)
+    
+    def get_minimum_order_amount(self, obj):
+        return float(obj.retailer.minimum_order_amount)
+
 
 class AddToCartSerializer(serializers.Serializer):
     """
     Serializer for adding items to cart
     """
     product_id = serializers.IntegerField()
-    quantity = serializers.IntegerField(default=1)
+    quantity = serializers.FloatField(default=1) # Allow float input but we will validate it
     
     def validate_product_id(self, value):
         """Validate product exists and is available"""
@@ -104,17 +133,16 @@ class AddToCartSerializer(serializers.Serializer):
             raise serializers.ValidationError("Quantity must be greater than 0")
         return value
     
-    def validate(self, data):
-        """Validate cart item data"""
-        try:
-            product = Product.objects.get(id=data['product_id'])
-        except Product.DoesNotExist:
-            raise serializers.ValidationError("Product not found")
-        
         quantity = data['quantity']
+        
+        # Enforce integer for discrete units in Customer App
+        discrete_units = ['piece', 'pack', 'box', 'bottle', 'can', 'dozen']
+        if product.unit in discrete_units:
+            if quantity != int(quantity):
+                raise serializers.ValidationError(f"Fractional quantities are not allowed for {product.unit} items.")
             
         # Check stock availability
-        if product.track_inventory and quantity > product.quantity:
+        if product.track_inventory and Decimal(str(quantity)) > product.quantity:
              raise serializers.ValidationError(
                 f"Only {product.quantity} items available in stock"
             )
@@ -191,7 +219,7 @@ class UpdateCartItemSerializer(serializers.Serializer):
     """
     Serializer for updating cart item quantity
     """
-    quantity = serializers.IntegerField()
+    quantity = serializers.FloatField()
     
     def validate_quantity(self, value):
         """Validate quantity is positive"""
@@ -203,11 +231,18 @@ class UpdateCartItemSerializer(serializers.Serializer):
         """Validate cart item update"""
         cart_item = self.context['cart_item']
         quantity = data['quantity']
+        product = cart_item.product
+        
+        # Enforce integer for discrete units in Customer App
+        discrete_units = ['piece', 'pack', 'box', 'bottle', 'can', 'dozen']
+        if product.unit in discrete_units:
+            if quantity != int(quantity):
+                raise serializers.ValidationError(f"Fractional quantities are not allowed for {product.unit} items.")
         
         # Check stock availability
-        if cart_item.product.track_inventory and quantity > cart_item.product.quantity:
+        if product.track_inventory and Decimal(str(quantity)) > product.quantity:
             raise serializers.ValidationError(
-                f"Only {cart_item.product.quantity} items available in stock"
+                f"Only {product.quantity} items available in stock"
             )
         
         # Check if retailer is accepting orders
