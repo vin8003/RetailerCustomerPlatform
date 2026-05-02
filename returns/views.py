@@ -3,6 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from django.db.models import Q, Sum
+from decimal import Decimal
 from .models import SalesReturn, PurchaseReturn, SalesReturnItem, PurchaseReturnItem
 from .serializers import SalesReturnSerializer, PurchaseReturnSerializer
 from .services import process_sales_return, process_purchase_return
@@ -110,8 +111,8 @@ class SalesReturnViewSet(viewsets.ModelViewSet):
                 'product': product,
                 'batch': batch,
                 'order_item': order_item,
-                'quantity': int(qty),
-                'refund_unit_price': float(price)
+                'quantity': Decimal(str(qty)),
+                'refund_unit_price': Decimal(str(price))
             })
 
         try:
@@ -202,8 +203,8 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
                 'product': product,
                 'batch': batch,
                 'purchase_item': purchase_item,
-                'quantity': int(qty),
-                'purchase_price': float(price)
+                'quantity': Decimal(str(qty)),
+                'purchase_price': Decimal(str(price))
             })
 
         try:

@@ -498,7 +498,9 @@ class OrderItem(models.Model):
         ]
     
     def __str__(self):
-        return f"{self.product_name} x {self.quantity}"
+        # normalize() strips trailing zeros: 2.000 -> 2, 1.500 -> 1.5
+        qty_display = self.quantity.normalize()
+        return f"{self.product_name} x {qty_display}"
     
     def save(self, *args, **kwargs):
         """Calculate total price"""

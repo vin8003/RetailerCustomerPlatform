@@ -2,6 +2,9 @@ from django.db import models
 from django.conf import settings
 from django.core.validators import MinValueValidator
 from decimal import Decimal
+import logging
+
+logger = logging.getLogger(__name__)
 
 class SalesReturn(models.Model):
     """
@@ -79,7 +82,10 @@ class SalesReturnItem(models.Model):
         blank=True,
         related_name='returns'
     )
-    quantity = models.PositiveIntegerField()
+    quantity = models.DecimalField(
+        max_digits=12, decimal_places=3,
+        validators=[MinValueValidator(Decimal('0.001'))]
+    )
     refund_unit_price = models.DecimalField(max_digits=10, decimal_places=2)
     total_refund = models.DecimalField(max_digits=12, decimal_places=2)
 
@@ -87,7 +93,7 @@ class SalesReturnItem(models.Model):
         db_table = 'sales_return_item'
 
     def __str__(self):
-        return f"{self.quantity} x {self.product.name} (Return)"
+        return f"{self.quantity.normalize()} x {self.product.name} (Return)"
 
 
 class PurchaseReturn(models.Model):
@@ -159,7 +165,10 @@ class PurchaseReturnItem(models.Model):
         blank=True,
         related_name='returns'
     )
-    quantity = models.PositiveIntegerField()
+    quantity = models.DecimalField(
+        max_digits=12, decimal_places=3,
+        validators=[MinValueValidator(Decimal('0.001'))]
+    )
     purchase_price = models.DecimalField(max_digits=10, decimal_places=2)
     total = models.DecimalField(max_digits=12, decimal_places=2)
 
@@ -167,4 +176,4 @@ class PurchaseReturnItem(models.Model):
         db_table = 'purchase_return_item'
 
     def __str__(self):
-        return f"{self.quantity} x {self.product.name} (Purchase Return)"
+        return f"{self.quantity.normalize()} x {self.product.name} (Purchase Return)"

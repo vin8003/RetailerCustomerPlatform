@@ -3,7 +3,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Q, Avg, Count, Sum, Max
-from django.db.models import Q, Avg, Count, Sum, Max, F, Value, Case, When, FloatField, TextField, IntegerField
+from django.db.models import Q, Avg, Count, Sum, Max, F, Value, Case, When, FloatField, TextField, IntegerField, DecimalField
 from django.db.models.functions import Coalesce, Greatest, Cast
 from django.contrib.postgres.search import SearchVector, SearchQuery, SearchRank
 from django.shortcuts import get_object_or_404
@@ -2907,7 +2907,7 @@ def get_best_selling_products(request, retailer_id):
             is_active=True,
             is_available=True
         ).select_related('master_product', 'category', 'brand', 'retailer').annotate(
-            total_sold=Coalesce(Sum('orderitem__quantity'), 0),
+            total_sold=Coalesce(Sum('orderitem__quantity'), Value(0, output_field=DecimalField())),
             average_rating_annotated=Avg('reviews__rating'),
             review_count_annotated=Count('reviews')
         ).filter(

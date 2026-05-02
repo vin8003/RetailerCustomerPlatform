@@ -81,7 +81,29 @@ def process_sales_return(retailer, order, items_data, refund_payment_mode, reaso
                 mapping.total_spent -= Decimal(str(total_refund))
                 if mapping.total_spent < 0:
                     mapping.total_spent = 0
-                mapping.save()
+                
+                # If the original order had credit (Udhaar), reduce the outstanding balance
+                if order.credit_amount and order.credit_amount > 0:
+                    # Calculate proportional credit refund
+                    # If entire order was credit, refund full return amount from balance
+                    # If split, refund proportional credit portion
+                    if order.total_amount > 0:
+                        credit_ratio = order.credit_amount / order.total_amount
+                        credit_refund = (Decimal(str(total_refund)) * credit_ratio).quantize(Decimal('0.01'))
+                    else:
+                        credit_refund = Decimal('0.00')
+                    
+                    if credit_refund > 0:
+                        mapping.record_transaction(
+                            transaction_type='RETURN',
+                            amount=credit_refund,
+                            order=order,
+                            notes=f"Sales Return refund for Order #{order.order_number}"
+                        )
+                    else:
+                        mapping.save()
+                else:
+                    mapping.save()
         
         # 4. Update Loyalty Points if order/customer exists
         if order and order.customer and order.points_earned > 0:
