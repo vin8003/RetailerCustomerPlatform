@@ -56,16 +56,27 @@ def get_cart(request):
                 offer_results = engine.calculate_offers(cart_items, retailer)
                 
                 # Merge offer results into response
-                data['subtotal'] = offer_results['subtotal']
-                data['discounted_total'] = offer_results['discounted_total']
-                data['total_savings'] = offer_results['total_savings']
+                data['subtotal'] = float(offer_results['subtotal'])
+                data['discounted_total'] = float(offer_results['discounted_total'])
+                data['total_savings'] = float(offer_results['total_savings'])
+                
+                # Ensure savings in applied_offers are also floats
+                for offer in offer_results['applied_offers']:
+                    if 'savings' in offer:
+                        offer['savings'] = float(offer['savings'])
+                
                 data['applied_offers'] = offer_results['applied_offers']
+                
+                # Ensure item discounts are floats
+                for item_id, discount_info in offer_results['item_discounts'].items():
+                    discount_info['original_price'] = float(discount_info['original_price'])
+                    discount_info['final_price'] = float(discount_info['final_price'])
+                
                 data['item_discounts'] = offer_results['item_discounts']
                 
                 # Calculate potential cashback (From Offers Engine)
                 potential_points = offer_results.get('total_points', 0)
-                    
-                data['potential_points'] = potential_points
+                data['potential_points'] = float(potential_points)
                 
                 return Response(data, status=status.HTTP_200_OK)
             except RetailerProfile.DoesNotExist:

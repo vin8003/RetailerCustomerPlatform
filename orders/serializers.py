@@ -22,17 +22,43 @@ class OrderItemSerializer(serializers.ModelSerializer):
             'id', 'product', 'product_name', 'product_image', 'product_price', 'product_unit',
             'quantity', 'unit_price', 'total_price', 'created_at', 'net_quantity', 'returned_quantity'
         ]
-        read_only_fields = ['id', 'total_price', 'created_at']
+        read_only_fields = ['id', 'created_at']
 
     returned_quantity = serializers.SerializerMethodField()
     net_quantity = serializers.SerializerMethodField()
+    product_price = serializers.SerializerMethodField()
+    quantity = serializers.SerializerMethodField()
+    unit_price = serializers.SerializerMethodField()
+    total_price = serializers.SerializerMethodField()
+
+    def get_product_price(self, obj):
+        return float(obj.product_price)
+
+    def get_quantity(self, obj):
+        val = obj.quantity
+        if val == val.to_integral_value(): return int(val)
+        return float(val.normalize())
+
+    def get_unit_price(self, obj):
+        return float(obj.unit_price)
+
+    def get_total_price(self, obj):
+        return float(obj.total_price)
 
     def get_returned_quantity(self, obj):
-        return SalesReturnItem.objects.filter(order_item=obj).aggregate(total=Sum('quantity'))['total'] or 0
+        qty = SalesReturnItem.objects.filter(order_item=obj).aggregate(total=Sum('quantity'))['total'] or 0
+        if isinstance(qty, Decimal):
+            if qty == qty.to_integral_value(): return int(qty)
+            return float(qty.normalize())
+        return qty
 
     def get_net_quantity(self, obj):
         returned = self.get_returned_quantity(obj)
-        return max(0, obj.quantity - returned)
+        # We use Decimal for math to avoid float precision issues before final return
+        net = obj.quantity - Decimal(str(returned))
+        if net < 0: net = Decimal(0)
+        if net == net.to_integral_value(): return int(net)
+        return float(net.normalize())
 
 
 class OrderListSerializer(serializers.ModelSerializer):
@@ -59,13 +85,18 @@ class OrderListSerializer(serializers.ModelSerializer):
     refund_amount = serializers.SerializerMethodField()
     net_amount = serializers.SerializerMethodField()
     is_returned = serializers.SerializerMethodField()
+    total_amount = serializers.SerializerMethodField()
 
     def get_refund_amount(self, obj):
-        return obj.returns.aggregate(total=Sum('refund_amount'))['total'] or Decimal('0.00')
+        val = obj.returns.aggregate(total=Sum('refund_amount'))['total'] or Decimal('0.00')
+        return float(val)
 
     def get_net_amount(self, obj):
-        refund = self.get_refund_amount(obj)
-        return obj.total_amount - refund
+        refund = obj.returns.aggregate(total=Sum('refund_amount'))['total'] or Decimal('0.00')
+        return float(obj.total_amount - refund)
+
+    def get_total_amount(self, obj):
+        return float(obj.total_amount)
 
     def get_is_returned(self, obj):
         return obj.returns.exists()
@@ -475,6 +506,7 @@ class OrderCreateSerializer(serializers.Serializer):
 
         # Create order
         with transaction.atomic():
+            # Create order with explicit payment breakdown for production DB stability
             order_data = {
                 'customer': customer,
                 'retailer': retailer,
@@ -489,6 +521,12 @@ class OrderCreateSerializer(serializers.Serializer):
                 'total_amount': total_amount,
                 'special_instructions': validated_data.get('special_instructions', ''),
                 'expected_processing_start': expected_processing_start,
+                'source': 'app',
+                'cash_amount': total_amount if validated_data['payment_mode'] in ['cash', 'cash_pickup'] else Decimal('0.00'),
+                'upi_amount': total_amount if validated_data['payment_mode'] == 'upi' else Decimal('0.00'),
+                'card_amount': Decimal('0.00'),
+                'credit_amount': Decimal('0.00'),
+                'payment_status': 'pending_payment' if validated_data['payment_mode'] != 'upi' else 'pending_verification'
             }
             
             if validated_data.get('address_id'):
