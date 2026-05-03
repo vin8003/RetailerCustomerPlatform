@@ -317,6 +317,13 @@ def create_pos_order(request):
                         order=order,
                         notes=f"POS Udhaar for Order #{order.order_number}"
                     )
+                elif credit_amount < 0:
+                    mapping.record_transaction(
+                        transaction_type='PAYMENT',
+                        amount=abs(credit_amount),
+                        order=order,
+                        notes=f"POS Udhaar Repayment for Order #{order.order_number}"
+                    )
                 else:
                     mapping.save()
 
@@ -572,7 +579,7 @@ def get_daily_sales_summary(request):
             output_field=DecimalField()
         )),
         credit_sales=Sum(Case(
-            When(credit_amount__gt=0, then=F('credit_amount')),
+            When(Q(credit_amount__gt=0) | Q(credit_amount__lt=0), then=F('credit_amount')),
             When(payment_mode='credit', credit_amount=0, then=F('total_amount')),
             default=0,
             output_field=DecimalField()
