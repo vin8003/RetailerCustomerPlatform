@@ -2,9 +2,9 @@ from rest_framework import status, permissions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
-from django.db.models import Count, Sum, Q
+from django.db.models import Count, Sum, Q, Avg, DecimalField, IntegerField, Max, Subquery, OuterRef
 from django.shortcuts import get_object_or_404
-from django.db.models import Sum, Q, Count, Avg
+from decimal import Decimal
 from common.pagination import StandardResultsSetPagination
 from django.utils import timezone
 from datetime import timedelta
@@ -892,7 +892,6 @@ def get_retailer_customers(request):
         retailer = get_object_or_404(RetailerProfile, user=request.user)
         
         # 1. Get all customer mappings with annotations
-        from django.db.models import Subquery, OuterRef, Max
         from django.db.models.functions import Coalesce
         
         mappings = RetailerCustomerMapping.objects.filter(
@@ -900,14 +899,16 @@ def get_retailer_customers(request):
         ).select_related('customer', 'customer__customer_profile').annotate(
             _total_orders=Coalesce(
                 Count('customer__orders', filter=Q(customer__orders__retailer=retailer)),
-                0
+                0,
+                output_field=IntegerField()
             ),
             _total_spent=Coalesce(
                 Sum('customer__orders__total_amount', filter=Q(
                     customer__orders__retailer=retailer,
                     customer__orders__status='delivered'
                 )),
-                0
+                Decimal('0'),
+                output_field=DecimalField()
             ),
             _last_order_date=Max('customer__orders__created_at', filter=Q(
                 customer__orders__retailer=retailer
