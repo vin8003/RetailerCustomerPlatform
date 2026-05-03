@@ -821,7 +821,7 @@ class OrderModificationSerializer(serializers.Serializer):
                 # New item validation
                 if 'quantity' not in item:
                     raise serializers.ValidationError("Quantity is required for new items")
-                if int(item['quantity']) <= 0:
+                if Decimal(str(item['quantity'])) <= 0:
                      raise serializers.ValidationError("Quantity must be positive for new items")
             
             if 'id' in item:
@@ -852,7 +852,7 @@ class OrderModificationSerializer(serializers.Serializer):
                         
                         # Update quantity if provided
                         if 'quantity' in item_data:
-                            quantity = int(item_data['quantity'])
+                            quantity = Decimal(str(item_data['quantity']))
                             if quantity < 0:
                                 raise serializers.ValidationError(f"Invalid quantity for item {item.product_name}")
                             
@@ -886,7 +886,7 @@ class OrderModificationSerializer(serializers.Serializer):
                 # Handle new items
                 elif 'product_id' in item_data:
                     product_id = item_data.get('product_id')
-                    quantity = int(item_data['quantity'])
+                    quantity = Decimal(str(item_data['quantity']))
                     
                     try:
                         product = Product.objects.get(id=product_id, retailer=instance.retailer)

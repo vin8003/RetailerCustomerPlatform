@@ -93,6 +93,9 @@ class ProductListSerializer(serializers.ModelSerializer):
     active_offer_text = serializers.SerializerMethodField()
     is_wishlisted = serializers.SerializerMethodField()
     batches = serializers.SerializerMethodField()
+    quantity = serializers.SerializerMethodField()
+    minimum_order_quantity = serializers.SerializerMethodField()
+    maximum_order_quantity = serializers.SerializerMethodField()
     class Meta:
         model = Product
         fields = [
@@ -104,6 +107,24 @@ class ProductListSerializer(serializers.ModelSerializer):
             'average_rating', 'review_count', 'created_at', 'product_group',
             'active_offer_text', 'is_wishlisted', 'barcode', 'has_batches', 'batches'
         ]
+
+    def get_quantity(self, obj):
+        val = obj.quantity
+        if val is None: return 0
+        if val == val.to_integral_value(): return int(val)
+        return float(val.normalize())
+
+    def get_minimum_order_quantity(self, obj):
+        val = obj.minimum_order_quantity
+        if val is None: return 1
+        if val == val.to_integral_value(): return int(val)
+        return float(val.normalize())
+
+    def get_maximum_order_quantity(self, obj):
+        val = obj.maximum_order_quantity
+        if val is None: return None
+        if val == val.to_integral_value(): return int(val)
+        return float(val.normalize())
 
     def get_batches(self, obj):
         """Return active batches for POS catalog awareness"""
@@ -271,6 +292,9 @@ class ProductDetailSerializer(serializers.ModelSerializer):
     active_offer_text = serializers.SerializerMethodField()
     offers = serializers.SerializerMethodField()
     is_wishlisted = serializers.SerializerMethodField()
+    quantity = serializers.SerializerMethodField()
+    minimum_order_quantity = serializers.SerializerMethodField()
+    maximum_order_quantity = serializers.SerializerMethodField()
     
     class Meta:
         model = Product
@@ -285,6 +309,24 @@ class ProductDetailSerializer(serializers.ModelSerializer):
             'average_rating', 'review_count', 'created_at', 'updated_at',
             'product_group', 'active_offer_text', 'offers', 'is_wishlisted', 'barcode'
         ]
+
+    def get_quantity(self, obj):
+        val = obj.quantity
+        if val is None: return 0
+        if val == val.to_integral_value(): return int(val)
+        return float(val.normalize())
+
+    def get_minimum_order_quantity(self, obj):
+        val = obj.minimum_order_quantity
+        if val is None: return 1
+        if val == val.to_integral_value(): return int(val)
+        return float(val.normalize())
+
+    def get_maximum_order_quantity(self, obj):
+        val = obj.maximum_order_quantity
+        if val is None: return None
+        if val == val.to_integral_value(): return int(val)
+        return float(val.normalize())
 
     def get_batches(self, obj):
         """Only return active batches for detail view"""

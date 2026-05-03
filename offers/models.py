@@ -63,8 +63,8 @@ class Offer(models.Model):
     )
     
     # BXGY Specifics
-    buy_quantity = models.PositiveIntegerField(null=True, blank=True, help_text="Buy X")
-    get_quantity = models.PositiveIntegerField(null=True, blank=True, help_text="Get Y")
+    buy_quantity = models.DecimalField(max_digits=12, decimal_places=3, null=True, blank=True, help_text="Buy X")
+    get_quantity = models.DecimalField(max_digits=12, decimal_places=3, null=True, blank=True, help_text="Get Y")
     is_cheapest_free = models.BooleanField(default=True, help_text="If mixing items, cheapest is free")
     
     BXGY_STRATEGY_CHOICES = [
@@ -79,7 +79,7 @@ class Offer(models.Model):
     )
     
     # Tiered Specifics
-    tiered_min_quantity = models.PositiveIntegerField(null=True, blank=True)
+    tiered_min_quantity = models.DecimalField(max_digits=12, decimal_places=3, null=True, blank=True)
     
     # Validity
     start_date = models.DateTimeField(default=timezone.now)

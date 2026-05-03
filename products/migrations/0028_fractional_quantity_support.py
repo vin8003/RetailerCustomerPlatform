@@ -13,26 +13,26 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='product',
             name='quantity',
-            field=models.DecimalField(decimal_places=3, default=0, max_digits=10),
+            field=models.DecimalField(decimal_places=3, default=0, max_digits=12),
         ),
         migrations.AlterField(
             model_name='productbatch',
             name='quantity',
-            field=models.DecimalField(decimal_places=3, default=0, max_digits=10),
+            field=models.DecimalField(decimal_places=3, default=0, max_digits=12),
         ),
         migrations.AlterField(
             model_name='productinventorylog',
             name='new_quantity',
-            field=models.DecimalField(decimal_places=3, max_digits=10),
+            field=models.DecimalField(decimal_places=3, max_digits=12),
         ),
         migrations.AlterField(
             model_name='productinventorylog',
             name='previous_quantity',
-            field=models.DecimalField(decimal_places=3, max_digits=10),
+            field=models.DecimalField(decimal_places=3, max_digits=12),
         ),
         migrations.AlterField(
             model_name='productinventorylog',
             name='quantity_change',
-            field=models.DecimalField(decimal_places=3, max_digits=10),
+            field=models.DecimalField(decimal_places=3, max_digits=12),
         ),
     ]
