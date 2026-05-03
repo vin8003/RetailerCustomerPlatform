@@ -469,3 +469,61 @@ class TestCreateRetailerRating:
             {"rating": 4},
         )
         assert res.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.django_db
+class TestOrderListQueryParity:
+
+    def test_order_history_filters_match_previous_behavior(self, api_client, customer, retailer, address):
+        from datetime import timezone as dt_timezone
+        from django.utils import timezone
+
+        target = Order.objects.create(
+            customer=customer,
+            retailer=retailer,
+            delivery_address=address,
+            delivery_mode="delivery",
+            payment_mode="cash",
+            subtotal=Decimal("100.00"),
+            total_amount=Decimal("100.00"),
+            status="out_for_delivery",
+        )
+        target.created_at = timezone.datetime(2025, 1, 15, tzinfo=dt_timezone.utc)
+        target.save(update_fields=["created_at"])
+
+        other = Order.objects.create(
+            customer=customer,
+            retailer=retailer,
+            delivery_address=address,
+            delivery_mode="delivery",
+            payment_mode="cash",
+            subtotal=Decimal("50.00"),
+            total_amount=Decimal("50.00"),
+            status="pending",
+        )
+        other.created_at = timezone.datetime(2024, 1, 15, tzinfo=dt_timezone.utc)
+        other.save(update_fields=["created_at"])
+
+        api_client.force_authenticate(user=customer)
+        res = api_client.get(reverse("get_order_history"), {
+            "status": "shipped",
+            "search": target.order_number,
+            "start_date": "2025-01-01",
+            "end_date": "2025-12-31",
+        })
+
+        assert res.status_code == status.HTTP_200_OK
+        assert res.data["count"] == 1
+        assert res.data["results"][0]["id"] == target.id
+
+    def test_history_and_current_pagination_payload_keys(self, api_client, customer, order):
+        api_client.force_authenticate(user=customer)
+
+        history_res = api_client.get(reverse("get_order_history"), {"page_size": 1})
+        current_res = api_client.get(reverse("get_current_orders"), {"page_size": 1})
+
+        assert history_res.status_code == status.HTTP_200_OK
+        assert current_res.status_code == status.HTTP_200_OK
+
+        for payload in [history_res.data, current_res.data]:
+            assert set(payload.keys()) == {"count", "next", "previous", "results"}

@@ -3,7 +3,7 @@ from rest_framework import status, permissions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
-from django.db.models import Q, Sum, Count, Avg, F
+from django.db.models import Q, Sum, Avg, F
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.http import Http404
@@ -14,6 +14,7 @@ import re
 from common.error_utils import format_exception
 
 from .models import Order, OrderItem, OrderStatusLog, OrderFeedback, OrderReturn, OrderChatMessage, RetailerRating
+from .queries import base_order_queryset_for_user, apply_order_filters
 from .serializers import (
     OrderListSerializer, OrderDetailSerializer, OrderCreateSerializer,
     OrderStatusUpdateSerializer, OrderFeedbackSerializer, OrderReturnSerializer,
@@ -23,7 +24,7 @@ from .serializers import (
 from retailers.models import RetailerProfile, RetailerReview, RetailerRewardConfig
 from retailers.serializers import RetailerReviewSerializer
 from customers.models import CustomerAddress, CustomerLoyalty
-from django.db.models import Exists, OuterRef, Prefetch
+from django.db.models import Prefetch
 from common.notifications import send_push_notification
 
 logger = logging.getLogger(__name__)
@@ -118,52 +119,22 @@ def get_current_orders(request):
     """
     try:
         user = request.user
-        
-        # Base queryset with optimizations
-        # We annotate items_count to avoid N+1 count queries
-        # Annotate has_feedback and has_rating efficiently
-        
-        has_feedback_subquery = Exists(OrderFeedback.objects.filter(order=OuterRef('pk')))
-        has_rating_subquery = Exists(RetailerRating.objects.filter(order=OuterRef('pk')))
-        
-        base_qs = Order.objects.select_related('retailer', 'customer').annotate(
-            items_count_annotated=Count('items'),
-            has_feedback_annotated=has_feedback_subquery,
-            has_rating_annotated=has_rating_subquery
-        )
 
-        if user.user_type == 'customer':
-            orders = base_qs.filter(
-                customer=user,
-                status__in=['pending', 'confirmed', 'processing', 'packed', 'out_for_delivery']
-            ).order_by('-created_at')
-        elif user.user_type == 'retailer':
-            try:
-                retailer = RetailerProfile.objects.get(user=user)
-                orders = base_qs.filter(
-                    retailer=retailer,
-                    status__in=['pending', 'confirmed', 'processing', 'packed', 'out_for_delivery']
-                ).order_by('-created_at')
-            except RetailerProfile.DoesNotExist:
-                return Response(
-                    {'error': 'Retailer profile not found'}, 
-                    status=status.HTTP_404_NOT_FOUND
-                )
-        else:
+        try:
+            orders = base_order_queryset_for_user(user)
+        except RetailerProfile.DoesNotExist:
             return Response(
-                {'error': 'Invalid user type'}, 
+                {'error': 'Retailer profile not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except ValueError:
+            return Response(
+                {'error': 'Invalid user type'},
                 status=status.HTTP_403_FORBIDDEN
             )
-        
-        # Apply filters
-        status_filter = request.query_params.get('status')
-        if status_filter:
-            orders = orders.filter(status=status_filter)
-        
-        # Search by order number
-        search = request.query_params.get('search')
-        if search:
-            orders = orders.filter(order_number__icontains=search)
+
+        orders = orders.filter(status__in=['pending', 'confirmed', 'processing', 'packed', 'out_for_delivery'])
+        orders = apply_order_filters(orders, request.query_params)
         
         # Pagination
         paginator = OrderPagination()
@@ -192,69 +163,21 @@ def get_order_history(request):
     """
     try:
         user = request.user
-        
-        # Base queryset with optimizations
-        has_feedback_subquery = Exists(OrderFeedback.objects.filter(order=OuterRef('pk')))
-        has_rating_subquery = Exists(RetailerRating.objects.filter(order=OuterRef('pk')))
-        
-        # Base queryset with optimizations
-        base_qs = Order.objects.select_related('retailer', 'customer').annotate(
-            items_count_annotated=Count('items'),
-            has_feedback_annotated=has_feedback_subquery,
-            has_rating_annotated=has_rating_subquery
-        )
 
-        if user.user_type == 'customer':
-            orders = base_qs.filter(
-                customer=user
-            ).order_by('-created_at')
-        elif user.user_type == 'retailer':
-            try:
-                retailer = RetailerProfile.objects.get(user=user)
-                orders = base_qs.filter(
-                    retailer=retailer
-                ).order_by('-created_at')
-            except RetailerProfile.DoesNotExist:
-                return Response(
-                    {'error': 'Retailer profile not found'}, 
-                    status=status.HTTP_404_NOT_FOUND
-                )
-        else:
+        try:
+            orders = base_order_queryset_for_user(user)
+        except RetailerProfile.DoesNotExist:
             return Response(
-                {'error': 'Invalid user type'}, 
+                {'error': 'Retailer profile not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except ValueError:
+            return Response(
+                {'error': 'Invalid user type'},
                 status=status.HTTP_403_FORBIDDEN
             )
-        
-        # Apply filters
-        status_filter = request.query_params.get('status')
-        if status_filter:
-            # Handle aliases for frontend compatibility
-            if status_filter == 'shipped':
-                status_filter = 'out_for_delivery'
-            orders = orders.filter(status=status_filter)
-        
-        # Date range filtering
-        start_date = request.query_params.get('start_date')
-        end_date = request.query_params.get('end_date')
-        
-        if start_date:
-            try:
-                start_date = timezone.datetime.strptime(start_date, '%Y-%m-%d').date()
-                orders = orders.filter(created_at__date__gte=start_date)
-            except ValueError:
-                pass
-        
-        if end_date:
-            try:
-                end_date = timezone.datetime.strptime(end_date, '%Y-%m-%d').date()
-                orders = orders.filter(created_at__date__lte=end_date)
-            except ValueError:
-                pass
-        
-        # Search by order number
-        search = request.query_params.get('search')
-        if search:
-            orders = orders.filter(order_number__icontains=search)
+
+        orders = apply_order_filters(orders, request.query_params)
         
         # Pagination
         paginator = OrderPagination()
