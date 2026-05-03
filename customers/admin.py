@@ -1,5 +1,9 @@
 from django.contrib import admin
-from .models import CustomerProfile, CustomerAddress, CustomerWishlist, CustomerNotification, CustomerSearchHistory
+from .models import (
+    CustomerProfile, CustomerAddress, CustomerWishlist, 
+    CustomerNotification, CustomerSearchHistory, CustomerLoyalty,
+    LoyaltyTransaction, CustomerReferral
+)
 
 
 @admin.register(CustomerProfile)
@@ -105,3 +109,24 @@ class CustomerSearchHistoryAdmin(admin.ModelAdmin):
     search_fields = ['customer__username', 'query']
     ordering = ['-created_at']
     readonly_fields = ['created_at']
+
+
+@admin.register(CustomerLoyalty)
+class CustomerLoyaltyAdmin(admin.ModelAdmin):
+    list_display = ['customer', 'retailer', 'points', 'updated_at']
+    list_filter = ['updated_at']
+    search_fields = ['customer__username', 'retailer__shop_name']
+
+
+@admin.register(LoyaltyTransaction)
+class LoyaltyTransactionAdmin(admin.ModelAdmin):
+    list_display = ['customer', 'retailer', 'amount', 'transaction_type', 'expiry_date', 'is_expired', 'created_at']
+    list_filter = ['transaction_type', 'is_expired', 'created_at']
+    search_fields = ['customer__username', 'retailer__shop_name', 'description']
+
+
+@admin.register(CustomerReferral)
+class CustomerReferralAdmin(admin.ModelAdmin):
+    list_display = ['referrer', 'referee', 'retailer', 'is_rewarded', 'created_at']
+    list_filter = ['is_rewarded', 'created_at']
+    search_fields = ['referrer__username', 'referee__username', 'retailer__shop_name']

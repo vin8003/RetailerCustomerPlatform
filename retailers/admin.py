@@ -1,7 +1,8 @@
 from django.contrib import admin
 from .models import (
     RetailerProfile, RetailerOperatingHours, RetailerCategory,
-    RetailerCategoryMapping, RetailerReview
+    RetailerCategoryMapping, RetailerReview, RetailerRewardConfig,
+    RetailerBlacklist, Supplier, RetailerCustomerMapping, CustomerLedger
 )
 
 
@@ -81,3 +82,40 @@ class RetailerReviewAdmin(admin.ModelAdmin):
     search_fields = ['retailer__shop_name', 'customer__username']
     ordering = ['-created_at']
     readonly_fields = ['created_at', 'updated_at']
+
+
+@admin.register(RetailerRewardConfig)
+class RetailerRewardConfigAdmin(admin.ModelAdmin):
+    list_display = ['retailer', 'earning_type', 'loyalty_earning_value', 'is_referral_enabled', 'is_active']
+    list_filter = ['earning_type', 'is_referral_enabled', 'is_active']
+    search_fields = ['retailer__shop_name']
+
+
+@admin.register(RetailerBlacklist)
+class RetailerBlacklistAdmin(admin.ModelAdmin):
+    list_display = ['retailer', 'customer', 'reason', 'created_at']
+    list_filter = ['created_at']
+    search_fields = ['retailer__shop_name', 'customer__username', 'reason']
+
+
+@admin.register(Supplier)
+class SupplierAdmin(admin.ModelAdmin):
+    list_display = ['company_name', 'retailer', 'contact_person', 'phone_number', 'balance_due', 'is_active']
+    list_filter = ['is_active', 'created_at']
+    search_fields = ['company_name', 'contact_person', 'phone_number', 'retailer__shop_name']
+
+
+@admin.register(RetailerCustomerMapping)
+class RetailerCustomerMappingAdmin(admin.ModelAdmin):
+    list_display = ['retailer', 'customer', 'nickname', 'customer_type', 'current_balance', 'credit_limit', 'total_orders', 'total_spent']
+    list_filter = ['customer_type', 'created_at']
+    search_fields = ['retailer__shop_name', 'customer__username', 'customer__phone_number', 'nickname', 'tags']
+    readonly_fields = ['total_orders', 'total_spent', 'last_order_date', 'created_at', 'updated_at']
+
+
+@admin.register(CustomerLedger)
+class CustomerLedgerAdmin(admin.ModelAdmin):
+    list_display = ['mapping', 'transaction_type', 'amount', 'balance_after', 'payment_mode', 'created_at']
+    list_filter = ['transaction_type', 'payment_mode', 'created_at']
+    search_fields = ['mapping__customer__username', 'mapping__nickname', 'notes']
+    readonly_fields = ['created_at']
