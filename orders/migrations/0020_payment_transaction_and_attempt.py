@@ -22,7 +22,11 @@ def backfill_payment_transactions(apps, schema_editor):
         if not rows:
             total = order.total_amount or Decimal('0.00')
             if total > 0:
-                fallback_method = order.payment_mode if order.payment_mode in {'cash', 'upi', 'card', 'credit', 'cash_pickup'} else 'cash'
+                fallback_method = (
+                    order.payment_mode
+                    if order.payment_mode in {'cash', 'upi', 'online', 'card', 'credit', 'cash_pickup', 'split'}
+                    else 'cash'
+                )
                 rows.append((fallback_method, total))
 
         for method, amount in rows:

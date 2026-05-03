@@ -345,42 +345,6 @@ class Order(models.Model):
         
         return True
 
-
-class PaymentTransaction(models.Model):
-    PAYMENT_METHOD_CHOICES = Order.PAYMENT_MODE_CHOICES
-    PAYMENT_STATUS_CHOICES = Order.PAYMENT_STATUS_CHOICES
-
-    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='payment_transactions')
-    method = models.CharField(max_length=20, choices=PAYMENT_METHOD_CHOICES)
-    amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
-    reference_id = models.CharField(max_length=100, blank=True, null=True)
-    status = models.CharField(max_length=50, choices=PAYMENT_STATUS_CHOICES, default='pending_payment')
-    metadata = models.JSONField(default=dict, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        db_table = 'payment_transaction'
-        ordering = ['-created_at', '-id']
-
-
-class PaymentAttempt(models.Model):
-    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='payment_attempts')
-    attempted_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='payment_attempts'
-    )
-    previous_status = models.CharField(max_length=50, choices=Order.PAYMENT_STATUS_CHOICES, blank=True, null=True)
-    new_status = models.CharField(max_length=50, choices=Order.PAYMENT_STATUS_CHOICES)
-    reason = models.TextField(blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        db_table = 'payment_attempt'
-        ordering = ['-created_at', '-id']
-
     def award_loyalty_points(self):
         """Awards loyalty points to the customer linked to this order"""
         if not self.customer:
@@ -417,7 +381,7 @@ class PaymentAttempt(models.Model):
                 )
                 loyalty.points += total_to_award
                 loyalty.save()
-                
+
                 # Update order to reflect actual points earned
                 self.points_earned = total_to_award
                 self.save(update_fields=['points_earned'])
@@ -432,61 +396,45 @@ class PaymentAttempt(models.Model):
                     expiry_date=expiry_date
                 )
 
-            # 2. Process Referral Reward
-            if config.is_referral_enabled:
-                from customers.models import CustomerReferral
-                referral = CustomerReferral.objects.filter(
-                    retailer=self.retailer,
-                    referee=self.customer,
-                    is_rewarded=False
-                ).first()
-                
-                if referral and self.total_amount >= config.min_referral_order_amount:
-                    # Reward Referrer
-                    referrer_loyalty, _ = CustomerLoyalty.objects.get_or_create(
-                        customer=referral.referrer,
-                        retailer=self.retailer
-                    )
-                    referrer_loyalty.points += config.referral_reward_points
-                    referrer_loyalty.save()
-                    
-                    # Log referer earned transaction
-                    LoyaltyTransaction.objects.create(
-                        customer=referral.referrer,
-                        retailer=self.retailer,
-                        amount=config.referral_reward_points,
-                        transaction_type='earn',
-                        description=f"Referral reward (for referee {self.customer.username})",
-                        expiry_date=expiry_date
-                    )
-
-                    # Reward Referee
-                    referee_loyalty, _ = CustomerLoyalty.objects.get_or_create(
-                        customer=self.customer,
-                        retailer=self.retailer
-                    )
-                    referee_loyalty.points += config.referee_reward_points
-                    referee_loyalty.save()
-                    
-                    # Log referee earned transaction
-                    LoyaltyTransaction.objects.create(
-                        customer=self.customer,
-                        retailer=self.retailer,
-                        amount=config.referee_reward_points,
-                        transaction_type='earn',
-                        description=f"Referral reward (referred by {referral.referrer.username})",
-                        expiry_date=expiry_date
-                    )
-
-                    # Mark referral as rewarded
-                    referral.is_rewarded = True
-                    referral.save()
             return True
-        except Exception as e:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.error(f"Error awarding points: {e}")
+        except Exception:
             return False
+
+
+class PaymentTransaction(models.Model):
+    PAYMENT_METHOD_CHOICES = Order.PAYMENT_MODE_CHOICES
+    PAYMENT_STATUS_CHOICES = Order.PAYMENT_STATUS_CHOICES
+
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='payment_transactions')
+    method = models.CharField(max_length=20, choices=PAYMENT_METHOD_CHOICES)
+    amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
+    reference_id = models.CharField(max_length=100, blank=True, null=True)
+    status = models.CharField(max_length=50, choices=PAYMENT_STATUS_CHOICES, default='pending_payment')
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'payment_transaction'
+        ordering = ['-created_at', '-id']
+
+
+class PaymentAttempt(models.Model):
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='payment_attempts')
+    attempted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='payment_attempts'
+    )
+    previous_status = models.CharField(max_length=50, choices=Order.PAYMENT_STATUS_CHOICES, blank=True, null=True)
+    new_status = models.CharField(max_length=50, choices=Order.PAYMENT_STATUS_CHOICES)
+    reason = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'payment_attempt'
+        ordering = ['-created_at', '-id']
 
 
 class OrderItem(models.Model):
