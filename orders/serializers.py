@@ -657,6 +657,9 @@ class OrderStatusUpdateSerializer(serializers.Serializer):
             instance.estimated_ready_time = timezone.now() + timedelta(minutes=preparation_time_minutes)
             instance.save()
         
+        # Refresh status to observe concurrent updates before final transition guard
+        instance.refresh_from_db(fields=['status'])
+
         # Guard transition policy before mutating order status
         try:
             ensure_transition_allowed(instance.status, new_status)
