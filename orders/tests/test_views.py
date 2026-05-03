@@ -4,6 +4,7 @@ from django.urls import reverse
 from rest_framework import status
 from unittest.mock import patch
 from orders.models import Order, OrderItem, OrderFeedback, OrderReturn, OrderChatMessage
+from orders.models import PaymentTransaction
 
 
 @pytest.mark.django_db
@@ -299,6 +300,42 @@ class TestPaymentFlow:
         assert res.status_code == status.HTTP_200_OK
         order.refresh_from_db()
         assert order.payment_status == "pending_verification"
+
+
+@pytest.mark.django_db
+class TestPaymentSerializationCompatibility:
+    def test_order_detail_schema_unchanged_with_transactions(self, api_client, customer, order):
+        PaymentTransaction.objects.create(
+            order=order,
+            method="cash",
+            amount=Decimal("90.00"),
+            status="verified",
+        )
+        PaymentTransaction.objects.create(
+            order=order,
+            method="upi",
+            amount=Decimal("110.00"),
+            reference_id="123456789012",
+            status="pending_verification",
+        )
+        api_client.force_authenticate(user=customer)
+        res = api_client.get(reverse("get_order_detail", args=[order.id]))
+        assert res.status_code == status.HTTP_200_OK
+        assert res.data["payment_status"] == "pending_verification"
+        assert Decimal(str(res.data["cash_amount"])) == Decimal("90.00")
+        assert Decimal(str(res.data["upi_amount"])) == Decimal("110.00")
+
+    def test_order_detail_legacy_fallback_without_transactions(self, api_client, customer, order):
+        order.cash_amount = Decimal("75.00")
+        order.payment_status = "verified"
+        order.payment_reference_id = "LEGACYREF"
+        order.save()
+        api_client.force_authenticate(user=customer)
+        res = api_client.get(reverse("get_order_detail", args=[order.id]))
+        assert res.status_code == status.HTTP_200_OK
+        assert res.data["payment_status"] == "verified"
+        assert res.data["payment_reference_id"] == "LEGACYREF"
+        assert Decimal(str(res.data["cash_amount"])) == Decimal("75.00")
 
     def test_submit_payment_non_upi(self, api_client, customer, order):
         order.payment_mode = "cash"

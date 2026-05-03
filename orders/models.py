@@ -345,6 +345,42 @@ class Order(models.Model):
         
         return True
 
+
+class PaymentTransaction(models.Model):
+    PAYMENT_METHOD_CHOICES = Order.PAYMENT_MODE_CHOICES
+    PAYMENT_STATUS_CHOICES = Order.PAYMENT_STATUS_CHOICES
+
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='payment_transactions')
+    method = models.CharField(max_length=20, choices=PAYMENT_METHOD_CHOICES)
+    amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
+    reference_id = models.CharField(max_length=100, blank=True, null=True)
+    status = models.CharField(max_length=50, choices=PAYMENT_STATUS_CHOICES, default='pending_payment')
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'payment_transaction'
+        ordering = ['-created_at', '-id']
+
+
+class PaymentAttempt(models.Model):
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='payment_attempts')
+    attempted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='payment_attempts'
+    )
+    previous_status = models.CharField(max_length=50, choices=Order.PAYMENT_STATUS_CHOICES, blank=True, null=True)
+    new_status = models.CharField(max_length=50, choices=Order.PAYMENT_STATUS_CHOICES)
+    reason = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'payment_attempt'
+        ordering = ['-created_at', '-id']
+
     def award_loyalty_points(self):
         """Awards loyalty points to the customer linked to this order"""
         if not self.customer:
