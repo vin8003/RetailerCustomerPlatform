@@ -199,151 +199,9 @@ class Order(models.Model):
         return self.status in ['delivered', 'cancelled', 'returned']
     
     def update_status(self, new_status, user=None):
-        """Update order status with timestamp and handle associated business logic"""
-        from django.utils import timezone
-        
-        old_status = self.status
-        self.status = new_status
-        
-        # Set status-specific timestamps
-        if new_status == 'confirmed':
-            self.confirmed_at = timezone.now()
-        elif new_status == 'delivered':
-            self.delivered_at = timezone.now()
-            
-            # Award cashback points
-            if old_status != 'delivered':
-                self.award_loyalty_points()
-                    
-        elif new_status == 'cancelled':
-            self.cancelled_at = timezone.now()
-            
-            # Refund points if order used any
-            if old_status != 'cancelled' and self.points_redeemed > 0 and self.customer:
-                from customers.models import CustomerLoyalty, LoyaltyTransaction
-                try:
-                    loyalty, _ = CustomerLoyalty.objects.get_or_create(
-                        customer=self.customer,
-                        retailer=self.retailer
-                    )
-                    loyalty.points += self.points_redeemed
-                    loyalty.save()
-                    
-                    # Create refund transaction
-                    LoyaltyTransaction.objects.create(
-                        customer=self.customer,
-                        retailer=self.retailer,
-                        amount=self.points_redeemed,
-                        transaction_type='refund',
-                        description=f"Refund from cancelled order #{self.order_number}"
-                    )
-                except Exception as e:
-                    import logging
-                    logger = logging.getLogger(__name__)
-                    logger.error(f"Error refunding points: {e}")
-                
-            # Revert earned points if accidentally marked delivered then cancelled
-            if old_status == 'delivered' and self.points_earned > 0 and self.customer:
-                from customers.models import CustomerLoyalty, LoyaltyTransaction
-                try:
-                    loyalty, _ = CustomerLoyalty.objects.get_or_create(
-                        customer=self.customer,
-                        retailer=self.retailer
-                    )
-                    loyalty.points -= self.points_earned
-                    if loyalty.points < 0:
-                        loyalty.points = 0
-                    loyalty.save()
-                    
-                    LoyaltyTransaction.objects.create(
-                        customer=self.customer,
-                        retailer=self.retailer,
-                        amount=self.points_earned,
-                        transaction_type='redeem', # Negative adjust
-                        description=f"Reverted earned points (Order #{self.order_number} cancelled after delivery)"
-                    )
-                    self.points_earned = 0
-                except Exception as e:
-                     import logging
-                     logger = logging.getLogger(__name__)
-                     logger.error(f"Error reverting points: {e}")
-        
-        self.save()
-        
-        # Create status log
-        OrderStatusLog.objects.create(
-            order=self,
-            old_status=old_status,
-            new_status=new_status,
-            changed_by=user
-        )
-        
-        # Create notification for customer
-        from customers.models import CustomerNotification
-        
-        status_messages = {
-            'confirmed': 'Your order has been confirmed',
-            'processing': 'Your order is being processed',
-            'packed': 'Your order has been packed',
-            'out_for_delivery': 'Your order is out for delivery',
-            'delivered': 'Your order has been delivered',
-            'cancelled': 'Your order has been cancelled',
-            'returned': 'Your order has been returned',
-            'waiting_for_customer_approval': 'Order modifications require your approval'
-        }
-        
-        if new_status in status_messages and self.customer:
-            msg = status_messages[new_status]
-            CustomerNotification.objects.create(
-                customer=self.customer,
-                notification_type='order_update',
-                title=f'Order #{self.order_number} Update',
-                message=msg
-            )
-            
-            # Send Push Notification
-            from common.notifications import send_push_notification, send_silent_update
-            send_push_notification(
-                user=self.customer,
-                title=f"Order Update: #{self.order_number}",
-                message=msg,
-                data={
-                    'type': 'order_status_update',
-                    'order_id': str(self.id),
-                    'status': new_status
-                }
-            )
-            
-            # Send silent update to refresh UI
-            send_silent_update(
-                user=self.customer,
-                event_type='order_refresh',
-                data={'order_id': str(self.id)}
-            )
-            
-            # Also notify and refresh Retailer UI
-            send_silent_update(
-                user=self.retailer.user,
-                event_type='order_refresh',
-                data={'order_id': str(self.id)}
-            )
-            
-            # If customer updated the status (accepted/rejected), 
-            # send a visible push to the retailer
-            if user == self.customer:
-                action_text = "accepted" if new_status == 'confirmed' else "rejected"
-                send_push_notification(
-                    user=self.retailer.user,
-                    title=f"Order Update: #{self.order_number}",
-                    message=f"Customer has {action_text} the order modifications.",
-                    data={
-                        'type': 'order_status_update',
-                        'order_id': str(self.id),
-                        'status': new_status
-                    }
-                )
-        
-        return True
+        """Thin compatibility façade that delegates status transitions to services."""
+        from orders.services.status_service import update_order_status
+        return update_order_status(self, new_status, user)
 
     def award_loyalty_points(self):
         """Awards loyalty points to the customer linked to this order"""
@@ -739,21 +597,8 @@ def update_retailer_rating_stats(sender, instance, created, **kwargs):
     Update retailer's average rating when a new feedback is added
     """
     if created:
-        retailer = instance.order.retailer
-        
-        # Calculate new average
-        # We need to import RetailerReview if we want to include those too, 
-        # but requirements say "Retailer’s overall rating = average of all ratings received from customers".
-        # OrderFeedback is the "Customer -> Retailer Rating" per completed order.
-        # RetailerReview might be a separate "general review" thing.
-        # Let's check if we should aggregate ALL OrderFeedback for this retailer.
-        
-        avg_rating = OrderFeedback.objects.filter(order__retailer=retailer).aggregate(Avg('overall_rating'))['overall_rating__avg'] or 0
-        total_ratings = OrderFeedback.objects.filter(order__retailer=retailer).count()
-        
-        retailer.average_rating = round(avg_rating, 2)
-        retailer.total_ratings = total_ratings
-        retailer.save()
+        from orders.services.rating_service import sync_retailer_feedback_stats
+        sync_retailer_feedback_stats(instance.order.retailer)
 
 
 @receiver(post_save, sender=RetailerRating)
@@ -761,24 +606,6 @@ def update_customer_rating_stats(sender, instance, created, **kwargs):
     """
     Update customer's average rating and handle blacklist
     """
-    # 1. Handle Blacklist (0 stars)
-    if instance.rating == 0:
-        from retailers.models import RetailerBlacklist
-        RetailerBlacklist.objects.get_or_create(
-            retailer=instance.retailer,
-            customer=instance.customer,
-            defaults={'reason': f"Automated blacklist due to 0-star rating on Order #{instance.order.order_number}"}
-        )
-    
-    # 2. Update Average Rating
-    if created or instance.rating >= 0: 
-        from customers.models import CustomerProfile
-        # Ensure CustomerProfile exists (especially for shadow users)
-        customer_profile, _ = CustomerProfile.objects.get_or_create(user=instance.customer)
-        
-        avg_rating = RetailerRating.objects.filter(customer=instance.customer).aggregate(Avg('rating'))['rating__avg'] or 0
-        total_count = RetailerRating.objects.filter(customer=instance.customer).count()
-        
-        customer_profile.average_rating = round(avg_rating, 2)
-        customer_profile.total_ratings = total_count
-        customer_profile.save()
+    if created or instance.rating >= 0:
+        from orders.services.rating_service import apply_retailer_rating_effects
+        apply_retailer_rating_effects(instance)
