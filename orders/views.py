@@ -3,7 +3,8 @@ from rest_framework import status, permissions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
-from django.db.models import Q, Sum, Count, Avg, F
+from django.db.models import Q, Sum, Count, Avg, F, Value, DecimalField, BooleanField, CharField, DateTimeField, IntegerField, Subquery
+from django.db.models.functions import Coalesce
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.http import Http404
@@ -14,6 +15,7 @@ import re
 from common.error_utils import format_exception
 
 from .models import Order, OrderItem, OrderStatusLog, OrderFeedback, OrderReturn, OrderChatMessage, RetailerRating
+from .projections import OrderProjectionAdapter
 from .serializers import (
     OrderListSerializer, OrderDetailSerializer, OrderCreateSerializer,
     OrderStatusUpdateSerializer, OrderFeedbackSerializer, OrderReturnSerializer,
@@ -33,6 +35,57 @@ class OrderPagination(PageNumberPagination):
     page_size = 20
     page_size_query_param = 'page_size'
     max_page_size = 100
+
+
+def _order_queryset_with_relations():
+    return Order.objects.select_related(
+        'retailer', 'customer', 'customer__customer_profile', 'delivery_address'
+    ).prefetch_related(
+        'returns',
+        'feedback',
+        'retailer_rating',
+        'applied_offers__offer',
+        'items__product',
+    )
+
+
+def _annotated_order_queryset():
+    feedback_qs = OrderFeedback.objects.filter(order=OuterRef('pk'))
+    order_return_field_names = {field.name for field in OrderReturn._meta.get_fields()}
+    if 'refund_amount' in order_return_field_names:
+        refund_amount_qs = (
+            OrderReturn.objects.filter(order=OuterRef('pk'))
+            .values('order')
+            .annotate(total_refund=Sum('refund_amount'))
+            .values('total_refund')[:1]
+        )
+        refund_amount_annotation = Coalesce(
+            Subquery(refund_amount_qs, output_field=DecimalField(max_digits=10, decimal_places=2)),
+            Value(Decimal('0.00')),
+            output_field=DecimalField(max_digits=10, decimal_places=2),
+        )
+    else:
+        refund_amount_annotation = Value(
+            Decimal('0.00'),
+            output_field=DecimalField(max_digits=10, decimal_places=2),
+        )
+    return _order_queryset_with_relations().annotate(
+        items_count_annotated=Count('items', distinct=True),
+        refund_amount_annotated=refund_amount_annotation,
+        is_returned_annotated=Exists(OrderReturn.objects.filter(order=OuterRef('pk'))),
+        has_feedback_annotated=Exists(feedback_qs),
+        has_rating_annotated=Exists(RetailerRating.objects.filter(order=OuterRef('pk'))),
+        feedback_overall_rating_annotated=Subquery(feedback_qs.values('overall_rating')[:1], output_field=IntegerField()),
+        feedback_comment_annotated=Subquery(feedback_qs.values('comment')[:1], output_field=CharField()),
+        feedback_created_at_annotated=Subquery(feedback_qs.values('created_at')[:1], output_field=DateTimeField()),
+    ).annotate(
+        net_amount_annotated=F('total_amount') - F('refund_amount_annotated')
+    )
+
+
+def _adapt_orders(rows):
+    return [OrderProjectionAdapter(o) for o in rows]
+
 
 
 @api_view(['POST'])
@@ -123,14 +176,7 @@ def get_current_orders(request):
         # We annotate items_count to avoid N+1 count queries
         # Annotate has_feedback and has_rating efficiently
         
-        has_feedback_subquery = Exists(OrderFeedback.objects.filter(order=OuterRef('pk')))
-        has_rating_subquery = Exists(RetailerRating.objects.filter(order=OuterRef('pk')))
-        
-        base_qs = Order.objects.select_related('retailer', 'customer').annotate(
-            items_count_annotated=Count('items'),
-            has_feedback_annotated=has_feedback_subquery,
-            has_rating_annotated=has_rating_subquery
-        )
+        base_qs = _annotated_order_queryset()
 
         if user.user_type == 'customer':
             orders = base_qs.filter(
@@ -170,10 +216,10 @@ def get_current_orders(request):
         page = paginator.paginate_queryset(orders, request)
         
         if page is not None:
-            serializer = OrderListSerializer(page, many=True)
+            serializer = OrderListSerializer(_adapt_orders(page), many=True)
             return paginator.get_paginated_response(serializer.data)
         
-        serializer = OrderListSerializer(orders, many=True)
+        serializer = OrderListSerializer(_adapt_orders(orders), many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     except Exception as e:
@@ -194,15 +240,7 @@ def get_order_history(request):
         user = request.user
         
         # Base queryset with optimizations
-        has_feedback_subquery = Exists(OrderFeedback.objects.filter(order=OuterRef('pk')))
-        has_rating_subquery = Exists(RetailerRating.objects.filter(order=OuterRef('pk')))
-        
-        # Base queryset with optimizations
-        base_qs = Order.objects.select_related('retailer', 'customer').annotate(
-            items_count_annotated=Count('items'),
-            has_feedback_annotated=has_feedback_subquery,
-            has_rating_annotated=has_rating_subquery
-        )
+        base_qs = _annotated_order_queryset()
 
         if user.user_type == 'customer':
             orders = base_qs.filter(
@@ -261,10 +299,10 @@ def get_order_history(request):
         page = paginator.paginate_queryset(orders, request)
         
         if page is not None:
-            serializer = OrderListSerializer(page, many=True)
+            serializer = OrderListSerializer(_adapt_orders(page), many=True)
             return paginator.get_paginated_response(serializer.data)
         
-        serializer = OrderListSerializer(orders, many=True)
+        serializer = OrderListSerializer(_adapt_orders(orders), many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     except Exception as e:
@@ -285,14 +323,7 @@ def get_order_detail(request, order_id):
         user = request.user
         
         # Optimize queryset for detail view
-        qs = Order.objects.select_related(
-            'retailer', 
-            'customer', 
-            'delivery_address'
-        ).prefetch_related(
-            'items',
-            'items__product'
-        )
+        qs = _annotated_order_queryset()
 
         if user.user_type == 'customer':
             order = get_object_or_404(qs, id=order_id, customer=user)
@@ -324,7 +355,7 @@ def get_order_detail(request, order_id):
             if last_updated == current_updated or last_updated == order.updated_at.isoformat():
                 return Response(status=status.HTTP_304_NOT_MODIFIED)
         
-        serializer = OrderDetailSerializer(order, context={'request': request})
+        serializer = OrderDetailSerializer(OrderProjectionAdapter(order), context={'request': request})
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     except Exception as e:
