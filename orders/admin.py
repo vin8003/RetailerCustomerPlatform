@@ -21,7 +21,10 @@ class OrderAdmin(admin.ModelAdmin):
             'fields': ('order_number', 'customer', 'retailer', 'delivery_address')
         }),
         ('Order Details', {
-            'fields': ('delivery_mode', 'payment_mode', 'status', 'special_instructions')
+            'fields': ('delivery_mode', 'payment_mode', 'status', 'special_instructions', )
+        }),
+        ('Payment breakdown', {
+            'fields': ('cash_amount', 'upi_amount', 'card_amount', 'credit_amount')
         }),
         ('Pricing', {
             'fields': ('subtotal', 'delivery_fee', 'discount_amount', 'total_amount')
