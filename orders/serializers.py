@@ -3,6 +3,7 @@ from rest_framework import serializers
 from django.db import transaction
 from django.utils import timezone
 from .models import Order, OrderItem, OrderStatusLog, OrderDelivery, OrderFeedback, OrderReturn, OrderChatMessage, RetailerRating
+from .domain.status_policy import ensure_transition_allowed, InvalidStatusTransitionError
 from customers.models import CustomerAddress
 from products.models import Product
 from cart.models import Cart, CartItem
@@ -634,23 +635,10 @@ class OrderStatusUpdateSerializer(serializers.Serializer):
         order = self.context['order']
         current_status = order.status
         
-        # Define valid status transitions
-        valid_transitions = {
-            'pending': ['confirmed', 'cancelled', 'waiting_for_customer_approval'],
-            'waiting_for_customer_approval': ['confirmed', 'cancelled', 'pending'],
-            'confirmed': ['processing', 'cancelled'],
-            'processing': ['packed', 'cancelled'],
-            'packed': ['out_for_delivery', 'delivered'],
-            'out_for_delivery': ['delivered', 'cancelled'],
-            'delivered': ['returned'],
-            'cancelled': [],
-            'returned': []
-        }
-        
-        if value not in valid_transitions.get(current_status, []):
-            raise serializers.ValidationError(
-                f"Cannot change status from '{current_status}' to '{value}'"
-            )
+        try:
+            ensure_transition_allowed(current_status, value)
+        except InvalidStatusTransitionError as exc:
+            raise serializers.ValidationError(str(exc))
         
         return value
     
@@ -669,6 +657,12 @@ class OrderStatusUpdateSerializer(serializers.Serializer):
             instance.estimated_ready_time = timezone.now() + timedelta(minutes=preparation_time_minutes)
             instance.save()
         
+        # Guard transition policy before mutating order status
+        try:
+            ensure_transition_allowed(instance.status, new_status)
+        except InvalidStatusTransitionError as exc:
+            raise serializers.ValidationError({'status': [str(exc)]})
+
         # Update order status
         instance.update_status(new_status, user)
         
