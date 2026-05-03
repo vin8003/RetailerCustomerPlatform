@@ -396,6 +396,53 @@ class Order(models.Model):
                     expiry_date=expiry_date
                 )
 
+            # 2. Process referral rewards
+            if config.is_referral_enabled:
+                from customers.models import CustomerReferral
+                referral = CustomerReferral.objects.filter(
+                    retailer=self.retailer,
+                    referee=self.customer,
+                    is_rewarded=False
+                ).first()
+
+                if referral and self.total_amount >= config.min_referral_order_amount:
+                    # Reward referrer
+                    referrer_loyalty, _ = CustomerLoyalty.objects.get_or_create(
+                        customer=referral.referrer,
+                        retailer=self.retailer
+                    )
+                    referrer_loyalty.points += config.referral_reward_points
+                    referrer_loyalty.save()
+
+                    LoyaltyTransaction.objects.create(
+                        customer=referral.referrer,
+                        retailer=self.retailer,
+                        amount=config.referral_reward_points,
+                        transaction_type='earn',
+                        description=f"Referral reward (for referee {self.customer.username})",
+                        expiry_date=expiry_date
+                    )
+
+                    # Reward referee
+                    referee_loyalty, _ = CustomerLoyalty.objects.get_or_create(
+                        customer=self.customer,
+                        retailer=self.retailer
+                    )
+                    referee_loyalty.points += config.referee_reward_points
+                    referee_loyalty.save()
+
+                    LoyaltyTransaction.objects.create(
+                        customer=self.customer,
+                        retailer=self.retailer,
+                        amount=config.referee_reward_points,
+                        transaction_type='earn',
+                        description=f"Referral reward (referred by {referral.referrer.username})",
+                        expiry_date=expiry_date
+                    )
+
+                    referral.is_rewarded = True
+                    referral.save()
+
             return True
         except Exception:
             return False
