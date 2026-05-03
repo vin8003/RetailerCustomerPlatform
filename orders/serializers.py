@@ -8,6 +8,7 @@ from products.models import Product
 from cart.models import Cart, CartItem
 from returns.models import SalesReturnItem
 from django.db.models import Sum
+from .projections import OrderProjectionAdapter
 
 
 class OrderItemSerializer(serializers.ModelSerializer):
@@ -88,10 +89,16 @@ class OrderListSerializer(serializers.ModelSerializer):
     total_amount = serializers.SerializerMethodField()
 
     def get_refund_amount(self, obj):
+        projected = getattr(obj, 'refund_amount', None)
+        if projected is not None:
+            return float(projected)
         val = obj.returns.aggregate(total=Sum('refund_amount'))['total'] or Decimal('0.00')
         return float(val)
 
     def get_net_amount(self, obj):
+        projected = getattr(obj, 'net_amount', None)
+        if projected is not None:
+            return float(projected)
         refund = obj.returns.aggregate(total=Sum('refund_amount'))['total'] or Decimal('0.00')
         return float(obj.total_amount - refund)
 
@@ -99,17 +106,27 @@ class OrderListSerializer(serializers.ModelSerializer):
         return float(obj.total_amount)
 
     def get_is_returned(self, obj):
+        projected = getattr(obj, 'is_returned', None)
+        if projected is not None:
+            return bool(projected)
         return obj.returns.exists()
     
     def get_items_count(self, obj):
         """Get number of items in order"""
         # Fallback for when serializer used without annotation
+        projected = getattr(obj, 'items_count', None)
+        if projected is not None:
+            return projected
         return getattr(obj, 'items_count_annotated', obj.items.count())
 
     def get_customer_name(self, obj):
         """Get unified customer name based on priority"""
+        projected = getattr(obj, 'customer_name', None)
+        if projected:
+            return projected
+
         from retailers.models import RetailerCustomerMapping
-        
+
         # 1. Try mapping nickname
         if obj.customer and obj.retailer:
             mapping = RetailerCustomerMapping.objects.filter(
@@ -137,6 +154,10 @@ class OrderListSerializer(serializers.ModelSerializer):
         """Check if order has customer feedback safely"""
         from django.core.exceptions import ObjectDoesNotExist
         
+        projected = getattr(obj, 'has_customer_feedback', None)
+        if projected is not None:
+            return bool(projected)
+
         # 1. Use annotation if available
         if hasattr(obj, 'has_feedback_annotated'):
             return obj.has_feedback_annotated
@@ -151,6 +172,10 @@ class OrderListSerializer(serializers.ModelSerializer):
         """Check if order has retailer rating safely"""
         from django.core.exceptions import ObjectDoesNotExist
         
+        projected = getattr(obj, 'has_retailer_rating', None)
+        if projected is not None:
+            return bool(projected)
+
         # 1. Use annotation if available
         if hasattr(obj, 'has_rating_annotated'):
             return obj.has_rating_annotated
@@ -162,6 +187,10 @@ class OrderListSerializer(serializers.ModelSerializer):
             return False
 
     def get_feedback(self, obj):
+        projected = getattr(obj, 'feedback_payload', None)
+        if projected is not None:
+            return projected
+
         from django.core.exceptions import ObjectDoesNotExist
         try:
             if obj.feedback:
@@ -272,6 +301,9 @@ class OrderDetailSerializer(serializers.ModelSerializer):
         return obj.chat_messages.exclude(sender=request.user).filter(is_read=False).count()
 
     def get_feedback(self, obj):
+        projected = getattr(obj, 'feedback_payload', None)
+        if projected is not None:
+            return projected
         if hasattr(obj, 'feedback'):
             return {
                 'overall_rating': obj.feedback.overall_rating,
@@ -281,9 +313,15 @@ class OrderDetailSerializer(serializers.ModelSerializer):
         return None
 
     def get_has_customer_feedback(self, obj):
+        projected = getattr(obj, 'has_customer_feedback', None)
+        if projected is not None:
+            return bool(projected)
         return hasattr(obj, 'feedback')
 
     def get_has_retailer_rating(self, obj):
+        projected = getattr(obj, 'has_retailer_rating', None)
+        if projected is not None:
+            return bool(projected)
         return hasattr(obj, 'retailer_rating')
 
     def get_sales_returns(self, obj):

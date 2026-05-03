@@ -106,6 +106,28 @@ class TestGetOrderDetail:
 
 
 @pytest.mark.django_db
+class TestOrderPerformance:
+
+    def test_current_orders_query_cap(self, api_client, customer, order, django_assert_num_queries):
+        api_client.force_authenticate(user=customer)
+        with django_assert_num_queries(12, exact=False):
+            res = api_client.get(reverse("get_current_orders"))
+            assert res.status_code == status.HTTP_200_OK
+
+    def test_order_history_query_cap(self, api_client, customer, order, django_assert_num_queries):
+        api_client.force_authenticate(user=customer)
+        with django_assert_num_queries(12, exact=False):
+            res = api_client.get(reverse("get_order_history"))
+            assert res.status_code == status.HTTP_200_OK
+
+    def test_order_detail_query_cap(self, api_client, customer, order, django_assert_num_queries):
+        api_client.force_authenticate(user=customer)
+        with django_assert_num_queries(14, exact=False):
+            res = api_client.get(reverse("get_order_detail", args=[order.id]))
+            assert res.status_code == status.HTTP_200_OK
+
+
+@pytest.mark.django_db
 class TestCancelOrder:
 
     @patch("common.notifications.send_push_notification")
