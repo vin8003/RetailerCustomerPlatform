@@ -1,5 +1,8 @@
 from django.contrib import admin
-from .models import Order, OrderItem, OrderStatusLog, OrderDelivery, OrderFeedback, OrderReturn
+from .models import (
+    Order, OrderItem, OrderStatusLog, OrderDelivery, 
+    OrderFeedback, OrderReturn, OrderChatMessage, RetailerRating
+)
 
 
 @admin.register(Order)
@@ -86,3 +89,17 @@ class OrderReturnAdmin(admin.ModelAdmin):
     search_fields = ['order__order_number', 'customer__username', 'description']
     ordering = ['-created_at']
     readonly_fields = ['created_at', 'updated_at']
+
+
+@admin.register(OrderChatMessage)
+class OrderChatMessageAdmin(admin.ModelAdmin):
+    list_display = ['order', 'sender', 'message', 'is_read', 'created_at']
+    list_filter = ['is_read', 'created_at']
+    search_fields = ['order__order_number', 'sender__username', 'message']
+
+
+@admin.register(RetailerRating)
+class RetailerRatingAdmin(admin.ModelAdmin):
+    list_display = ['order', 'retailer', 'customer', 'rating', 'created_at']
+    list_filter = ['rating', 'created_at']
+    search_fields = ['order__order_number', 'retailer__shop_name', 'customer__username']
