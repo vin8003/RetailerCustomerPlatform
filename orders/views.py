@@ -4,6 +4,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Q, Sum, Count, Avg, F, Value, DecimalField, BooleanField, CharField, DateTimeField, IntegerField, Subquery
+from django.db.models.functions import Coalesce
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.http import Http404
@@ -50,9 +51,27 @@ def _order_queryset_with_relations():
 
 def _annotated_order_queryset():
     feedback_qs = OrderFeedback.objects.filter(order=OuterRef('pk'))
+    order_return_field_names = {field.name for field in OrderReturn._meta.get_fields()}
+    if 'refund_amount' in order_return_field_names:
+        refund_amount_qs = (
+            OrderReturn.objects.filter(order=OuterRef('pk'))
+            .values('order')
+            .annotate(total_refund=Sum('refund_amount'))
+            .values('total_refund')[:1]
+        )
+        refund_amount_annotation = Coalesce(
+            Subquery(refund_amount_qs, output_field=DecimalField(max_digits=10, decimal_places=2)),
+            Value(Decimal('0.00')),
+            output_field=DecimalField(max_digits=10, decimal_places=2),
+        )
+    else:
+        refund_amount_annotation = Value(
+            Decimal('0.00'),
+            output_field=DecimalField(max_digits=10, decimal_places=2),
+        )
     return _order_queryset_with_relations().annotate(
         items_count_annotated=Count('items', distinct=True),
-        refund_amount_annotated=Sum('returns__refund_amount', default=Decimal('0.00')),
+        refund_amount_annotated=refund_amount_annotation,
         is_returned_annotated=Exists(OrderReturn.objects.filter(order=OuterRef('pk'))),
         has_feedback_annotated=Exists(feedback_qs),
         has_rating_annotated=Exists(RetailerRating.objects.filter(order=OuterRef('pk'))),
