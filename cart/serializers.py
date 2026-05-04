@@ -37,26 +37,34 @@ class CartItemSerializer(serializers.ModelSerializer):
         if qty is not None:
             # If it's a whole number (e.g. 10.000), return as int 10
             # If it's a fractional number (e.g. 10.500), return 10.5
-            if qty == qty.to_integral_value():
-                return int(qty)
-            return float(qty.normalize())
+            if isinstance(qty, Decimal):
+                if qty == qty.to_integral_value():
+                    return int(qty)
+                return float(qty.normalize())
+            return qty
         return 0
     
     def get_minimum_order_quantity(self, obj):
         val = obj.product.minimum_order_quantity
-        if val == val.to_integral_value(): return int(val)
-        return float(val.normalize())
+        if isinstance(val, Decimal):
+            if val == val.to_integral_value(): return int(val)
+            return float(val.normalize())
+        return val
 
     def get_maximum_order_quantity(self, obj):
         val = obj.product.maximum_order_quantity
         if val is None: return None
-        if val == val.to_integral_value(): return int(val)
-        return float(val.normalize())
+        if isinstance(val, Decimal):
+            if val == val.to_integral_value(): return int(val)
+            return float(val.normalize())
+        return val
 
     def get_quantity(self, obj):
         val = obj.quantity
-        if val == val.to_integral_value(): return int(val)
-        return float(val.normalize())
+        if isinstance(val, Decimal):
+            if val == val.to_integral_value(): return int(val)
+            return float(val.normalize())
+        return val
 
     def get_total_price(self, obj):
         return float(obj.total_price)
