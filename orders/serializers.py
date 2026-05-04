@@ -36,8 +36,10 @@ class OrderItemSerializer(serializers.ModelSerializer):
 
     def get_quantity(self, obj):
         val = obj.quantity
-        if val == val.to_integral_value(): return int(val)
-        return float(val.normalize())
+        if isinstance(val, Decimal):
+            if val == val.to_integral_value(): return int(val)
+            return float(val.normalize())
+        return val
 
     def get_unit_price(self, obj):
         return float(obj.unit_price)
@@ -57,8 +59,10 @@ class OrderItemSerializer(serializers.ModelSerializer):
         # We use Decimal for math to avoid float precision issues before final return
         net = obj.quantity - Decimal(str(returned))
         if net < 0: net = Decimal(0)
-        if net == net.to_integral_value(): return int(net)
-        return float(net.normalize())
+        if isinstance(net, Decimal):
+            if net == net.to_integral_value(): return int(net)
+            return float(net.normalize())
+        return net
 
 
 class OrderListSerializer(serializers.ModelSerializer):

@@ -318,7 +318,7 @@ class OfferEngine:
         group_size = x + y
         
         total_units = len(all_units)
-        num_free = (total_units // group_size) * y
+        num_free = int((total_units // group_size) * y)
         
         # If specific logic says "Buy X and Get Y Free" means I pay for X and Y is added?
         # Usually e-comm cart logic: "Add 3 items to cart, 1 becomes free".
@@ -383,7 +383,7 @@ class OfferEngine:
             # Usually only one line item per product, but handle multiple just in case
             total_qty = sum(item_context[idx]['quantity'] for idx in indices)
             
-            num_free = (total_qty // group_size) * y
+            num_free = int((total_qty // group_size) * y)
             if num_free <= 0:
                 continue
                 

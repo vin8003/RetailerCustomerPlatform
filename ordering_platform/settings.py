@@ -411,3 +411,12 @@ if 'test' in sys.argv or 'pytest' in sys.modules:
         'DEFAULT_PAGINATION_CLASS': 'common.pagination.StandardResultsSetPagination',
         'PAGE_SIZE': 20,
     }
+
+    STORAGES = {
+        "default": {
+            "BACKEND": "django.core.files.storage.InMemoryStorage",
+        },
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+        },
+    }

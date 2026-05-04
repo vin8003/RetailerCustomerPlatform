@@ -111,20 +111,26 @@ class ProductListSerializer(serializers.ModelSerializer):
     def get_quantity(self, obj):
         val = obj.quantity
         if val is None: return 0
-        if val == val.to_integral_value(): return int(val)
-        return float(val.normalize())
+        if isinstance(val, Decimal):
+            if val == val.to_integral_value(): return int(val)
+            return float(val.normalize())
+        return val
 
     def get_minimum_order_quantity(self, obj):
         val = obj.minimum_order_quantity
         if val is None: return 1
-        if val == val.to_integral_value(): return int(val)
-        return float(val.normalize())
+        if isinstance(val, Decimal):
+            if val == val.to_integral_value(): return int(val)
+            return float(val.normalize())
+        return val
 
     def get_maximum_order_quantity(self, obj):
         val = obj.maximum_order_quantity
         if val is None: return None
-        if val == val.to_integral_value(): return int(val)
-        return float(val.normalize())
+        if isinstance(val, Decimal):
+            if val == val.to_integral_value(): return int(val)
+            return float(val.normalize())
+        return val
 
     def get_batches(self, obj):
         """Return active batches for POS catalog awareness"""
@@ -313,20 +319,26 @@ class ProductDetailSerializer(serializers.ModelSerializer):
     def get_quantity(self, obj):
         val = obj.quantity
         if val is None: return 0
-        if val == val.to_integral_value(): return int(val)
-        return float(val.normalize())
+        if isinstance(val, Decimal):
+            if val == val.to_integral_value(): return int(val)
+            return float(val.normalize())
+        return val
 
     def get_minimum_order_quantity(self, obj):
         val = obj.minimum_order_quantity
         if val is None: return 1
-        if val == val.to_integral_value(): return int(val)
-        return float(val.normalize())
+        if isinstance(val, Decimal):
+            if val == val.to_integral_value(): return int(val)
+            return float(val.normalize())
+        return val
 
     def get_maximum_order_quantity(self, obj):
         val = obj.maximum_order_quantity
         if val is None: return None
-        if val == val.to_integral_value(): return int(val)
-        return float(val.normalize())
+        if isinstance(val, Decimal):
+            if val == val.to_integral_value(): return int(val)
+            return float(val.normalize())
+        return val
 
     def get_batches(self, obj):
         """Only return active batches for detail view"""

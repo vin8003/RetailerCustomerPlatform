@@ -124,11 +124,14 @@ class KhataSystemTest(TestCase):
         # For now, our implementation doesn't block it in create_pos_order.
         # If we wanted to block it, we'd add validation there.
         
+        # POS now enforces credit limit
         response = self.client.post(url, data, format='json')
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Credit limit exceeded", response.data['error'])
         
         mapping.refresh_from_db()
-        self.assertEqual(mapping.current_balance, Decimal('150.00'))
+        # Balance should remain 50
+        self.assertEqual(mapping.current_balance, Decimal('50.00'))
 
     def test_ledger_retrieval(self):
         """Test GET ledger endpoint"""
