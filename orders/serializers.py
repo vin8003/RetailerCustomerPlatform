@@ -3,6 +3,7 @@ from rest_framework import serializers
 from django.db import transaction
 from django.utils import timezone
 from .models import Order, OrderItem, OrderStatusLog, OrderDelivery, OrderFeedback, OrderReturn, OrderChatMessage, RetailerRating
+from .domain.status_policy import ensure_transition_allowed, InvalidStatusTransitionError
 from customers.models import CustomerAddress
 from products.models import Product
 from cart.models import Cart, CartItem
@@ -36,8 +37,10 @@ class OrderItemSerializer(serializers.ModelSerializer):
 
     def get_quantity(self, obj):
         val = obj.quantity
-        if val == val.to_integral_value(): return int(val)
-        return float(val.normalize())
+        if isinstance(val, Decimal):
+            if val == val.to_integral_value(): return int(val)
+            return float(val.normalize())
+        return val
 
     def get_unit_price(self, obj):
         return float(obj.unit_price)
@@ -57,8 +60,10 @@ class OrderItemSerializer(serializers.ModelSerializer):
         # We use Decimal for math to avoid float precision issues before final return
         net = obj.quantity - Decimal(str(returned))
         if net < 0: net = Decimal(0)
-        if net == net.to_integral_value(): return int(net)
-        return float(net.normalize())
+        if isinstance(net, Decimal):
+            if net == net.to_integral_value(): return int(net)
+            return float(net.normalize())
+        return net
 
 
 class OrderListSerializer(serializers.ModelSerializer):
@@ -72,6 +77,12 @@ class OrderListSerializer(serializers.ModelSerializer):
     has_retailer_rating = serializers.SerializerMethodField()
     feedback = serializers.SerializerMethodField()
     customer_average_rating = serializers.FloatField(source='customer.customer_profile.average_rating', read_only=True)
+    payment_status = serializers.SerializerMethodField()
+    payment_reference_id = serializers.SerializerMethodField()
+    cash_amount = serializers.SerializerMethodField()
+    upi_amount = serializers.SerializerMethodField()
+    card_amount = serializers.SerializerMethodField()
+    credit_amount = serializers.SerializerMethodField()
     
     class Meta:
         model = Order
@@ -80,6 +91,7 @@ class OrderListSerializer(serializers.ModelSerializer):
             'status', 'total_amount', 'refund_amount', 'net_amount', 'is_returned', 'items_count', 'created_at', 'updated_at', 
             'has_customer_feedback', 'has_retailer_rating', 'feedback',
             'preparation_time_minutes', 'estimated_ready_time', 'expected_processing_start', 'cancelled_by', 'customer_average_rating', 'source'
+            , 'payment_status', 'payment_reference_id', 'cash_amount', 'upi_amount', 'card_amount', 'credit_amount'
         ]
 
     refund_amount = serializers.SerializerMethodField()
@@ -174,6 +186,37 @@ class OrderListSerializer(serializers.ModelSerializer):
             pass
         return None
 
+    def _payment_summary(self, obj):
+        txns = list(obj.payment_transactions.all())
+        if not txns:
+            return {
+                'payment_status': obj.payment_status,
+                'payment_reference_id': obj.payment_reference_id,
+                'cash_amount': obj.cash_amount or Decimal('0.00'),
+                'upi_amount': obj.upi_amount or Decimal('0.00'),
+                'card_amount': obj.card_amount or Decimal('0.00'),
+                'credit_amount': obj.credit_amount or Decimal('0.00'),
+            }
+        latest = txns[0]
+        totals = {'cash_amount': Decimal('0.00'), 'upi_amount': Decimal('0.00'), 'card_amount': Decimal('0.00'), 'credit_amount': Decimal('0.00')}
+        for txn in txns:
+            if txn.method in ('cash', 'cash_pickup'):
+                totals['cash_amount'] += txn.amount
+            elif txn.method == 'upi':
+                totals['upi_amount'] += txn.amount
+            elif txn.method == 'card':
+                totals['card_amount'] += txn.amount
+            elif txn.method == 'credit':
+                totals['credit_amount'] += txn.amount
+        return {'payment_status': latest.status, 'payment_reference_id': latest.reference_id, **totals}
+
+    def get_payment_status(self, obj): return self._payment_summary(obj)['payment_status']
+    def get_payment_reference_id(self, obj): return self._payment_summary(obj)['payment_reference_id']
+    def get_cash_amount(self, obj): return self._payment_summary(obj)['cash_amount']
+    def get_upi_amount(self, obj): return self._payment_summary(obj)['upi_amount']
+    def get_card_amount(self, obj): return self._payment_summary(obj)['card_amount']
+    def get_credit_amount(self, obj): return self._payment_summary(obj)['credit_amount']
+
 
 class OrderDetailSerializer(serializers.ModelSerializer):
     """
@@ -206,6 +249,12 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     sales_returns = serializers.SerializerMethodField()
     refund_amount = serializers.SerializerMethodField()
     net_amount = serializers.SerializerMethodField()
+    payment_reference_id = serializers.SerializerMethodField()
+    payment_status = serializers.SerializerMethodField()
+    cash_amount = serializers.SerializerMethodField()
+    upi_amount = serializers.SerializerMethodField()
+    card_amount = serializers.SerializerMethodField()
+    credit_amount = serializers.SerializerMethodField()
     
     class Meta:
         model = Order
@@ -216,6 +265,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'subtotal', 'delivery_fee', 'discount_amount', 'discount_from_points', 'points_redeemed', 'points_earned', 'total_amount', 'refund_amount', 'net_amount',
             'special_instructions', 'cancellation_reason', 'cancelled_by', 
             'payment_reference_id', 'payment_status', 'payment_edit_count', 'is_payment_locked',
+            'cash_amount', 'upi_amount', 'card_amount', 'credit_amount',
             'delivery_address_text', 'retailer_gst_number', 'retailer_receipt_footer', 'retailer_show_gst',
             'delivery_latitude', 'delivery_longitude',
             'items', 'sales_returns', 'applied_offers', 'created_at', 'updated_at', 'confirmed_at', 'delivered_at',
@@ -296,6 +346,37 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     def get_net_amount(self, obj):
         refund = self.get_refund_amount(obj)
         return obj.total_amount - refund
+
+    def _payment_summary(self, obj):
+        txns = list(obj.payment_transactions.all())
+        if not txns:
+            return {
+                'payment_status': obj.payment_status,
+                'payment_reference_id': obj.payment_reference_id,
+                'cash_amount': obj.cash_amount or Decimal('0.00'),
+                'upi_amount': obj.upi_amount or Decimal('0.00'),
+                'card_amount': obj.card_amount or Decimal('0.00'),
+                'credit_amount': obj.credit_amount or Decimal('0.00'),
+            }
+        latest = txns[0]
+        totals = {'cash_amount': Decimal('0.00'), 'upi_amount': Decimal('0.00'), 'card_amount': Decimal('0.00'), 'credit_amount': Decimal('0.00')}
+        for txn in txns:
+            if txn.method in ('cash', 'cash_pickup'):
+                totals['cash_amount'] += txn.amount
+            elif txn.method == 'upi':
+                totals['upi_amount'] += txn.amount
+            elif txn.method == 'card':
+                totals['card_amount'] += txn.amount
+            elif txn.method == 'credit':
+                totals['credit_amount'] += txn.amount
+        return {'payment_status': latest.status, 'payment_reference_id': latest.reference_id, **totals}
+
+    def get_payment_status(self, obj): return self._payment_summary(obj)['payment_status']
+    def get_payment_reference_id(self, obj): return self._payment_summary(obj)['payment_reference_id']
+    def get_cash_amount(self, obj): return self._payment_summary(obj)['cash_amount']
+    def get_upi_amount(self, obj): return self._payment_summary(obj)['upi_amount']
+    def get_card_amount(self, obj): return self._payment_summary(obj)['card_amount']
+    def get_credit_amount(self, obj): return self._payment_summary(obj)['credit_amount']
 
 
 class OrderCreateSerializer(serializers.Serializer):
@@ -634,23 +715,10 @@ class OrderStatusUpdateSerializer(serializers.Serializer):
         order = self.context['order']
         current_status = order.status
         
-        # Define valid status transitions
-        valid_transitions = {
-            'pending': ['confirmed', 'cancelled', 'waiting_for_customer_approval'],
-            'waiting_for_customer_approval': ['confirmed', 'cancelled', 'pending'],
-            'confirmed': ['processing', 'cancelled'],
-            'processing': ['packed', 'cancelled'],
-            'packed': ['out_for_delivery', 'delivered'],
-            'out_for_delivery': ['delivered', 'cancelled'],
-            'delivered': ['returned'],
-            'cancelled': [],
-            'returned': []
-        }
-        
-        if value not in valid_transitions.get(current_status, []):
-            raise serializers.ValidationError(
-                f"Cannot change status from '{current_status}' to '{value}'"
-            )
+        try:
+            ensure_transition_allowed(current_status, value)
+        except InvalidStatusTransitionError as exc:
+            raise serializers.ValidationError(str(exc))
         
         return value
     
@@ -669,6 +737,15 @@ class OrderStatusUpdateSerializer(serializers.Serializer):
             instance.estimated_ready_time = timezone.now() + timedelta(minutes=preparation_time_minutes)
             instance.save()
         
+        # Refresh status to observe concurrent updates before final transition guard
+        instance.refresh_from_db(fields=['status'])
+
+        # Guard transition policy before mutating order status
+        try:
+            ensure_transition_allowed(instance.status, new_status)
+        except InvalidStatusTransitionError as exc:
+            raise serializers.ValidationError({'status': [str(exc)]})
+
         # Update order status
         instance.update_status(new_status, user)
         

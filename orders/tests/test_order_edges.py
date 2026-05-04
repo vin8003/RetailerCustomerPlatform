@@ -68,3 +68,59 @@ class TestOrderViewEdges:
         # Verify discount_from_points is set
         assert order.discount_from_points == Decimal("50.00")
         assert order.total_amount == Decimal("950.00")
+
+
+@pytest.mark.django_db
+class TestOrderStatusTransitionPolicyEdges:
+    def test_valid_transition_still_passes(self, api_client, retailer_user, retailer, order):
+        api_client.force_authenticate(user=retailer_user)
+        response = api_client.patch(
+            reverse('update_order_status', args=[order.id]),
+            {'status': 'confirmed'},
+            format='json',
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        order.refresh_from_db()
+        assert order.status == 'confirmed'
+        assert order.confirmed_at is not None
+
+    def test_invalid_transition_fails_with_existing_error_shape(self, api_client, retailer_user, retailer, order):
+        api_client.force_authenticate(user=retailer_user)
+        response = api_client.patch(
+            reverse('update_order_status', args=[order.id]),
+            {'status': 'delivered'},
+            format='json',
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert 'status' in response.data
+        assert response.data['status'] == ["Cannot change status from 'pending' to 'delivered'"]
+
+    def test_transition_timestamps_unchanged_behavior(self, api_client, retailer_user, retailer, order):
+        api_client.force_authenticate(user=retailer_user)
+
+        for next_status in ['confirmed', 'processing', 'packed', 'delivered']:
+            response = api_client.patch(
+                reverse('update_order_status', args=[order.id]),
+                {'status': next_status},
+                format='json',
+            )
+            assert response.status_code == status.HTTP_200_OK
+
+        order.refresh_from_db()
+        confirmed_at = order.confirmed_at
+        delivered_at = order.delivered_at
+        cancelled_at = order.cancelled_at
+
+        cancel_response = api_client.patch(
+            reverse('update_order_status', args=[order.id]),
+            {'status': 'cancelled'},
+            format='json',
+        )
+        assert cancel_response.status_code == status.HTTP_400_BAD_REQUEST
+
+        order.refresh_from_db()
+        assert order.confirmed_at == confirmed_at
+        assert order.delivered_at == delivered_at
+        assert order.cancelled_at == cancelled_at
