@@ -69,6 +69,40 @@ class TestOrderViewEdges:
         assert order.discount_from_points == Decimal("50.00")
         assert order.total_amount == Decimal("950.00")
 
+    def test_order_points_redemption_fractional_coins(self, customer, retailer, product):
+        RetailerRewardConfig.objects.create(
+            retailer=retailer, 
+            max_reward_usage_percent=100, 
+            max_reward_usage_flat=1000,
+            conversion_rate=1.0,
+            is_active=True
+        )
+        CustomerLoyalty.objects.create(customer=customer, retailer=retailer, points=Decimal("17.85"))
+        
+        cart = Cart.objects.create(customer=customer, retailer=retailer)
+        CartItem.objects.create(cart=cart, product=product, quantity=1, unit_price=450)
+        
+        data = {
+            'retailer_id': retailer.id,
+            'use_reward_points': True,
+            'delivery_mode': 'delivery',
+            'payment_mode': 'upi',
+        }
+        
+        request = MagicMock()
+        request.user = customer
+        
+        from customers.models import CustomerAddress
+        mock_addr = CustomerAddress.objects.create(customer=customer, address_line1="Test", is_active=True)
+        data['address_id'] = mock_addr.id
+        
+        serializer = OrderCreateSerializer(data=data, context={'request': request, 'customer': customer})
+        assert serializer.is_valid(), serializer.errors
+        order = serializer.save()
+        # Verify discount_from_points is set to 17 (whole points only)
+        assert order.discount_from_points == Decimal("17.00")
+        assert order.total_amount == Decimal("433.00")
+
 
 @pytest.mark.django_db
 class TestOrderStatusTransitionPolicyEdges:
