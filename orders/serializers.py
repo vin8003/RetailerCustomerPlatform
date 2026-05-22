@@ -552,23 +552,28 @@ class OrderCreateSerializer(serializers.Serializer):
                 user_points = 0
             
             if config and config.is_active and user_points > 0:
-                # Calculate max redeemable amount
+                import math
+                
                 # 1. Percentage limit
                 max_by_percent = (total_amount * config.max_reward_usage_percent) / 100
                 
                 # 2. Flat limit
                 max_by_flat = config.max_reward_usage_flat
                 
-                # 3. User balance limit (converted to currency)
-                # Assuming 1 point = conversion_rate currency
-                max_by_balance = user_points * config.conversion_rate
+                # Max allowed discount (before considering user balance)
+                max_allowed_discount = min(total_amount, max_by_percent, max_by_flat)
                 
-                # Actual allowed amount is min of all constraints
-                redeemable_amount = min(total_amount, max_by_percent, max_by_flat, max_by_balance)
+                # Convert max allowed discount into max allowed points (must be whole)
+                max_allowed_points = int(math.floor(max_allowed_discount / config.conversion_rate))
                 
-                if redeemable_amount > 0:
-                    discount_from_points = redeemable_amount
-                    points_to_redeem = redeemable_amount / config.conversion_rate
+                # Available points (must be whole)
+                available_whole_points = int(math.floor(user_points))
+                
+                # Actual points to redeem
+                points_to_redeem = min(available_whole_points, max_allowed_points)
+                
+                if points_to_redeem > 0:
+                    discount_from_points = Decimal(str(points_to_redeem)) * config.conversion_rate
                     total_amount -= discount_from_points
         
         # Check minimum order amount

@@ -364,13 +364,17 @@ class Order(models.Model):
             if not (config and config.is_active):
                 return False
 
+            # NEW LOGIC: Calculate actual paid amount (exclude udhaar/credit)
+            current_bill_credit = self.credit_amount if self.credit_amount and self.credit_amount > 0 else Decimal('0.00')
+            eligible_amount = max(Decimal('0.00'), self.total_amount - current_bill_credit)
+
             # 0. Calculate Rule-Based Points (Separated from Offers)
-            if self.subtotal >= config.loyalty_min_order_value:
+            if eligible_amount >= config.loyalty_min_order_value:
                 if config.earning_type == 'percentage':
-                    rule_points = (self.subtotal * config.loyalty_earning_value) / Decimal('100.00')
+                    rule_points = (eligible_amount * config.loyalty_earning_value) / Decimal('100.00')
                     total_to_award += rule_points
                 elif config.earning_type == 'points_per_amount' and config.loyalty_earning_value > 0:
-                    rule_points = self.subtotal // config.loyalty_earning_value
+                    rule_points = eligible_amount // config.loyalty_earning_value
                     total_to_award += Decimal(str(rule_points))
 
             # 1. Award Total Points (Rule Points + Offer Points)
