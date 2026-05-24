@@ -426,3 +426,142 @@ class TestCartBXGYRefactoredFinal:
         assert redemptions.exists()
         assert redemptions.first().customer is None
 
+    def test_checkout_validation_stock_against_adjusted_quantity(self, api_client, customer, retailer, product):
+        """
+        FAILING TEST: Verify that place_order validation checks stock limits against the dynamic
+        offer-adjusted total display quantity (purchased + free) and fails if insufficient.
+        """
+        api_client.force_authenticate(user=customer)
+        customer.is_phone_verified = True
+        customer.save()
+        
+        Offer.objects.all().delete()
+
+        # Product stock is exactly 5
+        product.quantity = Decimal("5.000")
+        product.track_inventory = True
+        product.save()
+
+        # Create Buy 1 Get 1 free (Same Product strategy)
+        offer = Offer.objects.create(
+            retailer=retailer, name="BOGO Same Product", offer_type="bxgy",
+            buy_quantity=1, get_quantity=1, is_active=True,
+            bxgy_strategy='same_product', value=0
+        )
+        OfferTarget.objects.create(offer=offer, target_type="product", product=product)
+
+        # Customer adds 3 units to cart (which requires 3 free, so 6 total)
+        cart, _ = Cart.objects.get_or_create(customer=customer, retailer=retailer)
+        CartItem.objects.create(cart=cart, product=product, quantity=3)
+
+        # Attempt to checkout order - validation should fail because 6 units are needed, but only 5 in stock
+        res = api_client.post(reverse("place_order"), {
+            "retailer_id": retailer.id,
+            "delivery_mode": "pickup",
+            "payment_mode": "cash_pickup"
+        })
+        assert res.status_code == status.HTTP_400_BAD_REQUEST
+        assert "items available" in str(res.data).lower()
+
+    def test_same_product_bxgy_group_aggregation(self, retailer, product):
+        """
+        FAILING TEST: Verify that same-product BXGY offers aggregate quantities for identical products
+        split across different cart items (lines) before performing floor division, and distribute
+        free quantities correctly.
+        """
+        engine = OfferEngine()
+        Offer.objects.all().delete()
+
+        # Create Buy 3 Get 2 Same Product Offer
+        offer = Offer.objects.create(
+            retailer=retailer, name="Buy 3 Get 2 Same Product", offer_type="bxgy",
+            buy_quantity=3, get_quantity=2, is_active=True,
+            bxgy_strategy='same_product', value=0
+        )
+        OfferTarget.objects.create(offer=offer, target_type="product", product=product)
+
+        # Cart has two separate lines of the same product (representing e.g. different batches or selections)
+        # Line 1: quantity = 2
+        # Line 2: quantity = 2
+        # Total purchased quantity = 4. Under Buy 3 Get 2, 4 // 3 = 1, so 1 * 2 = 2 free items.
+        class MockCartItem:
+            def __init__(self, id, product, quantity, unit_price):
+                self.id = id
+                self.product = product
+                self.quantity = quantity
+                self.unit_price = Decimal(str(unit_price))
+                self.total_price = self.unit_price * quantity
+
+        cart_items = [
+            MockCartItem(1001, product, Decimal("2"), Decimal("100")),
+            MockCartItem(1002, product, Decimal("2"), Decimal("100"))
+        ]
+
+        result = engine.calculate_offers(cart_items, retailer)
+        
+        # We expect a total savings of ₹200 (2 free items at ₹100 each)
+        assert result['total_savings'] == Decimal("200.00")
+        
+        # We expect the line items in item_discounts to have the correct total free quantity distributed
+        item_discounts = result['item_discounts']
+        assert 1001 in item_discounts
+        assert 1002 in item_discounts
+        
+        total_free = item_discounts[1001]['free_quantity'] + item_discounts[1002]['free_quantity']
+        assert total_free == 2
+
+    def test_pos_duplicate_product_collision(self, api_client, retailer_user, retailer, product):
+        """
+        FAILING TEST: Verify POS checkout does not collide when multiple batches of the same product
+        are in the cart. Each batch should retain its individual pricing and discounts.
+        """
+        api_client.force_authenticate(user=retailer_user)
+        Offer.objects.all().delete()
+
+        product.track_inventory = True
+        product.save()
+
+        # Create two batches for this product
+        from products.models import ProductBatch
+        batch1 = ProductBatch.objects.create(
+            product=product, retailer=retailer, batch_number="B1",
+            price=Decimal("100.00"), original_price=Decimal("100.00"), quantity=10
+        )
+        batch2 = ProductBatch.objects.create(
+            product=product, retailer=retailer, batch_number="B2",
+            price=Decimal("120.00"), original_price=Decimal("120.00"), quantity=10
+        )
+
+        product.has_batches = True
+        product.save()
+
+        # Create 10% off offer
+        offer = Offer.objects.create(
+            retailer=retailer, name="10% POS Discount", offer_type="percentage",
+            value=Decimal("10.00"), is_active=True, applicable_on='pos'
+        )
+        OfferTarget.objects.create(offer=offer, target_type="all_products")
+
+        url_pos = reverse('create_pos_order')
+        data = {
+            'items': [
+                {'product_id': product.id, 'batch_id': batch1.id, 'quantity': 1, 'unit_price': 100.0},
+                {'product_id': product.id, 'batch_id': batch2.id, 'quantity': 1, 'unit_price': 120.0}
+            ],
+            'payment_mode': 'cash',
+            'subtotal': 220.0,
+            'discount_amount': 0,
+            'total_amount': 198.0
+        }
+
+        response = api_client.post(url_pos, data, format='json')
+        assert response.status_code == status.HTTP_201_CREATED
+
+        order = Order.objects.latest('created_at')
+        order_items = OrderItem.objects.filter(order=order).order_by('unit_price')
+        assert order_items.count() == 2
+        
+        assert order_items[0].unit_price == Decimal("90.00")
+        assert order_items[1].unit_price == Decimal("108.00")
+
+

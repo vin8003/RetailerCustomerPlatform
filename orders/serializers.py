@@ -467,10 +467,20 @@ class OrderCreateSerializer(serializers.Serializer):
         if not cart_items.exists():
             raise serializers.ValidationError("Cart is empty")
 
+        # Calculate offers using Engine to get total display quantities for stock validation
+        from offers.engine import OfferEngine
+        engine = OfferEngine()
+        offer_results = engine.calculate_offers(cart_items, retailer)
+        item_discounts = offer_results.get('item_discounts', {})
+
         # Validate cart items availability and limits
         for cart_item in cart_items:
-            # Check stock
-            if cart_item.product.track_inventory and cart_item.quantity > cart_item.product.quantity:
+            quantity = cart_item.quantity
+            if cart_item.id in item_discounts:
+                quantity = item_discounts[cart_item.id].get('total_display_quantity', cart_item.quantity)
+
+            # Check stock against offer-adjusted quantity (purchased + free)
+            if cart_item.product.track_inventory and quantity > cart_item.product.quantity:
                  raise serializers.ValidationError(
                     f"Product '{cart_item.product.name}' - only {cart_item.product.quantity} items available"
                 )

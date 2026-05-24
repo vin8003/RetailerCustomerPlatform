@@ -210,7 +210,7 @@ def create_pos_order(request):
                 self.id = id
 
         pos_items = []
-        for item in items_data:
+        for i, item in enumerate(items_data):
             product = Product.objects.get(id=item['product_id'], retailer=retailer)
             batch_id = item.get('batch_id')
             batch = None
@@ -227,7 +227,7 @@ def create_pos_order(request):
                 )
             
             qty = Decimal(str(item['quantity']))
-            pos_items.append(POSCartItem(product=product, quantity=qty, unit_price=expected_price, id=item['product_id']))
+            pos_items.append(POSCartItem(product=product, quantity=qty, unit_price=expected_price, id=f"pos_{i}"))
 
         # 2. Run POS items through OfferEngine to compute automated discounts
         from offers.engine import OfferEngine
@@ -379,7 +379,7 @@ def create_pos_order(request):
 
             # Create Order Items and Reduce Inventory
             item_discounts = offer_results.get('item_discounts', {})
-            for item in items_data:
+            for i, item in enumerate(items_data):
                 product = Product.objects.select_for_update().get(id=item['product_id'], retailer=retailer)
                 batch_id = item.get('batch_id')
                 batch = None
@@ -389,10 +389,10 @@ def create_pos_order(request):
                 qty = Decimal(str(item['quantity']))
                 unit_price = Decimal(str(batch.price if batch else product.price))
                 
-                # Apply discounts/free items dynamically calculated by the engine
-                product_id_key = item['product_id']
-                if product_id_key in item_discounts:
-                    info = item_discounts[product_id_key]
+                # Apply discounts/free items dynamically calculated by the engine using unique key
+                unique_key = f"pos_{i}"
+                if unique_key in item_discounts:
+                    info = item_discounts[unique_key]
                     unit_price = info['final_price']
                     qty = info.get('total_display_quantity', qty)
                 
