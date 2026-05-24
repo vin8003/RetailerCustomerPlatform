@@ -59,8 +59,9 @@ class OfferViewSet(viewsets.ModelViewSet):
             from retailers.models import RetailerProfile
             retailer = RetailerProfile.objects.get(id=retailer_id)
             
+        channel = request.data.get('channel', 'mobile')
         engine = OfferEngine()
-        result = engine.calculate_offers(cart_items, retailer)
+        result = engine.calculate_offers(cart_items, retailer, context={'channel': channel})
         return Response(result)
 
 class PublicOfferViewSet(viewsets.ReadOnlyModelViewSet):
