@@ -334,6 +334,82 @@ class TestValidateCart:
 
 
 @pytest.mark.django_db
+class TestTrackInventoryStockQuantity:
+    """
+    Regression tests for the 'maximum order limit is 0' bug.
+    When a product has track_inventory=False, the backend should return
+    stock_quantity=99999 (unlimited) so the frontend does NOT block
+    cart quantity adjustments with "Maximum order limit is 0".
+    """
+
+    def test_get_cart_stock_quantity_non_tracked_inventory(
+        self, api_client, customer, retailer, category, brand
+    ):
+        """
+        BUG REPRO: product with track_inventory=False and quantity=0
+        previously returned stock_quantity=0, which made the frontend show
+        'Maximum order limit is 0' when the user tried to adjust qty in cart.
+        After the fix, stock_quantity should be 99999 (unlimited).
+        """
+        # Create a product with inventory tracking OFF and quantity=0
+        untracked_product = Product.objects.create(
+            retailer=retailer,
+            name="Untracked Product",
+            category=category,
+            brand=brand,
+            price=Decimal("50.00"),
+            quantity=0,  # No stock recorded – but tracking is OFF so it doesn't matter
+            track_inventory=False,
+            is_active=True,
+            is_available=True,
+            minimum_order_quantity=1,
+            maximum_order_quantity=None,
+        )
+
+        # Add it to the customer's cart
+        cart = Cart.objects.create(customer=customer, retailer=retailer)
+        CartItem.objects.create(
+            cart=cart,
+            product=untracked_product,
+            quantity=3,
+            unit_price=untracked_product.price,
+        )
+
+        api_client.force_authenticate(user=customer)
+        res = api_client.get(reverse("get_cart"), {"retailer_id": retailer.id})
+
+        assert res.status_code == status.HTTP_200_OK
+        items = res.data.get("items", [])
+        assert len(items) == 1
+        # Key assertion: stock_quantity must NOT be 0 for a non-tracked product;
+        # it should be 99999 to indicate unlimited availability to the frontend.
+        stock_qty = items[0]["stock_quantity"]
+        assert stock_qty == 99999, (
+            f"Expected stock_quantity=99999 for track_inventory=False product, got {stock_qty}. "
+            "This causes 'Maximum order limit is 0' in the customer cart UI."
+        )
+
+    def test_get_cart_stock_quantity_tracked_inventory_returns_actual(
+        self, api_client, customer, cart, cart_item, retailer
+    ):
+        """
+        Sanity check: tracked products should still return their real stock quantity.
+        """
+        # cart_item.product has track_inventory=True, quantity=50
+        api_client.force_authenticate(user=customer)
+        res = api_client.get(reverse("get_cart"), {"retailer_id": retailer.id})
+
+        assert res.status_code == status.HTTP_200_OK
+        items = res.data.get("items", [])
+        assert len(items) == 1
+        stock_qty = items[0]["stock_quantity"]
+        # Should reflect actual quantity (50), not 99999
+        assert stock_qty == 50, (
+            f"Expected stock_quantity=50 for track_inventory=True product, got {stock_qty}."
+        )
+
+
+@pytest.mark.django_db
 class TestGetCartCount:
 
     def test_cart_count_empty(self, api_client, customer):
