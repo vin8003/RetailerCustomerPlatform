@@ -69,6 +69,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'common.middleware.RequestLoggingMiddleware',
 ]
 
 ROOT_URLCONF = 'ordering_platform.urls'
@@ -243,6 +244,10 @@ LOGGING = {
             'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}',
             'style': '{',
         },
+        'solarwinds_rfc5424': {
+            '()': 'common.logging_handlers.RFC5424Formatter',
+            'app_name': 'ordereasy-backend',
+        }
     },
     'handlers': {
         'console': {
@@ -250,14 +255,20 @@ LOGGING = {
             'class': 'logging.StreamHandler',
             'formatter': 'verbose',
         },
+        'solarwinds': {
+            'level': 'INFO',
+            'class': 'common.logging_handlers.TLSSysLogHandler',
+            'address': ('syslog.collector.ap-01.cloud.solarwinds.com', 6514),
+            'formatter': 'solarwinds_rfc5424',
+        }
     },
     'root': {
-        'handlers': ['console'],
+        'handlers': ['console', 'solarwinds'],
         'level': 'INFO',
     },
     'loggers': {
         'django': {
-            'handlers': ['console'],
+            'handlers': ['console', 'solarwinds'],
             'level': os.getenv('DJANGO_LOG_LEVEL', 'INFO'),
             'propagate': False,
         },
