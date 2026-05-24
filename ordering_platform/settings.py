@@ -259,6 +259,7 @@ LOGGING = {
             'level': 'INFO',
             'class': 'common.logging_handlers.TLSSysLogHandler',
             'address': ('syslog.collector.ap-01.cloud.solarwinds.com', 6514),
+            'facility': 'local0',
             'formatter': 'solarwinds_rfc5424',
         }
     },
