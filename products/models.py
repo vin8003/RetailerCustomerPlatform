@@ -306,6 +306,25 @@ class Product(models.Model):
     is_seasonal = models.BooleanField(default=False) # For Seasonal Picks lane
     has_batches = models.BooleanField(default=False)
     
+    # KAN-13 Product Grouping / Pack Sizing
+    is_parent_bulk = models.BooleanField(default=False, help_text="Is this the master parent bulk product?")
+    parent_bulk_product = models.ForeignKey(
+        'self', 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True, 
+        related_name='fractional_children',
+        help_text="Reference to the parent bulk product keeping master inventory"
+    )
+    conversion_factor = models.DecimalField(
+        max_digits=10, 
+        decimal_places=4, 
+        null=True, 
+        blank=True, 
+        validators=[MinValueValidator(Decimal('0.0001'))], 
+        help_text="Weight ratio of child weight relative to parent bulk SKU (e.g., 0.10 for 5kg from 50kg)"
+    )
+    
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -338,6 +357,29 @@ class Product(models.Model):
             resize_image(self.image)
             
         super().save(*args, **kwargs)
+        
+        # Trigger fractional inventory sync if this is a parent bulk product
+        if self.is_parent_bulk:
+            self.sync_fractional_inventories()
+        
+        # If this is a child product, make sure its stock is synced from parent on save
+        elif self.parent_bulk_product:
+            parent = self.parent_bulk_product
+            if self.conversion_factor and self.conversion_factor > 0:
+                expected_qty = parent.quantity / self.conversion_factor
+                if self.quantity != expected_qty:
+                    self.quantity = expected_qty
+                    super().save(update_fields=['quantity'])
+
+    def sync_fractional_inventories(self):
+        """Update all child products' quantities based on parent quantity and conversion factor"""
+        if self.is_parent_bulk:
+            for child in self.fractional_children.filter(is_active=True):
+                if child.conversion_factor and child.conversion_factor > 0:
+                    child.quantity = self.quantity / child.conversion_factor
+                    child.track_inventory = self.track_inventory
+                    child.is_available = self.is_available
+                    super(Product, child).save(update_fields=['quantity', 'track_inventory', 'is_available'])
 
     def sync_inventory_from_batches(self):
         """Update product quantity from sum of active batches (concurrency-safe)"""
@@ -357,7 +399,6 @@ class Product(models.Model):
                     locked_self.original_price = best_batch.original_price
                 else:
                     # Fallback: all batches out of stock, use latest active batch price
-                    # so App pricing stays up-to-date rather than freezing forever
                     latest_batch = active_batches.order_by('-created_at').first()
                     if latest_batch:
                         locked_self.price = latest_batch.price
@@ -369,10 +410,16 @@ class Product(models.Model):
                 self.quantity = locked_self.quantity
                 self.price = locked_self.price
                 self.original_price = locked_self.original_price
+                
+                # Trigger fractional inventory sync if parent bulk product
+                if locked_self.is_parent_bulk:
+                    locked_self.sync_fractional_inventories()
     
     @property
     def is_in_stock(self):
         """Check if product is in stock"""
+        if self.parent_bulk_product:
+            return self.parent_bulk_product.is_in_stock
         if not self.track_inventory:
             return self.is_available
         return self.quantity > 0
@@ -411,6 +458,13 @@ class Product(models.Model):
         if self.maximum_order_quantity and quantity > self.maximum_order_quantity:
             return False
         
+        # If this is a child fractional product, check parent stock capacity instead
+        if self.parent_bulk_product:
+            if self.conversion_factor and self.conversion_factor > 0:
+                parent_qty_needed = Decimal(str(quantity)) * self.conversion_factor
+                return self.parent_bulk_product.can_order_quantity(parent_qty_needed, batch=batch)
+            return False
+            
         if not self.track_inventory:
             return self.is_available
             
@@ -423,6 +477,18 @@ class Product(models.Model):
         """Reduce product quantity, prioritizing a specific batch if provided"""
         if not self.track_inventory:
             return True
+            
+        # If this is a child fractional product, deduct stock from parent bulk product
+        if self.parent_bulk_product:
+            if self.conversion_factor and self.conversion_factor > 0:
+                parent_qty_needed = Decimal(str(quantity)) * self.conversion_factor
+                success = self.parent_bulk_product.reduce_quantity(
+                    parent_qty_needed, batch=batch, allow_negative=allow_negative
+                )
+                if success:
+                    self.parent_bulk_product.sync_fractional_inventories()
+                return success
+            return False
             
         if self.has_batches:
             if batch:
@@ -468,14 +534,21 @@ class Product(models.Model):
         if not self.track_inventory:
             return True
             
+        # If this is a child fractional product, restore stock to parent bulk product
+        if self.parent_bulk_product:
+            if self.conversion_factor and self.conversion_factor > 0:
+                parent_qty_added = Decimal(str(quantity)) * self.conversion_factor
+                success = self.parent_bulk_product.increase_quantity(parent_qty_added, batch=batch)
+                if success:
+                    self.parent_bulk_product.sync_fractional_inventories()
+                return success
+            return False
+            
         if self.has_batches:
             if batch:
                 batch.quantity += quantity
                 batch.save()
             else:
-                # If no batch provided but has_batches is True, we might need a default batch
-                # For now, if no batch, we can't easily increase without knowing which one
-                # or we just create/update a default one. But usually increase is via purchase/return.
                 b = self.batches.filter(is_active=True).order_by('-created_at').first()
                 if b:
                     b.quantity += quantity
@@ -488,9 +561,6 @@ class Product(models.Model):
             self.quantity += quantity
             self.save()
             return True
-            
-        self.quantity += quantity
-        self.save()
 
 
 class ProductImage(models.Model):
