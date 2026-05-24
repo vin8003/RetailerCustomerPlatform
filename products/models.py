@@ -462,7 +462,7 @@ class Product(models.Model):
         if self.parent_bulk_product:
             if self.conversion_factor and self.conversion_factor > 0:
                 parent_qty_needed = Decimal(str(quantity)) * self.conversion_factor
-                return self.parent_bulk_product.can_order_quantity(parent_qty_needed, batch=batch)
+                return self.parent_bulk_product.can_order_quantity(parent_qty_needed, batch=None)
             return False
             
         if not self.track_inventory:
@@ -483,7 +483,7 @@ class Product(models.Model):
             if self.conversion_factor and self.conversion_factor > 0:
                 parent_qty_needed = Decimal(str(quantity)) * self.conversion_factor
                 success = self.parent_bulk_product.reduce_quantity(
-                    parent_qty_needed, batch=batch, allow_negative=allow_negative
+                    parent_qty_needed, batch=None, allow_negative=allow_negative
                 )
                 if success:
                     self.parent_bulk_product.sync_fractional_inventories()
@@ -538,7 +538,7 @@ class Product(models.Model):
         if self.parent_bulk_product:
             if self.conversion_factor and self.conversion_factor > 0:
                 parent_qty_added = Decimal(str(quantity)) * self.conversion_factor
-                success = self.parent_bulk_product.increase_quantity(parent_qty_added, batch=batch)
+                success = self.parent_bulk_product.increase_quantity(parent_qty_added, batch=None)
                 if success:
                     self.parent_bulk_product.sync_fractional_inventories()
                 return success

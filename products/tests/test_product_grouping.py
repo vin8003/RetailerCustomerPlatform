@@ -182,3 +182,110 @@ class TestProductGrouping:
             partial=True
         )
         assert serializer.is_valid() is True
+
+    def test_cross_retailer_grouping_validation(self, retailer, category, brand):
+        """Test that serializers prevent linking products across different retailers"""
+        from retailers.models import RetailerProfile
+        from django.contrib.auth import get_user_model
+        
+        User = get_user_model()
+        other_user = User.objects.create_user(
+            username="other_retailer_user",
+            email="other@test.com",
+            password="password123"
+        )
+        
+        other_retailer = RetailerProfile.objects.create(
+            user=other_user,
+            shop_name="Other Store",
+            is_active=True
+        )
+        
+        other_parent = Product.objects.create(
+            retailer=other_retailer,
+            name="Other Parent 50kg Bag",
+            price=Decimal("2000.00"),
+            quantity=Decimal("10.000"),
+            category=category,
+            brand=brand,
+            is_parent_bulk=True,
+            track_inventory=True
+        )
+        
+        standalone = Product.objects.create(
+            retailer=retailer,
+            name="My Child 5kg Bag",
+            price=Decimal("250.00"),
+            quantity=Decimal("0.000"),
+            category=category,
+            brand=brand,
+            track_inventory=True
+        )
+        
+        # Test validation on update
+        serializer = ProductUpdateSerializer(
+            instance=standalone,
+            data={
+                "parent_bulk_product": other_parent.id,
+                "conversion_factor": "0.1000"
+            },
+            partial=True,
+            context={"retailer": retailer}
+        )
+        
+        with pytest.raises(DRFValidationError) as excinfo:
+            serializer.is_valid(raise_exception=True)
+            
+        assert "Parent bulk product must belong to the same retailer." in str(excinfo.value)
+
+    def test_child_batch_parameter_ignored_on_delegation(self, setup_catalog):
+        """Test that when child quantity methods are called with a batch parameter, the child batch is NOT passed to the parent (preventing silent drift)"""
+        parent, child = setup_catalog
+        
+        # Setup parent to use batches and child to have a batch
+        parent.has_batches = True
+        parent.save()
+        
+        # Clear old parent batches to ensure our new batch is the FIFO target
+        parent.batches.all().delete()
+        
+        # Create a real batch for parent
+        parent_batch = ProductBatch.objects.create(
+            product=parent,
+            retailer=parent.retailer,
+            batch_number="PARENT-BATCH-FIFO",
+            price=parent.price,
+            quantity=Decimal("10.000"),
+            is_active=True
+        )
+        parent.sync_inventory_from_batches()
+        
+        # Create a virtual batch for child
+        child_batch = ProductBatch.objects.create(
+            product=child,
+            retailer=child.retailer,
+            batch_number="CHILD-BATCH-VIRTUAL",
+            price=child.price,
+            quantity=Decimal("100.000"),
+            is_active=True
+        )
+        child.sync_inventory_from_batches()
+        
+        # Call child's reduce_quantity with child's virtual batch
+        # This will delegate reduction to parent.
+        # Since child's batch is passed as parameter, parent should ignore it (i.e. use FIFO instead of child's batch)
+        success = child.reduce_quantity(Decimal("10.000"), batch=child_batch)
+        assert success is True
+        
+        parent_batch.refresh_from_db()
+        child_batch.refresh_from_db()
+        parent.refresh_from_db()
+        child.refresh_from_db()
+        
+        # Parent's batch should be reduced from 10 to 9 via FIFO (because child_batch was ignored)
+        assert parent_batch.quantity == Decimal("9.000")
+        assert parent.quantity == Decimal("9.000")
+        
+        # Child's virtual batch should be unaffected directly (its overall quantity is synced from parent)
+        # Sibling inventory sync will update child's quantity to 90.
+        assert child.quantity == Decimal("90.000")

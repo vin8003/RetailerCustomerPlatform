@@ -640,6 +640,11 @@ class ProductCreateSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError("Conversion factor is required for child fractional products.")
             if conversion_factor <= 0:
                 raise serializers.ValidationError("Conversion factor must be greater than zero.")
+            
+            # Ensure parent_bulk_product belongs to the same retailer
+            retailer = self.context.get('retailer')
+            if retailer and parent_product.retailer != retailer:
+                raise serializers.ValidationError("Parent bulk product must belong to the same retailer.")
         
         quantity = data.get('quantity', 0)
         min_order_qty = data.get('minimum_order_quantity', 1)
@@ -815,6 +820,13 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError("Conversion factor is required for child fractional products.")
             if conversion_factor <= 0:
                 raise serializers.ValidationError("Conversion factor must be greater than zero.")
+            
+            # Ensure parent_bulk_product belongs to the same retailer
+            retailer = self.context.get('retailer')
+            if not retailer and self.instance:
+                retailer = self.instance.retailer
+            if retailer and parent_product.retailer != retailer:
+                raise serializers.ValidationError("Parent bulk product must belong to the same retailer.")
             
             # Transition safety check: only if transitioning from non-grouped to child
             if self.instance and not self.instance.parent_bulk_product:
