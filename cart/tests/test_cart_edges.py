@@ -26,7 +26,6 @@ class TestCartViewEdges:
         assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
 
     def test_bxgy_auto_add_logic_branches(self, api_client, customer, retailer, product):
-        # Test line 514-556: _apply_same_product_auto_add
         api_client.force_authenticate(user=customer)
         
         # Create a BXGY 1+1 Offer (Group size 2)
@@ -38,15 +37,28 @@ class TestCartViewEdges:
         # Offer Target - Product
         OfferTarget.objects.create(offer=offer, target_type="product", product=product)
         
-        # Add 1 item. Remainder = 1 % 2 = 1. 1 >= buy_qty(1). 
-        # So should auto-add 2-1 = 1. Total 2.
+        # Add 1 item
         url = reverse('add_to_cart')
         data = {'product_id': product.id, 'quantity': 1}
         response = api_client.post(url, data)
         assert response.status_code == status.HTTP_201_CREATED
         
+        # Database quantity MUST strictly remain 1 (no forceful mutation!)
         cart_item = CartItem.objects.get(product=product, cart__customer=customer)
-        assert cart_item.quantity == 2
+        assert cart_item.quantity == 1
+
+        # Retrieve the cart - OfferEngine should dynamically return total display quantity 2
+        url_get = reverse('get_cart') + f"?retailer_id={retailer.id}"
+        response_get = api_client.get(url_get)
+        assert response_get.status_code == status.HTTP_200_OK
+        
+        # Check item discounts in the response
+        item_id_key = cart_item.id
+        discounts = response_get.data['item_discounts']
+        assert item_id_key in discounts
+        assert discounts[item_id_key]['total_display_quantity'] == 2
+        assert discounts[item_id_key]['purchased_quantity'] == 1
+        assert discounts[item_id_key]['free_quantity'] == 1
 
     @patch('cart.views.Cart.objects.get')
     def test_cart_clear_exception(self, mock_get, api_client, customer, retailer):

@@ -199,15 +199,54 @@ def create_pos_order(request):
 
     try:
         from retailers.models import RetailerCustomerMapping
+        
+        # 1. Parse POS items, validate original prices, and construct mock context items
+        class POSCartItem:
+            def __init__(self, product, quantity, unit_price, id=None):
+                self.product = product
+                self.quantity = quantity
+                self.unit_price = Decimal(str(unit_price))
+                self.total_price = self.unit_price * quantity
+                self.id = id
+
+        pos_items = []
+        for item in items_data:
+            product = Product.objects.get(id=item['product_id'], retailer=retailer)
+            batch_id = item.get('batch_id')
+            batch = None
+            if batch_id:
+                batch = ProductBatch.objects.get(id=batch_id, product=product)
+            
+            # Expected price is database price before discount
+            expected_price = Decimal(str(batch.price if batch else product.price))
+            sent_price = Decimal(str(item['unit_price']))
+            if sent_price != expected_price:
+                raise ValueError(
+                    f"Price mismatch for {product.name}: "
+                    f"sent ₹{sent_price}, expected ₹{expected_price}"
+                )
+            
+            qty = Decimal(str(item['quantity']))
+            pos_items.append(POSCartItem(product=product, quantity=qty, unit_price=expected_price, id=item['product_id']))
+
+        # 2. Run POS items through OfferEngine to compute automated discounts
+        from offers.engine import OfferEngine
+        engine = OfferEngine()
+        offer_results = engine.calculate_offers(pos_items, retailer, context={'channel': 'pos'})
+        
+        subtotal = offer_results['subtotal']
+        automated_discount = offer_results['total_savings']
+        
+        # Support cashier's manual discount in addition/override to automated offers
+        raw_discount = Decimal(str(data.get('discount_amount', 0)))
+        final_discount = max(automated_discount, raw_discount)
+        total_amount = subtotal - final_discount
+
         with transaction.atomic():
             # Round amounts to nearest whole rupee as requested
-            raw_subtotal = Decimal(str(data.get('subtotal', 0)))
-            raw_discount = Decimal(str(data.get('discount_amount', 0)))
-            raw_total = Decimal(str(data.get('total_amount', 0)))
-
-            rounded_subtotal = raw_subtotal.quantize(Decimal('1'), rounding='ROUND_HALF_UP')
-            rounded_discount = raw_discount.quantize(Decimal('1'), rounding='ROUND_HALF_UP')
-            rounded_total = raw_total.quantize(Decimal('1'), rounding='ROUND_HALF_UP')
+            rounded_subtotal = subtotal.quantize(Decimal('1'), rounding='ROUND_HALF_UP')
+            rounded_discount = final_discount.quantize(Decimal('1'), rounding='ROUND_HALF_UP')
+            rounded_total = total_amount.quantize(Decimal('1'), rounding='ROUND_HALF_UP')
 
             # Payment Breakdown Logic (Initialized to 0 to avoid NULL constraints)
             cash_amount = Decimal('0')
@@ -280,6 +319,17 @@ def create_pos_order(request):
                 delivered_at=timezone.now()
             )
 
+            # Create Offer Redemptions for POS Order
+            from offers.models import OfferRedemption
+            for applied in offer_results['applied_offers']:
+                OfferRedemption.objects.create(
+                    order=order,
+                    customer=order_customer,
+                    offer_id=applied['offer_id'],
+                    discount_amount=applied['savings'] if applied.get('benefit_type', 'discount') == 'discount' else 0,
+                    points_earned=applied['savings'] if applied.get('benefit_type', 'discount') == 'credit_points' else 0
+                )
+
             # Award Loyalty Points
             order.award_loyalty_points()
 
@@ -312,10 +362,10 @@ def create_pos_order(request):
                             )
                     
                     mapping.record_transaction(
-                        transaction_type='SALE',
-                        amount=credit_amount,
-                        order=order,
-                        notes=f"POS Udhaar for Order #{order.order_number}"
+                         transaction_type='SALE',
+                         amount=credit_amount,
+                         order=order,
+                         notes=f"POS Udhaar for Order #{order.order_number}"
                     )
                 elif credit_amount < 0:
                     mapping.record_transaction(
@@ -328,6 +378,7 @@ def create_pos_order(request):
                     mapping.save()
 
             # Create Order Items and Reduce Inventory
+            item_discounts = offer_results.get('item_discounts', {})
             for item in items_data:
                 product = Product.objects.select_for_update().get(id=item['product_id'], retailer=retailer)
                 batch_id = item.get('batch_id')
@@ -336,15 +387,14 @@ def create_pos_order(request):
                     batch = ProductBatch.objects.select_for_update().get(id=batch_id, product=product)
                 
                 qty = Decimal(str(item['quantity']))
-                unit_price = Decimal(str(item['unit_price']))
+                unit_price = Decimal(str(batch.price if batch else product.price))
                 
-                # Price validation: ensure frontend price matches actual price
-                expected_price = Decimal(str(batch.price)) if batch else Decimal(str(product.price))
-                if unit_price != expected_price:
-                    raise ValueError(
-                        f"Price mismatch for {product.name}: "
-                        f"sent ₹{unit_price}, expected ₹{expected_price}"
-                    )
+                # Apply discounts/free items dynamically calculated by the engine
+                product_id_key = item['product_id']
+                if product_id_key in item_discounts:
+                    info = item_discounts[product_id_key]
+                    unit_price = info['final_price']
+                    qty = info.get('total_display_quantity', qty)
                 
                 # Calculate previous quantity for logging
                 prev_qty = batch.quantity if (batch and product.track_inventory) else product.quantity
