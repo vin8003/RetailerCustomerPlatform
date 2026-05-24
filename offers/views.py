@@ -59,7 +59,9 @@ class OfferViewSet(viewsets.ModelViewSet):
             from retailers.models import RetailerProfile
             retailer = RetailerProfile.objects.get(id=retailer_id)
             
-        channel = request.data.get('channel', 'mobile')
+        user_type = getattr(request.user, 'user_type', 'customer')
+        default_channel = 'pos' if user_type == 'retailer' else 'mobile'
+        channel = request.data.get('channel', default_channel)
         engine = OfferEngine()
         result = engine.calculate_offers(cart_items, retailer, context={'channel': channel})
         return Response(result)
