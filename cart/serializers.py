@@ -33,6 +33,12 @@ class CartItemSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'unit_price', 'added_at', 'updated_at']
 
     def get_stock_quantity(self, obj):
+        # When inventory tracking is disabled, there is no real stock limit.
+        # Return a high sentinel value (99999) so the frontend does NOT
+        # block cart quantity adjustments with "Maximum order limit is 0".
+        if not obj.product.track_inventory:
+            return 99999
+
         qty = obj.batch.quantity if obj.batch else obj.product.quantity
         if qty is not None:
             # If it's a whole number (e.g. 10.000), return as int 10
