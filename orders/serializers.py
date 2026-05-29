@@ -474,17 +474,13 @@ class OrderCreateSerializer(serializers.Serializer):
         item_discounts = offer_results.get('item_discounts', {})
 
         # Validate cart items availability and limits
+        master_product_demand = {}
+        
         for cart_item in cart_items:
             quantity = cart_item.quantity
             if cart_item.id in item_discounts:
                 quantity = item_discounts[cart_item.id].get('total_display_quantity', cart_item.quantity)
 
-            # Check stock against offer-adjusted quantity (purchased + free)
-            if cart_item.product.track_inventory and quantity > cart_item.product.quantity:
-                 raise serializers.ValidationError(
-                    f"Product '{cart_item.product.name}' - only {cart_item.product.quantity} items available"
-                )
-            
             # Check minimum and maximum order quantities
             if cart_item.quantity < cart_item.product.minimum_order_quantity:
                 raise serializers.ValidationError(
@@ -494,6 +490,30 @@ class OrderCreateSerializer(serializers.Serializer):
             if cart_item.product.maximum_order_quantity and cart_item.quantity > cart_item.product.maximum_order_quantity:
                 raise serializers.ValidationError(
                     f"Product '{cart_item.product.name}' - maximum order quantity is {cart_item.product.maximum_order_quantity}"
+                )
+                
+            # Aggregate stock demand
+            if cart_item.product.track_inventory:
+                master = cart_item.product.parent_bulk_product if cart_item.product.parent_bulk_product else cart_item.product
+                
+                qty_in_parent_units = quantity
+                if cart_item.product.parent_bulk_product_id == master.id and cart_item.product.conversion_factor:
+                    qty_in_parent_units = quantity * cart_item.product.conversion_factor
+                    
+                if master.id not in master_product_demand:
+                    master_product_demand[master.id] = {
+                        'master': master,
+                        'demand': Decimal('0.000')
+                    }
+                master_product_demand[master.id]['demand'] += qty_in_parent_units
+                
+        # Check if any master product demand exceeds its available stock
+        for m_id, data in master_product_demand.items():
+            master = data['master']
+            demand = data['demand']
+            if demand > master.quantity:
+                raise serializers.ValidationError(
+                    f"Total combined cart items require {demand} of '{master.name}', but only {master.quantity} is available."
                 )
 
         return data

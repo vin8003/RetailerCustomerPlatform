@@ -92,6 +92,46 @@ class Cart(models.Model):
         except CartItem.DoesNotExist:
             return False
 
+    def validate_aggregate_stock(self, product, simulate_quantity=None):
+        """
+        Validates if the cart's total demand on a product's inventory pool exceeds stock.
+        For fractional sizing (KAN-13), parent and child products share the same parent inventory.
+        """
+        if not product.track_inventory:
+            return True, ""
+            
+        master_product = product.parent_bulk_product if product.parent_bulk_product else product
+        
+        total_required_parent_qty = Decimal('0.000')
+        product_found_in_cart = False
+        
+        for item in self.items.select_related('product').all():
+            item_prod = item.product
+            qty_to_consider = item.quantity
+            
+            if item_prod.id == product.id and simulate_quantity is not None:
+                qty_to_consider = Decimal(str(simulate_quantity))
+                product_found_in_cart = True
+                
+            if item_prod.id == master_product.id:
+                total_required_parent_qty += qty_to_consider
+            elif item_prod.parent_bulk_product_id == master_product.id:
+                if item_prod.conversion_factor:
+                    total_required_parent_qty += (qty_to_consider * item_prod.conversion_factor)
+                    
+        if simulate_quantity is not None and not product_found_in_cart:
+            qty_to_consider = Decimal(str(simulate_quantity))
+            if product.id == master_product.id:
+                total_required_parent_qty += qty_to_consider
+            elif product.parent_bulk_product_id == master_product.id:
+                if product.conversion_factor:
+                    total_required_parent_qty += (qty_to_consider * product.conversion_factor)
+                    
+        if total_required_parent_qty > master_product.quantity:
+            return False, f"Total combined cart items require {total_required_parent_qty} of {master_product.name}, but only {master_product.quantity} is available."
+            
+        return True, ""
+
 
 class CartItem(models.Model):
     """

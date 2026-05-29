@@ -831,6 +831,14 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
             # User requested that existing stock should not block linking,
             # and the child stock should simply be calculated from the parent.
             # So we remove the transition safety check that raised a ValidationError here.
+            
+        if self.instance and self.instance.is_parent_bulk and not is_parent:
+            # The retailer is trying to disable 'is_parent_bulk'
+            if self.instance.fractional_children.filter(is_active=True).exists():
+                raise serializers.ValidationError(
+                    "Cannot disable Master Bulk status because child fractional products are still linked to this product. "
+                    "Please unlink or disable them first."
+                )
         
         # Skip standard quantity validation if batches are being used
         if not data.get('has_batches', self.instance.has_batches):
