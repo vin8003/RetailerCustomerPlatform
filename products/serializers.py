@@ -828,19 +828,9 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
             if retailer and parent_product.retailer != retailer:
                 raise serializers.ValidationError("Parent bulk product must belong to the same retailer.")
             
-            # Transition safety check: only if transitioning from non-grouped to child
-            if self.instance and not self.instance.parent_bulk_product:
-                has_positive_stock = False
-                if self.instance.has_batches:
-                    has_positive_stock = self.instance.batches.filter(is_active=True, quantity__gt=0).exists()
-                else:
-                    has_positive_stock = self.instance.quantity > 0
-                
-                if has_positive_stock:
-                    raise serializers.ValidationError(
-                        "This product has active inventory. Please transfer its physical stock into the parent bulk "
-                        "product's inventory batches first, and reset this product's stock to 0 before establishing the grouping link."
-                    )
+            # User requested that existing stock should not block linking,
+            # and the child stock should simply be calculated from the parent.
+            # So we remove the transition safety check that raised a ValidationError here.
         
         # Skip standard quantity validation if batches are being used
         if not data.get('has_batches', self.instance.has_batches):
