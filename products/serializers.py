@@ -523,7 +523,7 @@ class ProductDetailSerializer(serializers.ModelSerializer):
             return False
 
     def get_group_variants(self, obj):
-        """Get all other active products in the same group for this retailer"""
+        """Get all other active products in the same group for this retailer, sorting parent/child first"""
         try:
             if obj.product_group:
                 siblings = Product.objects.filter(
@@ -531,16 +531,30 @@ class ProductDetailSerializer(serializers.ModelSerializer):
                     product_group=obj.product_group,
                     is_active=True,
                     is_available=True
-                ).exclude(id=obj.id).only('id', 'name', 'unit', 'price', 'original_price')
+                ).exclude(id=obj.id).only(
+                    'id', 'name', 'unit', 'price', 'original_price', 
+                    'is_parent_bulk', 'parent_bulk_product'
+                )
+                
+                # Sort: items where is_parent_bulk is True or parent_bulk_product_id is not None come first
+                sorted_siblings = sorted(
+                    list(siblings),
+                    key=lambda s: (0 if (s.is_parent_bulk or s.parent_bulk_product_id is not None) else 1, s.id)
+                )
                 
                 variants = []
-                for s in siblings:
+                for s in sorted_siblings:
                     variants.append({
                         'id': s.id,
                         'name': s.name,
                         'unit': s.unit,
                         'price': float(s.price),
-                        'original_price': float(s.original_price) if s.original_price else None
+                        'original_price': float(s.original_price) if s.original_price else float(s.price),
+                        'image': s.image_display_url,
+                        'minimum_order_quantity': float(s.minimum_order_quantity) if s.minimum_order_quantity else 1,
+                        'maximum_order_quantity': float(s.maximum_order_quantity) if s.maximum_order_quantity else None,
+                        'track_inventory': s.track_inventory,
+                        'quantity': float(s.quantity) if s.quantity else 0
                     })
                 return variants
             return []
