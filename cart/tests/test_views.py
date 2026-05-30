@@ -82,6 +82,48 @@ class TestAddToCart:
         )
         assert res.status_code == status.HTTP_400_BAD_REQUEST
 
+    def test_add_to_cart_aggregate_exceeds_stock(self, api_client, customer, retailer, category, brand):
+        # Create a parent product with 10 stock
+        parent = Product.objects.create(
+            retailer=retailer,
+            name="Parent Bulk Product",
+            price=Decimal("100.00"),
+            quantity=Decimal("10.00"),
+            category=category,
+            brand=brand,
+            is_parent_bulk=True,
+            track_inventory=True
+        )
+        # Create child product with conversion 0.1
+        child = Product.objects.create(
+            retailer=retailer,
+            name="Child Product",
+            price=Decimal("10.00"),
+            quantity=Decimal("100.00"),
+            category=category,
+            brand=brand,
+            parent_bulk_product=parent,
+            conversion_factor=Decimal("0.10"),
+            track_inventory=True
+        )
+        
+        api_client.force_authenticate(user=customer)
+        
+        # 1. Add 6 parent products (OK, stock is 10)
+        res = api_client.post(
+            reverse("add_to_cart"),
+            {"product_id": parent.id, "quantity": 6},
+        )
+        assert res.status_code == status.HTTP_201_CREATED
+        
+        # 2. Add 50 child products (requires 50 * 0.1 = 5 parent units. Combined = 6 + 5 = 11 > 10 parent stock. Should fail.)
+        res = api_client.post(
+            reverse("add_to_cart"),
+            {"product_id": child.id, "quantity": 50},
+        )
+        assert res.status_code == status.HTTP_400_BAD_REQUEST
+
+
     def test_add_to_cart_inactive_product(self, api_client, customer, product):
         product.is_active = False
         product.save()
@@ -145,6 +187,42 @@ class TestUpdateCartItem:
         res = api_client.put(
             reverse("update_cart_item", args=[cart_item.id]),
             {"quantity": 9999},
+        )
+        assert res.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_update_cart_item_aggregate_exceeds_stock(self, api_client, customer, cart, retailer, category, brand):
+        parent = Product.objects.create(
+            retailer=retailer,
+            name="Parent Bulk Product",
+            price=Decimal("100.00"),
+            quantity=Decimal("10.00"),
+            category=category,
+            brand=brand,
+            is_parent_bulk=True,
+            track_inventory=True
+        )
+        child = Product.objects.create(
+            retailer=retailer,
+            name="Child Product",
+            price=Decimal("10.00"),
+            quantity=Decimal("100.00"),
+            category=category,
+            brand=brand,
+            parent_bulk_product=parent,
+            conversion_factor=Decimal("0.10"),
+            track_inventory=True
+        )
+        
+        # Add both to cart
+        item_parent = cart.add_item(parent, quantity=Decimal("5.00"))
+        item_child = cart.add_item(child, quantity=Decimal("30.00")) # 3 parent units. Total = 8 parent units.
+        
+        api_client.force_authenticate(user=customer)
+        
+        # Update child item to 60 (requires 6 parent units. Combined = 5 + 6 = 11 > 10. Should fail.)
+        res = api_client.put(
+            reverse("update_cart_item", args=[item_child.id]),
+            {"quantity": 60},
         )
         assert res.status_code == status.HTTP_400_BAD_REQUEST
 
@@ -297,6 +375,38 @@ class TestValidateCart:
         api_client.force_authenticate(user=customer)
         res = api_client.post(reverse("validate_cart"), {"retailer_id": retailer.id})
         assert res.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_validate_cart_aggregate_exceeds_stock(self, api_client, customer, cart, retailer, category, brand):
+        parent = Product.objects.create(
+            retailer=retailer,
+            name="Parent Bulk Product",
+            price=Decimal("100.00"),
+            quantity=Decimal("10.00"),
+            category=category,
+            brand=brand,
+            is_parent_bulk=True,
+            track_inventory=True
+        )
+        child = Product.objects.create(
+            retailer=retailer,
+            name="Child Product",
+            price=Decimal("10.00"),
+            quantity=Decimal("100.00"),
+            category=category,
+            brand=brand,
+            parent_bulk_product=parent,
+            conversion_factor=Decimal("0.10"),
+            track_inventory=True
+        )
+        
+        cart.add_item(parent, quantity=Decimal("6.00"))
+        cart.add_item(child, quantity=Decimal("50.00")) # 5 parent units. Combined = 11 > 10.
+        
+        api_client.force_authenticate(user=customer)
+        res = api_client.post(reverse("validate_cart"), {"retailer_id": retailer.id})
+        assert res.status_code == status.HTTP_400_BAD_REQUEST
+        assert res.data["valid"] is False
+
 
     def test_validate_cart_below_min_qty(self, api_client, customer, cart, product, retailer):
         product.minimum_order_quantity = 5

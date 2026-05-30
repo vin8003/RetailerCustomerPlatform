@@ -508,9 +508,9 @@ class OrderCreateSerializer(serializers.Serializer):
                 master_product_demand[master.id]['demand'] += qty_in_parent_units
                 
         # Check if any master product demand exceeds its available stock
-        for m_id, data in master_product_demand.items():
-            master = data['master']
-            demand = data['demand']
+        for m_id, info in master_product_demand.items():
+            master = info['master']
+            demand = info['demand']
             if demand > master.quantity:
                 raise serializers.ValidationError(
                     f"Total combined cart items require {demand} of '{master.name}', but only {master.quantity} is available."

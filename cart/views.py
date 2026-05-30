@@ -346,6 +346,8 @@ def get_cart_summary(request):
             validated_parents = set()
             
             item_discounts = offer_results.get('item_discounts', {})
+            custom_item_quantities = {it.id: item_discounts.get(it.id, {}).get('total_display_quantity', it.quantity) for it in cart_items}
+            
             for item in cart_items:
                 # Basic availability
                 if not item.product.is_available or not item.product.is_active:
@@ -355,7 +357,7 @@ def get_cart_summary(request):
                 # Stock validation
                 master_id = item.product.parent_bulk_product_id or item.product.id
                 if master_id not in validated_parents:
-                    is_valid, msg = cart.validate_aggregate_stock(item.product)
+                    is_valid, msg = cart.validate_aggregate_stock(item.product, custom_item_quantities=custom_item_quantities)
                     if not is_valid:
                         unavailable_items.append(item.product.name)
                     validated_parents.add(master_id)
@@ -440,6 +442,8 @@ def validate_cart(request):
             validation_errors = []
             validated_parents = set()
             
+            custom_item_quantities = {it.id: item_discounts.get(it.id, {}).get('total_display_quantity', it.quantity) for it in cart_items}
+            
             for item in cart_items:
                 info = item_discounts.get(item.id, {})
                 validation_quantity = info.get('total_display_quantity', item.quantity)
@@ -449,7 +453,7 @@ def validate_cart(request):
                 else:
                     master_id = item.product.parent_bulk_product_id or item.product.id
                     if master_id not in validated_parents:
-                        is_valid, msg = cart.validate_aggregate_stock(item.product)
+                        is_valid, msg = cart.validate_aggregate_stock(item.product, custom_item_quantities=custom_item_quantities)
                         if not is_valid:
                             validation_errors.append(msg)
                         validated_parents.add(master_id)

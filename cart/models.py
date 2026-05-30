@@ -92,7 +92,7 @@ class Cart(models.Model):
         except CartItem.DoesNotExist:
             return False
 
-    def validate_aggregate_stock(self, product, simulate_quantity=None):
+    def validate_aggregate_stock(self, product, simulate_quantity=None, custom_item_quantities=None):
         """
         Validates if the cart's total demand on a product's inventory pool exceeds stock.
         For fractional sizing (KAN-13), parent and child products share the same parent inventory.
@@ -112,6 +112,8 @@ class Cart(models.Model):
             if item_prod.id == product.id and simulate_quantity is not None:
                 qty_to_consider = Decimal(str(simulate_quantity))
                 product_found_in_cart = True
+            elif custom_item_quantities and item.id in custom_item_quantities:
+                qty_to_consider = Decimal(str(custom_item_quantities[item.id]))
                 
             if item_prod.id == master_product.id:
                 total_required_parent_qty += qty_to_consider
