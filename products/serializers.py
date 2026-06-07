@@ -105,7 +105,8 @@ class ProductListSerializer(serializers.ModelSerializer):
             'image', 'image_url', 'category_name', 'brand_name', 'retailer_name',
             'is_in_stock', 'is_featured', 'is_active', 'is_seasonal', 'is_available',
             'average_rating', 'review_count', 'created_at', 'product_group',
-            'active_offer_text', 'is_wishlisted', 'barcode', 'has_batches', 'batches'
+            'active_offer_text', 'is_wishlisted', 'barcode', 'has_batches', 'batches',
+            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor'
         ]
 
     def get_quantity(self, obj):
@@ -301,6 +302,7 @@ class ProductDetailSerializer(serializers.ModelSerializer):
     quantity = serializers.SerializerMethodField()
     minimum_order_quantity = serializers.SerializerMethodField()
     maximum_order_quantity = serializers.SerializerMethodField()
+    group_variants = serializers.SerializerMethodField()
     
     class Meta:
         model = Product
@@ -313,7 +315,8 @@ class ProductDetailSerializer(serializers.ModelSerializer):
             'retailer_name', 'retailer_id', 'specifications', 'tags',
             'is_in_stock', 'is_featured', 'is_active', 'is_seasonal', 'is_available', 
             'average_rating', 'review_count', 'created_at', 'updated_at',
-            'product_group', 'active_offer_text', 'offers', 'is_wishlisted', 'barcode'
+            'product_group', 'active_offer_text', 'offers', 'is_wishlisted', 'barcode',
+            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor', 'group_variants'
         ]
 
     def get_quantity(self, obj):
@@ -519,6 +522,32 @@ class ProductDetailSerializer(serializers.ModelSerializer):
         except Exception:
             return False
 
+    def get_group_variants(self, obj):
+        """Get all other active products in the same group for this retailer"""
+        try:
+            if obj.product_group:
+                siblings = Product.objects.filter(
+                    retailer=obj.retailer,
+                    product_group=obj.product_group,
+                    is_active=True,
+                    is_available=True
+                ).exclude(id=obj.id).only('id', 'name', 'unit', 'price', 'original_price')
+                
+                variants = []
+                for s in siblings:
+                    variants.append({
+                        'id': s.id,
+                        'name': s.name,
+                        'unit': s.unit,
+                        'price': float(s.price),
+                        'original_price': float(s.original_price) if s.original_price else None
+                    })
+                return variants
+            return []
+        except Exception as e:
+            logger.error(f"Error getting group variants: {e}")
+            return []
+
 
 class MasterProductSerializer(serializers.ModelSerializer):
     """
@@ -582,7 +611,8 @@ class ProductCreateSerializer(serializers.ModelSerializer):
             'original_price', 'discount_percentage', 'quantity', 'track_inventory', 'unit',
             'minimum_order_quantity', 'maximum_order_quantity', 'image',
             'images', 'specifications', 'tags', 'is_featured', 'is_available',
-            'barcode', 'master_product', 'product_group', 'is_active', 'is_seasonal', 'has_batches'
+            'barcode', 'master_product', 'product_group', 'is_active', 'is_seasonal', 'has_batches',
+            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor'
         ]
     
     def validate_barcode(self, value):
@@ -597,6 +627,24 @@ class ProductCreateSerializer(serializers.ModelSerializer):
         if data.get('original_price') and data.get('price'):
             if data['original_price'] < data['price']:
                 raise serializers.ValidationError("Original price cannot be less than current price")
+        
+        # Product Group / Fractional Sizing Validation
+        is_parent = data.get('is_parent_bulk', False)
+        parent_product = data.get('parent_bulk_product')
+        conversion_factor = data.get('conversion_factor')
+
+        if parent_product:
+            if is_parent:
+                raise serializers.ValidationError("A product cannot be both a parent bulk product and a child fractional product.")
+            if not conversion_factor:
+                raise serializers.ValidationError("Conversion factor is required for child fractional products.")
+            if conversion_factor <= 0:
+                raise serializers.ValidationError("Conversion factor must be greater than zero.")
+            
+            # Ensure parent_bulk_product belongs to the same retailer
+            retailer = self.context.get('retailer')
+            if retailer and parent_product.retailer != retailer:
+                raise serializers.ValidationError("Parent bulk product must belong to the same retailer.")
         
         quantity = data.get('quantity', 0)
         min_order_qty = data.get('minimum_order_quantity', 1)
@@ -641,7 +689,8 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
             'original_price', 'discount_percentage', 'quantity', 'track_inventory', 'unit',
             'minimum_order_quantity', 'maximum_order_quantity', 'image',
             'images', 'specifications', 'tags', 'is_featured', 'is_available',
-            'barcode', 'master_product', 'product_group', 'is_active', 'is_seasonal', 'has_batches'
+            'barcode', 'master_product', 'product_group', 'is_active', 'is_seasonal', 'has_batches',
+            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor'
         ]
     
     def validate_barcode(self, value):
@@ -758,6 +807,40 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
         if data.get('original_price') and data.get('price'):
             if data['original_price'] < data['price']:
                 raise serializers.ValidationError("Original price cannot be less than current price")
+        
+        # Product Group / Fractional Sizing Validation
+        is_parent = data.get('is_parent_bulk', self.instance.is_parent_bulk if self.instance else False)
+        parent_product = data.get('parent_bulk_product', self.instance.parent_bulk_product if self.instance else None)
+        conversion_factor = data.get('conversion_factor', self.instance.conversion_factor if self.instance else None)
+
+        if parent_product:
+            if is_parent:
+                raise serializers.ValidationError("A product cannot be both a parent bulk product and a child fractional product.")
+            if not conversion_factor:
+                raise serializers.ValidationError("Conversion factor is required for child fractional products.")
+            if conversion_factor <= 0:
+                raise serializers.ValidationError("Conversion factor must be greater than zero.")
+            
+            # Ensure parent_bulk_product belongs to the same retailer
+            retailer = self.context.get('retailer')
+            if not retailer and self.instance:
+                retailer = self.instance.retailer
+            if retailer and parent_product.retailer != retailer:
+                raise serializers.ValidationError("Parent bulk product must belong to the same retailer.")
+            
+            # Transition safety check: only if transitioning from non-grouped to child
+            if self.instance and not self.instance.parent_bulk_product:
+                has_positive_stock = False
+                if self.instance.has_batches:
+                    has_positive_stock = self.instance.batches.filter(is_active=True, quantity__gt=0).exists()
+                else:
+                    has_positive_stock = self.instance.quantity > 0
+                
+                if has_positive_stock:
+                    raise serializers.ValidationError(
+                        "This product has active inventory. Please transfer its physical stock into the parent bulk "
+                        "product's inventory batches first, and reset this product's stock to 0 before establishing the grouping link."
+                    )
         
         # Skip standard quantity validation if batches are being used
         if not data.get('has_batches', self.instance.has_batches):
