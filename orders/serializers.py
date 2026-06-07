@@ -467,10 +467,20 @@ class OrderCreateSerializer(serializers.Serializer):
         if not cart_items.exists():
             raise serializers.ValidationError("Cart is empty")
 
+        # Calculate offers using Engine to get total display quantities for stock validation
+        from offers.engine import OfferEngine
+        engine = OfferEngine()
+        offer_results = engine.calculate_offers(cart_items, retailer)
+        item_discounts = offer_results.get('item_discounts', {})
+
         # Validate cart items availability and limits
         for cart_item in cart_items:
-            # Check stock
-            if cart_item.product.track_inventory and cart_item.quantity > cart_item.product.quantity:
+            quantity = cart_item.quantity
+            if cart_item.id in item_discounts:
+                quantity = item_discounts[cart_item.id].get('total_display_quantity', cart_item.quantity)
+
+            # Check stock against offer-adjusted quantity (purchased + free)
+            if cart_item.product.track_inventory and quantity > cart_item.product.quantity:
                  raise serializers.ValidationError(
                     f"Product '{cart_item.product.name}' - only {cart_item.product.quantity} items available"
                 )
@@ -644,11 +654,14 @@ class OrderCreateSerializer(serializers.Serializer):
             for cart_item in cart_items:
                 # Calculate final prices based on offers
                 unit_price = cart_item.product.price
-                total_price = cart_item.total_price
+                quantity = cart_item.quantity
                 
                 if cart_item.id in item_discounts:
-                    unit_price = item_discounts[cart_item.id]['final_price']
-                    total_price = unit_price * cart_item.quantity
+                    info = item_discounts[cart_item.id]
+                    unit_price = info['final_price']
+                    quantity = info.get('total_display_quantity', cart_item.quantity)
+                
+                total_price = unit_price * quantity
                 
                 order_items.append(OrderItem(
                     order=order,
@@ -656,14 +669,14 @@ class OrderCreateSerializer(serializers.Serializer):
                     product_name=cart_item.product.name,
                     product_price=cart_item.product.price,
                     product_unit=cart_item.product.unit,
-                    quantity=cart_item.quantity,
+                    quantity=quantity,
                     unit_price=unit_price,
                     total_price=total_price
                 ))
                 
                 # Reduce product quantity in memory (only if tracked)
                 if cart_item.product.track_inventory:
-                    cart_item.product.quantity -= cart_item.quantity
+                    cart_item.product.quantity -= quantity
                     products_to_update.append(cart_item.product)
             
             # Bulk create items
