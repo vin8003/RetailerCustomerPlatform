@@ -1,6 +1,7 @@
 import pytest
 from decimal import Decimal
 from cart.models import Cart, CartItem, CartSession, CartHistory
+from products.models import Product
 
 
 @pytest.mark.django_db
@@ -72,6 +73,55 @@ class TestCartModel:
     def test_update_item_quantity_not_exists(self, cart, product2):
         result = cart.update_item_quantity(product2, 5)
         assert result is False
+
+    def test_validate_aggregate_stock(self, cart, retailer, category, brand):
+        """Test aggregate stock checking on mixed parent and child cart items"""
+        # Create a parent product
+        parent = Product.objects.create(
+            retailer=retailer,
+            name="Parent Bulk Product",
+            price=Decimal("100.00"),
+            quantity=Decimal("10.00"),
+            category=category,
+            brand=brand,
+            is_parent_bulk=True,
+            track_inventory=True
+        )
+        # Create a child product
+        child = Product.objects.create(
+            retailer=retailer,
+            name="Child Product",
+            price=Decimal("10.00"),
+            quantity=Decimal("100.00"),
+            category=category,
+            brand=brand,
+            parent_bulk_product=parent,
+            conversion_factor=Decimal("0.10"),
+            track_inventory=True
+        )
+        
+        # Scenario 1: Add 5 parent products (OK, stock is 10)
+        is_ok, msg = cart.validate_aggregate_stock(parent, simulate_quantity=Decimal("5.00"))
+        assert is_ok is True
+        
+        # Scenario 2: Add 15 parent products (fails, stock is 10)
+        is_ok, msg = cart.validate_aggregate_stock(parent, simulate_quantity=Decimal("15.00"))
+        assert is_ok is False
+        assert "Total combined cart items require" in msg
+        
+        # Scenario 3: Add 3 parent products and 30 child products (total 3 + 30*0.1 = 6 parent units, OK)
+        cart.add_item(parent, quantity=Decimal("3.00"))
+        cart.add_item(child, quantity=Decimal("30.00"))
+        is_ok, msg = cart.validate_aggregate_stock(parent)
+        assert is_ok is True
+        
+        # Scenario 4: Add another 2 parent products (simulate_quantity = 5 for parent, total parent units = 5 + 30*0.1 = 8, OK)
+        is_ok, msg = cart.validate_aggregate_stock(parent, simulate_quantity=Decimal("5.00"))
+        assert is_ok is True
+        
+        # Scenario 5: Add another 5 parent products (simulate_quantity = 8 for parent, total parent units = 8 + 3 = 11, exceeds)
+        is_ok, msg = cart.validate_aggregate_stock(parent, simulate_quantity=Decimal("8.00"))
+        assert is_ok is False
 
 
 @pytest.mark.django_db

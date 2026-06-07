@@ -467,14 +467,20 @@ class OrderCreateSerializer(serializers.Serializer):
         if not cart_items.exists():
             raise serializers.ValidationError("Cart is empty")
 
+        # Calculate offers using Engine to get total display quantities for stock validation
+        from offers.engine import OfferEngine
+        engine = OfferEngine()
+        offer_results = engine.calculate_offers(cart_items, retailer)
+        item_discounts = offer_results.get('item_discounts', {})
+
         # Validate cart items availability and limits
+        master_product_demand = {}
+        
         for cart_item in cart_items:
-            # Check stock
-            if cart_item.product.track_inventory and cart_item.quantity > cart_item.product.quantity:
-                 raise serializers.ValidationError(
-                    f"Product '{cart_item.product.name}' - only {cart_item.product.quantity} items available"
-                )
-            
+            quantity = cart_item.quantity
+            if cart_item.id in item_discounts:
+                quantity = item_discounts[cart_item.id].get('total_display_quantity', cart_item.quantity)
+
             # Check minimum and maximum order quantities
             if cart_item.quantity < cart_item.product.minimum_order_quantity:
                 raise serializers.ValidationError(
@@ -484,6 +490,30 @@ class OrderCreateSerializer(serializers.Serializer):
             if cart_item.product.maximum_order_quantity and cart_item.quantity > cart_item.product.maximum_order_quantity:
                 raise serializers.ValidationError(
                     f"Product '{cart_item.product.name}' - maximum order quantity is {cart_item.product.maximum_order_quantity}"
+                )
+                
+            # Aggregate stock demand
+            if cart_item.product.track_inventory:
+                master = cart_item.product.parent_bulk_product if cart_item.product.parent_bulk_product else cart_item.product
+                
+                qty_in_parent_units = quantity
+                if cart_item.product.parent_bulk_product_id == master.id and cart_item.product.conversion_factor:
+                    qty_in_parent_units = quantity * cart_item.product.conversion_factor
+                    
+                if master.id not in master_product_demand:
+                    master_product_demand[master.id] = {
+                        'master': master,
+                        'demand': Decimal('0.000')
+                    }
+                master_product_demand[master.id]['demand'] += qty_in_parent_units
+                
+        # Check if any master product demand exceeds its available stock
+        for m_id, info in master_product_demand.items():
+            master = info['master']
+            demand = info['demand']
+            if demand > master.quantity:
+                raise serializers.ValidationError(
+                    f"Total combined cart items require {demand} of '{master.name}', but only {master.quantity} is available."
                 )
 
         return data
@@ -644,11 +674,14 @@ class OrderCreateSerializer(serializers.Serializer):
             for cart_item in cart_items:
                 # Calculate final prices based on offers
                 unit_price = cart_item.product.price
-                total_price = cart_item.total_price
+                quantity = cart_item.quantity
                 
                 if cart_item.id in item_discounts:
-                    unit_price = item_discounts[cart_item.id]['final_price']
-                    total_price = unit_price * cart_item.quantity
+                    info = item_discounts[cart_item.id]
+                    unit_price = info['final_price']
+                    quantity = info.get('total_display_quantity', cart_item.quantity)
+                
+                total_price = unit_price * quantity
                 
                 order_items.append(OrderItem(
                     order=order,
@@ -656,14 +689,14 @@ class OrderCreateSerializer(serializers.Serializer):
                     product_name=cart_item.product.name,
                     product_price=cart_item.product.price,
                     product_unit=cart_item.product.unit,
-                    quantity=cart_item.quantity,
+                    quantity=quantity,
                     unit_price=unit_price,
                     total_price=total_price
                 ))
                 
                 # Reduce product quantity in memory (only if tracked)
                 if cart_item.product.track_inventory:
-                    cart_item.product.quantity -= cart_item.quantity
+                    cart_item.product.quantity -= quantity
                     products_to_update.append(cart_item.product)
             
             # Bulk create items

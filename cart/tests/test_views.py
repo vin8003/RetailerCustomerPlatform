@@ -82,6 +82,48 @@ class TestAddToCart:
         )
         assert res.status_code == status.HTTP_400_BAD_REQUEST
 
+    def test_add_to_cart_aggregate_exceeds_stock(self, api_client, customer, retailer, category, brand):
+        # Create a parent product with 10 stock
+        parent = Product.objects.create(
+            retailer=retailer,
+            name="Parent Bulk Product",
+            price=Decimal("100.00"),
+            quantity=Decimal("10.00"),
+            category=category,
+            brand=brand,
+            is_parent_bulk=True,
+            track_inventory=True
+        )
+        # Create child product with conversion 0.1
+        child = Product.objects.create(
+            retailer=retailer,
+            name="Child Product",
+            price=Decimal("10.00"),
+            quantity=Decimal("100.00"),
+            category=category,
+            brand=brand,
+            parent_bulk_product=parent,
+            conversion_factor=Decimal("0.10"),
+            track_inventory=True
+        )
+        
+        api_client.force_authenticate(user=customer)
+        
+        # 1. Add 6 parent products (OK, stock is 10)
+        res = api_client.post(
+            reverse("add_to_cart"),
+            {"product_id": parent.id, "quantity": 6},
+        )
+        assert res.status_code == status.HTTP_201_CREATED
+        
+        # 2. Add 50 child products (requires 50 * 0.1 = 5 parent units. Combined = 6 + 5 = 11 > 10 parent stock. Should fail.)
+        res = api_client.post(
+            reverse("add_to_cart"),
+            {"product_id": child.id, "quantity": 50},
+        )
+        assert res.status_code == status.HTTP_400_BAD_REQUEST
+
+
     def test_add_to_cart_inactive_product(self, api_client, customer, product):
         product.is_active = False
         product.save()
@@ -145,6 +187,42 @@ class TestUpdateCartItem:
         res = api_client.put(
             reverse("update_cart_item", args=[cart_item.id]),
             {"quantity": 9999},
+        )
+        assert res.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_update_cart_item_aggregate_exceeds_stock(self, api_client, customer, cart, retailer, category, brand):
+        parent = Product.objects.create(
+            retailer=retailer,
+            name="Parent Bulk Product",
+            price=Decimal("100.00"),
+            quantity=Decimal("10.00"),
+            category=category,
+            brand=brand,
+            is_parent_bulk=True,
+            track_inventory=True
+        )
+        child = Product.objects.create(
+            retailer=retailer,
+            name="Child Product",
+            price=Decimal("10.00"),
+            quantity=Decimal("100.00"),
+            category=category,
+            brand=brand,
+            parent_bulk_product=parent,
+            conversion_factor=Decimal("0.10"),
+            track_inventory=True
+        )
+        
+        # Add both to cart
+        item_parent = cart.add_item(parent, quantity=Decimal("5.00"))
+        item_child = cart.add_item(child, quantity=Decimal("30.00")) # 3 parent units. Total = 8 parent units.
+        
+        api_client.force_authenticate(user=customer)
+        
+        # Update child item to 60 (requires 6 parent units. Combined = 5 + 6 = 11 > 10. Should fail.)
+        res = api_client.put(
+            reverse("update_cart_item", args=[item_child.id]),
+            {"quantity": 60},
         )
         assert res.status_code == status.HTTP_400_BAD_REQUEST
 
@@ -298,6 +376,38 @@ class TestValidateCart:
         res = api_client.post(reverse("validate_cart"), {"retailer_id": retailer.id})
         assert res.status_code == status.HTTP_400_BAD_REQUEST
 
+    def test_validate_cart_aggregate_exceeds_stock(self, api_client, customer, cart, retailer, category, brand):
+        parent = Product.objects.create(
+            retailer=retailer,
+            name="Parent Bulk Product",
+            price=Decimal("100.00"),
+            quantity=Decimal("10.00"),
+            category=category,
+            brand=brand,
+            is_parent_bulk=True,
+            track_inventory=True
+        )
+        child = Product.objects.create(
+            retailer=retailer,
+            name="Child Product",
+            price=Decimal("10.00"),
+            quantity=Decimal("100.00"),
+            category=category,
+            brand=brand,
+            parent_bulk_product=parent,
+            conversion_factor=Decimal("0.10"),
+            track_inventory=True
+        )
+        
+        cart.add_item(parent, quantity=Decimal("6.00"))
+        cart.add_item(child, quantity=Decimal("50.00")) # 5 parent units. Combined = 11 > 10.
+        
+        api_client.force_authenticate(user=customer)
+        res = api_client.post(reverse("validate_cart"), {"retailer_id": retailer.id})
+        assert res.status_code == status.HTTP_400_BAD_REQUEST
+        assert res.data["valid"] is False
+
+
     def test_validate_cart_below_min_qty(self, api_client, customer, cart, product, retailer):
         product.minimum_order_quantity = 5
         product.save()
@@ -331,6 +441,82 @@ class TestValidateCart:
         api_client.force_authenticate(user=retailer_user)
         res = api_client.post(reverse("validate_cart"), {"retailer_id": 1})
         assert res.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.django_db
+class TestTrackInventoryStockQuantity:
+    """
+    Regression tests for the 'maximum order limit is 0' bug.
+    When a product has track_inventory=False, the backend should return
+    stock_quantity=99999 (unlimited) so the frontend does NOT block
+    cart quantity adjustments with "Maximum order limit is 0".
+    """
+
+    def test_get_cart_stock_quantity_non_tracked_inventory(
+        self, api_client, customer, retailer, category, brand
+    ):
+        """
+        BUG REPRO: product with track_inventory=False and quantity=0
+        previously returned stock_quantity=0, which made the frontend show
+        'Maximum order limit is 0' when the user tried to adjust qty in cart.
+        After the fix, stock_quantity should be 99999 (unlimited).
+        """
+        # Create a product with inventory tracking OFF and quantity=0
+        untracked_product = Product.objects.create(
+            retailer=retailer,
+            name="Untracked Product",
+            category=category,
+            brand=brand,
+            price=Decimal("50.00"),
+            quantity=0,  # No stock recorded – but tracking is OFF so it doesn't matter
+            track_inventory=False,
+            is_active=True,
+            is_available=True,
+            minimum_order_quantity=1,
+            maximum_order_quantity=None,
+        )
+
+        # Add it to the customer's cart
+        cart = Cart.objects.create(customer=customer, retailer=retailer)
+        CartItem.objects.create(
+            cart=cart,
+            product=untracked_product,
+            quantity=3,
+            unit_price=untracked_product.price,
+        )
+
+        api_client.force_authenticate(user=customer)
+        res = api_client.get(reverse("get_cart"), {"retailer_id": retailer.id})
+
+        assert res.status_code == status.HTTP_200_OK
+        items = res.data.get("items", [])
+        assert len(items) == 1
+        # Key assertion: stock_quantity must NOT be 0 for a non-tracked product;
+        # it should be 99999 to indicate unlimited availability to the frontend.
+        stock_qty = items[0]["stock_quantity"]
+        assert stock_qty == 99999, (
+            f"Expected stock_quantity=99999 for track_inventory=False product, got {stock_qty}. "
+            "This causes 'Maximum order limit is 0' in the customer cart UI."
+        )
+
+    def test_get_cart_stock_quantity_tracked_inventory_returns_actual(
+        self, api_client, customer, cart, cart_item, retailer
+    ):
+        """
+        Sanity check: tracked products should still return their real stock quantity.
+        """
+        # cart_item.product has track_inventory=True, quantity=50
+        api_client.force_authenticate(user=customer)
+        res = api_client.get(reverse("get_cart"), {"retailer_id": retailer.id})
+
+        assert res.status_code == status.HTTP_200_OK
+        items = res.data.get("items", [])
+        assert len(items) == 1
+        stock_qty = items[0]["stock_quantity"]
+        # Should reflect actual quantity (50), not 99999
+        assert stock_qty == 50, (
+            f"Expected stock_quantity=50 for track_inventory=True product, got {stock_qty}."
+        )
 
 
 @pytest.mark.django_db

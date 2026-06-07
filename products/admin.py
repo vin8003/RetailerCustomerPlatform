@@ -58,8 +58,8 @@ class ProductAdmin(admin.ModelAdmin):
     """
     Admin configuration for products
     """
-    list_display = ['name', 'barcode', 'retailer', 'category', 'brand', 'price', 'quantity', 'is_active', 'created_at']
-    list_filter = ['is_active', 'is_featured', 'is_available', 'category', 'brand', 'unit', 'created_at']
+    list_display = ['name', 'barcode', 'retailer', 'category', 'brand', 'price', 'quantity', 'is_parent_bulk', 'is_active', 'created_at']
+    list_filter = ['is_active', 'is_parent_bulk', 'is_featured', 'is_available', 'category', 'brand', 'unit', 'created_at']
     search_fields = ['name', 'description', 'retailer__shop_name', 'barcode']
     ordering = ['-created_at']
     readonly_fields = ['created_at', 'updated_at', 'discounted_price', 'is_in_stock', 'savings']
@@ -67,6 +67,9 @@ class ProductAdmin(admin.ModelAdmin):
     fieldsets = (
         ('Basic Information', {
             'fields': ('retailer', 'name', 'description', 'category', 'brand', 'master_product', 'barcode')
+        }),
+        ('Product Grouping & Fractional Sizing', {
+            'fields': ('product_group', 'is_parent_bulk', 'parent_bulk_product', 'conversion_factor')
         }),
         ('Pricing', {
             'fields': ('price', 'original_price', 'discount_percentage', 'discounted_price', 'savings')

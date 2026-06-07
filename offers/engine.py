@@ -48,6 +48,13 @@ class OfferEngine:
             end_date__lt=timezone.now()
         ).order_by('-priority')
         
+        # Channel/Source Filtering
+        channel = context.get('channel', 'mobile') if context else 'mobile'
+        if channel == 'pos':
+            active_offers = active_offers.filter(applicable_on__in=['pos', 'both'])
+        else:
+            active_offers = active_offers.filter(applicable_on__in=['mobile', 'both'])
+        
         # 2. Prepare calculation context
         # We need a mutable structure to track price changes and applied rules
         item_context = []
@@ -174,7 +181,10 @@ class OfferEngine:
             item_discounts[pk] = {
                 'original_price': x['original_price'],
                 'final_price': x['current_price'],
-                'applied_offer': ", ".join(x['applied_offers']) if x['applied_offers'] else None
+                'applied_offer': ", ".join(x['applied_offers']) if x['applied_offers'] else None,
+                'purchased_quantity': x.get('purchased_quantity', x['quantity']),
+                'free_quantity': x.get('free_quantity', 0),
+                'total_display_quantity': x.get('total_display_quantity', x['quantity'])
             }
 
         return {
@@ -268,9 +278,9 @@ class OfferEngine:
 
     def _apply_bxgy(self, offer, item_context, eligible_indices):
         """
-        Apply Buy X Get Y Free logic
+        Apply Buy X Get Y Free logic (Mixed Strategy)
+        Optimized to be mathematically O(N) where N is distinct cart items.
         """
-        
         # Check strategy
         # 'mixed' = Pool all items (default legacy behavior).
         # 'same_product' = Apply logic per product group.
@@ -279,90 +289,61 @@ class OfferEngine:
         if bxgy_strategy == 'same_product':
              return self._apply_bxgy_same_product(offer, item_context, eligible_indices)
 
-        # 1. Collect all eligible units (Mixed Strategy)
-        # We might have multiple cart items matching (e.g. 2 different soaps)
-        # BXGY usually works on pool of items. "Buy 2 soaps get 1 free" (cheapest free)
-        
-        all_units = []
-        for idx in eligible_indices:
-            item_data = item_context[idx]
-            # Deconstruct quantity into individual 'units' for sorting
-            # (In high volume scenarios, this is slow. Optimization: Group math. 
-            # For grocery cart with < 100 items, list expansion is fine)
-            for _ in range(item_data['quantity']):
-                all_units.append({
-                    'price': item_data['current_price'],
-                    'parent_idx': idx
-                })
-        
-        if not all_units:
+        # 1. Sum up all eligible quantities
+        total_units = sum(item_context[idx]['quantity'] for idx in eligible_indices)
+        if total_units <= 0:
             return Decimal(0)
-            
-        # Sort by price (Cheapest first if cheapest is free)
-        # If is_cheapest_free=True, we sort ascending. 
-        # If we discounted the most expensive (rare), desc.
-        if offer.is_cheapest_free:
-            all_units.sort(key=lambda x: x['price'])
-        else:
-             all_units.sort(key=lambda x: x['price']) # Default standard: usually cheapest is free.
-        
-        # Calculate how many sets
-        # Rule: Buy X, Get Y. Total group size = X + Y.
-        # Example: Buy 2 Get 1. Group = 3. 
-        # If I have 3 items, 1 is free.
-        # If I have 4 items, 1 is free (1 leftover)
-        # If I have 6 items, 2 are free.
-        
+
+        # Calculate how many free items we are allowed
         x = offer.buy_quantity
         y = offer.get_quantity
         group_size = x + y
-        
-        total_units = len(all_units)
         num_free = int((total_units // group_size) * y)
-        
-        # If specific logic says "Buy X and Get Y Free" means I pay for X and Y is added?
-        # Usually e-comm cart logic: "Add 3 items to cart, 1 becomes free".
-        
-        if num_free == 0:
+
+        if num_free <= 0:
             return Decimal(0)
-            
-        # Mark the first 'num_free' items as free (since we sorted by price ascending)
+
+        # 2. Sort eligible indices by their current unit price
+        # Cheapest items are discounted first
+        sorted_indices = sorted(eligible_indices, key=lambda idx: item_context[idx]['current_price'])
+
         total_savings = Decimal(0)
-        
-        for i in range(num_free):
-            unit_to_discount = all_units[i]
-            # Reduce price of this unit to 0 effectively
-            # But we can't split a cart item line easily if qty > 1.
-            # We must apply discount to the line item proportionally or split line.
-            # Simplified: we apply total discount amount to the line item.
-            
-            idx = unit_to_discount['parent_idx']
-            price = unit_to_discount['price']
-            
-            # Add to savings
-            total_savings += price
-            
-            # Distribute this saving to the item context (reduce current price average?)
-            # No, that modifies unit price. 
-            # Better: Keep track of "Discount Amount" on the line item specifically.
-            
-            # Update specific item context
+        remaining_free = num_free
+
+        for idx in sorted_indices:
+            if remaining_free <= 0:
+                break
+
             item_data = item_context[idx]
-            # We are discounting 'price' amount from the TOTAL of that line.
-            # So unit_price reduces by (price / quantity).
+            qty = item_data['quantity']
+            if qty <= 0:
+                continue
+
+            # We can discount at most the quantity of this item
+            take = min(remaining_free, qty)
+            price = item_data['current_price']
             
-            discount_per_unit = price / item_data['quantity']
+            # savings from this item
+            savings_increment = take * price
+            total_savings += savings_increment
+
+            # Distribute savings back to the line item's unit price
+            discount_per_unit = savings_increment / qty
             item_data['current_price'] -= discount_per_unit
             item_data['savings'] += discount_per_unit
             item_data['applied_offers'].append(offer.name)
             if not offer.is_stackable:
                 item_data['is_exclusive'] = True
 
+            remaining_free -= take
+
         return total_savings
 
     def _apply_bxgy_same_product(self, offer, item_context, eligible_indices):
         """
-        Apply Buy X Get Y Free logic per product
+        Apply Buy X Get Y Free logic per product (Same Product Strategy).
+        No database mutation; dynamically calculates purchased, free, and total display quantities.
+        Aggregates quantities across identical products in cart before calculating free quantities.
         """
         total_savings = Decimal(0)
         
@@ -377,54 +358,55 @@ class OfferEngine:
             
         x = offer.buy_quantity
         y = offer.get_quantity
-        group_size = x + y
 
         for pid, indices in product_groups.items():
-            # Usually only one line item per product, but handle multiple just in case
-            total_qty = sum(item_context[idx]['quantity'] for idx in indices)
-            
-            num_free = int((total_qty // group_size) * y)
-            if num_free <= 0:
+            # Calculate total purchased quantity for this product group
+            total_purchased_qty = sum(item_context[idx]['quantity'] for idx in indices)
+            if total_purchased_qty <= 0:
                 continue
-                
-            # Distribute savings
-            # Since it's the SAME product, price is uniform (usually).
-            # If not (e.g. variants with diff prices?), we should sort cheapest first.
-            # Assuming uniform price for same product ID.
-            
-            # We need to discount 'num_free' units.
-            
-            # Expand units again (local to this product) to handle partials
-            units = []
-            for idx in indices:
+
+            # Calculate total free quantity for this product group
+            total_free_qty = int(total_purchased_qty // x) * y
+            if total_free_qty <= 0:
+                continue
+
+            remaining_free = total_free_qty
+            for i, idx in enumerate(indices):
                 item_data = item_context[idx]
-                for _ in range(item_data['quantity']):
-                    units.append({
-                        'price': item_data['current_price'],
-                        'parent_idx': idx
-                    })
-            
-            # Sort cheap to expensive (standard cheapest free logic, though prices likely same)
-            units.sort(key=lambda u: u['price'])
-            
-            items_discounted = 0
-            for i in range(num_free):
-                if i >= len(units): break
+                purchased_qty = item_data['quantity']
+
+                # Proportional distribution of free qty across items
+                if i == len(indices) - 1:
+                    line_free_qty = remaining_free
+                else:
+                    line_free_qty = int(total_free_qty * purchased_qty // total_purchased_qty)
+                    remaining_free -= line_free_qty
+
+                total_qty = purchased_qty + line_free_qty
+                price = item_data['current_price']
                 
-                unit = units[i]
-                price = unit['price']
-                idx = unit['parent_idx']
+                # Savings is the value of the free items
+                savings_increment = line_free_qty * price
+                total_savings += savings_increment
+
+                # Store dynamic quantities for order creation and frontend display
+                item_data['purchased_quantity'] = purchased_qty
+                item_data['free_quantity'] = line_free_qty
+                item_data['total_display_quantity'] = total_qty
+
+                # Effective average unit price for the entire total quantity
+                effective_price = (purchased_qty * price) / total_qty if total_qty > 0 else price
                 
-                total_savings += price
+                # Update item context quantity to total quantity so that:
+                # - original_subtotal = original_price * total_qty
+                # - final_total = effective_price * total_qty = purchased_qty * price
+                # - total_savings = original_subtotal - final_total = free_qty * price
+                item_data['quantity'] = total_qty
+                item_data['current_price'] = effective_price
                 
-                # Apply to item context
-                item_data = item_context[idx]
-                discount_per_unit = price / item_data['quantity']
-                item_data['current_price'] -= discount_per_unit
-                item_data['savings'] += discount_per_unit
+                # Average saving per unit in total quantity
+                item_data['savings'] += savings_increment / total_qty if total_qty > 0 else 0
                 
-                # Tag offer if not already tagged for this item? 
-                # (might be tagged multiple times if multiple free units in same line)
                 if offer.name not in item_data['applied_offers']:
                     item_data['applied_offers'].append(offer.name)
                 

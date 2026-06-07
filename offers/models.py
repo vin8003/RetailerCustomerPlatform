@@ -88,6 +88,18 @@ class Offer(models.Model):
     priority = models.IntegerField(default=0, help_text="Higher number = Higher priority")
     is_stackable = models.BooleanField(default=False, help_text="Can be applied with other offers")
     
+    APPLICABLE_ON_CHOICES = [
+        ('mobile', 'Mobile App Only'),
+        ('pos', 'POS Only'),
+        ('both', 'Both Mobile and POS'),
+    ]
+    applicable_on = models.CharField(
+        max_length=10,
+        choices=APPLICABLE_ON_CHOICES,
+        default='both',
+        help_text="Where this offer can be applied"
+    )
+    
     # Usage Limits
     usage_limit_total = models.PositiveIntegerField(null=True, blank=True)
     usage_limit_per_user = models.PositiveIntegerField(null=True, blank=True)
@@ -159,7 +171,7 @@ class OfferRedemption(models.Model):
     Track usages of an offer by customers
     """
     offer = models.ForeignKey(Offer, on_delete=models.CASCADE, related_name='redemptions')
-    customer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    customer = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, null=True, blank=True)
     order = models.ForeignKey('orders.Order', on_delete=models.CASCADE, related_name='applied_offers')
     
     discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)

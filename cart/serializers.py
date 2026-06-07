@@ -33,6 +33,12 @@ class CartItemSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'unit_price', 'added_at', 'updated_at']
 
     def get_stock_quantity(self, obj):
+        # When inventory tracking is disabled, there is no real stock limit.
+        # Return a high sentinel value (99999) so the frontend does NOT
+        # block cart quantity adjustments with "Maximum order limit is 0".
+        if not obj.product.track_inventory:
+            return 99999
+
         qty = obj.batch.quantity if obj.batch else obj.product.quantity
         if qty is not None:
             # If it's a whole number (e.g. 10.000), return as int 10
@@ -160,13 +166,28 @@ class AddToCartSerializer(serializers.Serializer):
         except Product.DoesNotExist:
             raise serializers.ValidationError("Product not found")
             
-        quantity = data['quantity']
+        quantity = Decimal(str(data['quantity']))
         
-        # Check stock availability
-        if product.track_inventory and Decimal(str(quantity)) > product.quantity:
-             raise serializers.ValidationError(
-                f"Only {product.quantity} items available in stock"
-            )
+        # Check aggregate stock availability across the cart
+        customer = self.context.get('customer')
+        if customer:
+            cart = Cart.objects.filter(customer=customer, retailer=product.retailer).first()
+            if cart:
+                existing_item = cart.items.filter(product=product).first()
+                existing_qty = existing_item.quantity if existing_item else Decimal('0')
+                is_valid, msg = cart.validate_aggregate_stock(product, simulate_quantity=existing_qty + quantity)
+                if not is_valid:
+                    raise serializers.ValidationError(msg)
+            else:
+                if product.track_inventory and quantity > product.quantity:
+                     raise serializers.ValidationError(
+                        f"Only {product.quantity} items available in stock"
+                    )
+        else:
+            if product.track_inventory and quantity > product.quantity:
+                 raise serializers.ValidationError(
+                    f"Only {product.quantity} items available in stock"
+                )
         
         # Check if retailer is accepting orders
         if not product.retailer.offers_delivery and not product.retailer.offers_pickup:
@@ -256,14 +277,14 @@ class UpdateCartItemSerializer(serializers.Serializer):
     def validate(self, data):
         """Validate cart item update"""
         cart_item = self.context['cart_item']
-        quantity = data['quantity']
+        quantity = Decimal(str(data['quantity']))
         product = cart_item.product
         
-        # Check stock availability
-        if product.track_inventory and Decimal(str(quantity)) > product.quantity:
-            raise serializers.ValidationError(
-                f"Only {product.quantity} items available in stock"
-            )
+        # Check aggregate stock availability
+        cart = cart_item.cart
+        is_valid, msg = cart.validate_aggregate_stock(product, simulate_quantity=quantity)
+        if not is_valid:
+            raise serializers.ValidationError(msg)
         
         # Check if retailer is accepting orders
         retailer = cart_item.cart.retailer

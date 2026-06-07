@@ -50,6 +50,53 @@ class TestOfferViewSet:
         assert float(response.data['total_savings']) == 20.0
         assert len(response.data['applied_offers']) == 1
 
+    def test_calculate_cart_preview_with_channel(self, api_client, retailer_user, retailer, product):
+        Offer.objects.all().delete()
+        
+        # POS exclusive offer (20%)
+        pos_offer = Offer.objects.create(
+            retailer=retailer, name="POS 20% Off", offer_type="percentage",
+            value=Decimal("20.00"), is_active=True, applicable_on="pos"
+        )
+        from offers.models import OfferTarget
+        OfferTarget.objects.create(offer=pos_offer, target_type="all_products")
+
+        # Mobile exclusive offer (10%)
+        mobile_offer = Offer.objects.create(
+            retailer=retailer, name="Mobile 10% Off", offer_type="percentage",
+            value=Decimal("10.00"), is_active=True, applicable_on="mobile"
+        )
+        OfferTarget.objects.create(offer=mobile_offer, target_type="all_products")
+
+        api_client.force_authenticate(user=retailer_user)
+        url = reverse('offer-calculate-cart')
+        
+        # 1. Preview for MOBILE channel (should apply mobile offer 10%)
+        data_mobile = {
+            "retailer_id": retailer.id,
+            "channel": "mobile",
+            "items": [
+                {"product_id": product.id, "quantity": 1, "price": 100}
+            ]
+        }
+        response = api_client.post(url, data_mobile, format='json')
+        assert response.status_code == status.HTTP_200_OK
+        assert float(response.data['total_savings']) == 10.0
+        assert response.data['applied_offers'][0]['name'] == "Mobile 10% Off"
+
+        # 2. Preview for POS channel (should apply POS offer 20%)
+        data_pos = {
+            "retailer_id": retailer.id,
+            "channel": "pos",
+            "items": [
+                {"product_id": product.id, "quantity": 1, "price": 100}
+            ]
+        }
+        response = api_client.post(url, data_pos, format='json')
+        assert response.status_code == status.HTTP_200_OK
+        assert float(response.data['total_savings']) == 20.0
+        assert response.data['applied_offers'][0]['name'] == "POS 20% Off"
+
 
 @pytest.mark.django_db
 class TestPublicOfferViewSet:

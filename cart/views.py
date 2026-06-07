@@ -119,9 +119,6 @@ def add_to_cart(request):
         if serializer.is_valid():
             cart_item = serializer.save()
             
-            # Auto-add free items for Same Product BXGY
-            _apply_same_product_auto_add(cart_item, request.user)
-
             # Return updated cart
             cart = cart_item.cart
             cart_serializer = CartSerializer(cart)
@@ -166,9 +163,6 @@ def update_cart_item(request, item_id):
         
         if serializer.is_valid():
             cart_item = serializer.save()
-            
-            # Apply Same Product Auto-Add Logic
-            _apply_same_product_auto_add(cart_item, request.user)
             
             # Return updated cart
             cart = cart_item.cart
@@ -299,6 +293,12 @@ def get_cart_summary(request):
     """
     Get cart summary for checkout
     """
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def get_cart_summary(request):
+    """
+    Get cart summary for checkout (uses OfferEngine runtime calculation)
+    """
     try:
         if request.user.user_type != 'customer':
             return Response(
@@ -318,26 +318,49 @@ def get_cart_summary(request):
             retailer = RetailerProfile.objects.get(id=retailer_id, is_active=True)
             cart = Cart.objects.prefetch_related('items__product').get(customer=request.user, retailer=retailer)
             
-            # Calculate summary
-            total_items = cart.total_items
-            total_amount = cart.total_amount
+            # Calculate summary using OfferEngine
+            from offers.engine import OfferEngine
+            engine = OfferEngine()
+            cart_items = cart.items.select_related('product', 'product__category', 'product__brand').all()
+            offer_results = engine.calculate_offers(cart_items, retailer)
+            
+            total_items = sum(
+                offer_results['item_discounts'].get(item.id, {}).get('total_display_quantity', item.quantity)
+                for item in cart_items
+            )
+            discounted_total = offer_results['discounted_total']
             minimum_order_amount = retailer.minimum_order_amount
             
-            can_checkout = total_amount >= minimum_order_amount and not cart.is_empty
+            can_checkout = discounted_total >= minimum_order_amount and not cart.is_empty
             checkout_message = ""
             
             if cart.is_empty:
                 checkout_message = "Your cart is empty"
-            elif total_amount < minimum_order_amount:
+            elif discounted_total < minimum_order_amount:
                 checkout_message = f"Minimum order amount is ₹{minimum_order_amount}"
             else:
                 checkout_message = "Ready to checkout"
             
-            # Check if all items are available
+            # Check if all items are available (considering aggregate stock)
             unavailable_items = []
-            for item in cart.items.all():
-                if not item.is_available:
+            validated_parents = set()
+            
+            item_discounts = offer_results.get('item_discounts', {})
+            custom_item_quantities = {it.id: item_discounts.get(it.id, {}).get('total_display_quantity', it.quantity) for it in cart_items}
+            
+            for item in cart_items:
+                # Basic availability
+                if not item.product.is_available or not item.product.is_active:
                     unavailable_items.append(item.product.name)
+                    continue
+                    
+                # Stock validation
+                master_id = item.product.parent_bulk_product_id or item.product.id
+                if master_id not in validated_parents:
+                    is_valid, msg = cart.validate_aggregate_stock(item.product, custom_item_quantities=custom_item_quantities)
+                    if not is_valid:
+                        unavailable_items.append(item.product.name)
+                    validated_parents.add(master_id)
             
             if unavailable_items:
                 can_checkout = False
@@ -345,7 +368,7 @@ def get_cart_summary(request):
             
             summary_data = {
                 'total_items': total_items,
-                'total_amount': total_amount,
+                'total_amount': discounted_total,
                 'retailer_name': retailer.shop_name,
                 'retailer_id': retailer.id,
                 'minimum_order_amount': minimum_order_amount,
@@ -379,7 +402,7 @@ def get_cart_summary(request):
 @permission_classes([permissions.IsAuthenticated])
 def validate_cart(request):
     """
-    Validate cart items before checkout
+    Validate cart items before checkout (uses OfferEngine runtime calculation)
     """
     try:
         if request.user.user_type != 'customer':
@@ -406,30 +429,47 @@ def validate_cart(request):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
+            # Calculate offers using OfferEngine
+            from offers.engine import OfferEngine
+            engine = OfferEngine()
+            cart_items = cart.items.select_related('product', 'product__category', 'product__brand').all()
+            offer_results = engine.calculate_offers(cart_items, retailer)
+            
+            discounted_total = offer_results['discounted_total']
+            item_discounts = offer_results.get('item_discounts', {})
+            
             # Validate each item
             validation_errors = []
+            validated_parents = set()
             
-            for item in cart.items.all():
+            custom_item_quantities = {it.id: item_discounts.get(it.id, {}).get('total_display_quantity', it.quantity) for it in cart_items}
+            
+            for item in cart_items:
+                info = item_discounts.get(item.id, {})
+                validation_quantity = info.get('total_display_quantity', item.quantity)
+                
                 if not item.product.is_available or not item.product.is_active:
                     validation_errors.append(f"{item.product.name} is no longer available")
-                elif item.product.track_inventory and item.quantity > item.product.quantity:
-                    validation_errors.append(
-                        f"{item.product.name} - only {item.product.quantity} items available"
-                    )
                 else:
+                    master_id = item.product.parent_bulk_product_id or item.product.id
+                    if master_id not in validated_parents:
+                        is_valid, msg = cart.validate_aggregate_stock(item.product, custom_item_quantities=custom_item_quantities)
+                        if not is_valid:
+                            validation_errors.append(msg)
+                        validated_parents.add(master_id)
                     # Check minimum and maximum order quantities
-                    if item.quantity < item.product.minimum_order_quantity:
+                    if validation_quantity < item.product.minimum_order_quantity:
                         validation_errors.append(
                             f"{item.product.name} - minimum order quantity is {item.product.minimum_order_quantity}"
                         )
                     
-                    if item.product.maximum_order_quantity and item.quantity > item.product.maximum_order_quantity:
+                    if item.product.maximum_order_quantity and validation_quantity > item.product.maximum_order_quantity:
                         validation_errors.append(
                             f"{item.product.name} - maximum order quantity is {item.product.maximum_order_quantity}"
                         )
             
-            # Check minimum order amount
-            if cart.total_amount < retailer.minimum_order_amount:
+            # Check minimum order amount (validated against discounted total)
+            if discounted_total < retailer.minimum_order_amount:
                 validation_errors.append(
                     f"Minimum order amount is ₹{retailer.minimum_order_amount}"
                 )
