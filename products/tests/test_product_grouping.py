@@ -131,7 +131,7 @@ class TestProductGrouping:
         assert child_restored.parent_bulk_product is None
 
     def test_transition_safety_stock_check(self, retailer, category, brand):
-        """Test serializer prevents establishing a grouping link if the child product has positive inventory"""
+        """Test serializer allows establishing a grouping link if the child product has positive inventory"""
         standalone = Product.objects.create(
             retailer=retailer,
             name="Standalone Rice 5kg Bag",
@@ -163,25 +163,15 @@ class TestProductGrouping:
             partial=True
         )
         
-        # Shoule raise DRF validation error
-        with pytest.raises(DRFValidationError) as excinfo:
-            serializer.is_valid(raise_exception=True)
-        
-        assert "This product has active inventory" in str(excinfo.value)
-        
-        # Reset stock to 0 and verify link succeeds
-        standalone.quantity = Decimal("0.000")
-        standalone.save()
-        
-        serializer = ProductUpdateSerializer(
-            instance=standalone,
-            data={
-                "parent_bulk_product": parent.id,
-                "conversion_factor": "0.1000"
-            },
-            partial=True
-        )
+        # Should NOT raise validation error (active stock no longer blocks linking)
         assert serializer.is_valid() is True
+        serializer.save()
+        
+        standalone.refresh_from_db()
+        # The quantity of the child product should be synced from the parent based on conversion factor
+        # 10.000 / 0.1000 = 100.000
+        assert standalone.quantity == Decimal("100.000")
+
 
     def test_cross_retailer_grouping_validation(self, retailer, category, brand):
         """Test that serializers prevent linking products across different retailers"""
@@ -289,3 +279,52 @@ class TestProductGrouping:
         # Child's virtual batch should be unaffected directly (its overall quantity is synced from parent)
         # Sibling inventory sync will update child's quantity to 90.
         assert child.quantity == Decimal("90.000")
+
+    def test_disable_parent_bulk_with_children_fails(self, setup_catalog):
+        """Test that disabling is_parent_bulk on a parent product that still has children linked to it fails validation"""
+        parent, child = setup_catalog
+        
+        # parent.is_parent_bulk is True, child is linked to parent.
+        # Try to update parent setting is_parent_bulk = False
+        serializer = ProductUpdateSerializer(
+            instance=parent,
+            data={
+                "is_parent_bulk": False
+            },
+            partial=True
+        )
+        
+        with pytest.raises(DRFValidationError) as excinfo:
+            serializer.is_valid(raise_exception=True)
+            
+        assert "Cannot disable Master Bulk status" in str(excinfo.value)
+
+    def test_auto_set_parent_bulk_product_on_child_save(self, retailer, category, brand):
+        """Test that saving a child product automatically sets its parent's is_parent_bulk to True"""
+        parent = Product.objects.create(
+            retailer=retailer,
+            name="Manual Parent Rice 50kg Bag",
+            price=Decimal("2000.00"),
+            quantity=Decimal("10.000"),
+            category=category,
+            brand=brand,
+            is_parent_bulk=False, # initially False
+            track_inventory=True
+        )
+        
+        child = Product(
+            retailer=retailer,
+            name="Manual Child Rice 5kg Bag",
+            price=Decimal("250.00"),
+            quantity=Decimal("0.000"),
+            category=category,
+            brand=brand,
+            parent_bulk_product=parent,
+            conversion_factor=Decimal("0.1000"),
+            track_inventory=True
+        )
+        child.save()
+        
+        parent.refresh_from_db()
+        assert parent.is_parent_bulk is True
+

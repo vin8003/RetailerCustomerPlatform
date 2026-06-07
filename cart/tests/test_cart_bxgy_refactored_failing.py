@@ -304,7 +304,7 @@ class TestCartBXGYRefactoredFailing:
         response = api_client.post(url_validate, {'retailer_id': retailer.id})
         # Validation should fail due to stock limit
         assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert "only 1.200 items available" in response.data['errors'][0].lower()
+        assert "only 1.200" in response.data['errors'][0].lower()
 
     def test_stock_validation_uses_total_display_quantity_for_bxgy(self, api_client, customer, retailer, product):
         """
@@ -337,7 +337,7 @@ class TestCartBXGYRefactoredFailing:
         response = api_client.post(url_validate, {'retailer_id': retailer.id})
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         assert response.data['valid'] is False
-        assert "only 5.000 items available" in response.data['errors'][0].lower()
+        assert "only 5.000" in response.data['errors'][0].lower()
 
     def test_min_order_value_with_same_product_bxgy(self, api_client, customer, retailer, product):
         """

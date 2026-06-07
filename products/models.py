@@ -365,6 +365,12 @@ class Product(models.Model):
         # If this is a child product, make sure its stock is synced from parent on save
         elif self.parent_bulk_product:
             parent = self.parent_bulk_product
+            
+            # Ensure the parent is marked as a master bulk product automatically
+            if not parent.is_parent_bulk:
+                parent.is_parent_bulk = True
+                parent.save(update_fields=['is_parent_bulk'])
+                
             if self.conversion_factor and self.conversion_factor > 0:
                 expected_qty = parent.quantity / self.conversion_factor
                 if self.quantity != expected_qty:

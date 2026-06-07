@@ -523,7 +523,7 @@ class ProductDetailSerializer(serializers.ModelSerializer):
             return False
 
     def get_group_variants(self, obj):
-        """Get all other active products in the same group for this retailer"""
+        """Get all other active products in the same group for this retailer, sorting parent/child first"""
         try:
             if obj.product_group:
                 siblings = Product.objects.filter(
@@ -531,16 +531,30 @@ class ProductDetailSerializer(serializers.ModelSerializer):
                     product_group=obj.product_group,
                     is_active=True,
                     is_available=True
-                ).exclude(id=obj.id).only('id', 'name', 'unit', 'price', 'original_price')
+                ).exclude(id=obj.id).only(
+                    'id', 'name', 'unit', 'price', 'original_price', 
+                    'is_parent_bulk', 'parent_bulk_product'
+                )
+                
+                # Sort: items where is_parent_bulk is True or parent_bulk_product_id is not None come first
+                sorted_siblings = sorted(
+                    list(siblings),
+                    key=lambda s: (0 if (s.is_parent_bulk or s.parent_bulk_product_id is not None) else 1, s.id)
+                )
                 
                 variants = []
-                for s in siblings:
+                for s in sorted_siblings:
                     variants.append({
                         'id': s.id,
                         'name': s.name,
                         'unit': s.unit,
                         'price': float(s.price),
-                        'original_price': float(s.original_price) if s.original_price else None
+                        'original_price': float(s.original_price) if s.original_price else float(s.price),
+                        'image': s.image_display_url,
+                        'minimum_order_quantity': float(s.minimum_order_quantity) if s.minimum_order_quantity else 1,
+                        'maximum_order_quantity': float(s.maximum_order_quantity) if s.maximum_order_quantity else None,
+                        'track_inventory': s.track_inventory,
+                        'quantity': float(s.quantity) if s.quantity else 0
                     })
                 return variants
             return []
@@ -828,19 +842,17 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
             if retailer and parent_product.retailer != retailer:
                 raise serializers.ValidationError("Parent bulk product must belong to the same retailer.")
             
-            # Transition safety check: only if transitioning from non-grouped to child
-            if self.instance and not self.instance.parent_bulk_product:
-                has_positive_stock = False
-                if self.instance.has_batches:
-                    has_positive_stock = self.instance.batches.filter(is_active=True, quantity__gt=0).exists()
-                else:
-                    has_positive_stock = self.instance.quantity > 0
-                
-                if has_positive_stock:
-                    raise serializers.ValidationError(
-                        "This product has active inventory. Please transfer its physical stock into the parent bulk "
-                        "product's inventory batches first, and reset this product's stock to 0 before establishing the grouping link."
-                    )
+            # User requested that existing stock should not block linking,
+            # and the child stock should simply be calculated from the parent.
+            # So we remove the transition safety check that raised a ValidationError here.
+            
+        if self.instance and self.instance.is_parent_bulk and not is_parent:
+            # The retailer is trying to disable 'is_parent_bulk'
+            if self.instance.fractional_children.filter(is_active=True).exists():
+                raise serializers.ValidationError(
+                    "Cannot disable Master Bulk status because child fractional products are still linked to this product. "
+                    "Please unlink or disable them first."
+                )
         
         # Skip standard quantity validation if batches are being used
         if not data.get('has_batches', self.instance.has_batches):

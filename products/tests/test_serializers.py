@@ -5,7 +5,7 @@ from products.serializers import (
     ProductDetailSerializer, ProductCreateSerializer,
     ProductUpdateSerializer, ProductBulkUploadSerializer
 )
-from products.models import ProductReview, ProductImage
+from products.models import Product, ProductReview, ProductImage
 from django.core.files.uploadedfile import SimpleUploadedFile
 
 
@@ -83,6 +83,69 @@ class TestProductDetailSerializer:
         assert any("http://example.com/p1.jpg" == img for img in images)
         # Check for the existence of the uploaded image (UUID name)
         assert any("uploads/productimage" in img for img in images)
+
+    def test_get_group_variants_sorting(self, product, retailer, category):
+        # Current product has product_group="grain"
+        product.product_group = "grain"
+        product.save()
+        
+        # Create normal sibling
+        normal_sibling = Product.objects.create(
+            retailer=retailer,
+            name="Normal Sibling",
+            price=Decimal("50.00"),
+            category=category,
+            product_group="grain",
+            is_active=True,
+            is_available=True
+        )
+        
+        # Create parent sibling
+        parent_sibling = Product.objects.create(
+            retailer=retailer,
+            name="Parent Sibling",
+            price=Decimal("100.00"),
+            category=category,
+            product_group="grain",
+            is_parent_bulk=True,
+            is_active=True,
+            is_available=True
+        )
+        
+        # Create child sibling
+        child_sibling = Product.objects.create(
+            retailer=retailer,
+            name="Child Sibling",
+            price=Decimal("10.00"),
+            category=category,
+            product_group="grain",
+            parent_bulk_product=parent_sibling,
+            conversion_factor=Decimal("10"),
+            is_active=True,
+            is_available=True
+        )
+        
+        # Serialize current product
+        serializer = ProductDetailSerializer(product)
+        group_variants = serializer.data["group_variants"]
+        
+        # Sibling variants list should not contain the current product itself
+        variant_ids = [v["id"] for v in group_variants]
+        assert product.id not in variant_ids
+        assert len(variant_ids) == 3
+        
+        # Parent and child should be before normal
+        normal_idx = variant_ids.index(normal_sibling.id)
+        parent_idx = variant_ids.index(parent_sibling.id)
+        child_idx = variant_ids.index(child_sibling.id)
+        
+        assert parent_idx < normal_idx
+        assert child_idx < normal_idx
+        
+        # Verify fields in variant representation
+        assert "image" in group_variants[0]
+        assert "minimum_order_quantity" in group_variants[0]
+        assert "track_inventory" in group_variants[0]
 
 
 @pytest.mark.django_db

@@ -341,14 +341,26 @@ def get_cart_summary(request):
             else:
                 checkout_message = "Ready to checkout"
             
-            # Check if all items are available
+            # Check if all items are available (considering aggregate stock)
             unavailable_items = []
+            validated_parents = set()
+            
             item_discounts = offer_results.get('item_discounts', {})
+            custom_item_quantities = {it.id: item_discounts.get(it.id, {}).get('total_display_quantity', it.quantity) for it in cart_items}
+            
             for item in cart_items:
-                info = item_discounts.get(item.id, {})
-                validation_quantity = info.get('total_display_quantity', item.quantity)
-                if not item.product.can_order_quantity(validation_quantity):
+                # Basic availability
+                if not item.product.is_available or not item.product.is_active:
                     unavailable_items.append(item.product.name)
+                    continue
+                    
+                # Stock validation
+                master_id = item.product.parent_bulk_product_id or item.product.id
+                if master_id not in validated_parents:
+                    is_valid, msg = cart.validate_aggregate_stock(item.product, custom_item_quantities=custom_item_quantities)
+                    if not is_valid:
+                        unavailable_items.append(item.product.name)
+                    validated_parents.add(master_id)
             
             if unavailable_items:
                 can_checkout = False
@@ -428,6 +440,9 @@ def validate_cart(request):
             
             # Validate each item
             validation_errors = []
+            validated_parents = set()
+            
+            custom_item_quantities = {it.id: item_discounts.get(it.id, {}).get('total_display_quantity', it.quantity) for it in cart_items}
             
             for item in cart_items:
                 info = item_discounts.get(item.id, {})
@@ -435,11 +450,13 @@ def validate_cart(request):
                 
                 if not item.product.is_available or not item.product.is_active:
                     validation_errors.append(f"{item.product.name} is no longer available")
-                elif item.product.track_inventory and validation_quantity > item.product.quantity:
-                    validation_errors.append(
-                        f"{item.product.name} - only {item.product.quantity} items available"
-                    )
                 else:
+                    master_id = item.product.parent_bulk_product_id or item.product.id
+                    if master_id not in validated_parents:
+                        is_valid, msg = cart.validate_aggregate_stock(item.product, custom_item_quantities=custom_item_quantities)
+                        if not is_valid:
+                            validation_errors.append(msg)
+                        validated_parents.add(master_id)
                     # Check minimum and maximum order quantities
                     if validation_quantity < item.product.minimum_order_quantity:
                         validation_errors.append(
