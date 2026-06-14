@@ -65,7 +65,7 @@ class RetailerProfileSerializer(serializers.ModelSerializer):
             'is_reward_active', 'is_referral_enabled', 'referral_reward_points', 'min_referral_order_amount', 
             'cashback_percentage', 'loyalty_earning_type', 'loyalty_earning_value', 'loyalty_min_order_value',
             'operating_hours', 'is_currently_open', 'next_open_time', 'categories', 'created_at', 'updated_at',
-            'receipt_footer', 'show_gst_on_receipt'
+            'receipt_footer', 'show_gst_on_receipt', 'printer_size'
         ]
         read_only_fields = ['id', 'is_verified', 'average_rating', 'total_ratings', 'created_at', 'updated_at']
 
@@ -174,7 +174,7 @@ class RetailerProfileUpdateSerializer(serializers.ModelSerializer):
             'offers_delivery', 'offers_pickup', 'accepts_cod', 'accepts_upi',
             'delivery_radius', 'serviceable_pincodes', 'minimum_order_amount',
             'delivery_charge', 'free_delivery_threshold',
-            'receipt_footer', 'show_gst_on_receipt',
+            'receipt_footer', 'show_gst_on_receipt', 'printer_size',
             'categories'
         ]
         
