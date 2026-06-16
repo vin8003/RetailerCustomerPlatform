@@ -3,7 +3,8 @@ from decimal import Decimal
 from products.serializers import (
     ProductCategorySerializer, ProductListSerializer, 
     ProductDetailSerializer, ProductCreateSerializer,
-    ProductUpdateSerializer, ProductBulkUploadSerializer
+    ProductUpdateSerializer, ProductBulkUploadSerializer,
+    PurchaseInvoiceSerializer
 )
 from products.models import Product, ProductReview, ProductImage
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -193,3 +194,83 @@ class TestProductBulkUploadSerializer:
         serializer = ProductBulkUploadSerializer(data={"file": file})
         assert not serializer.is_valid()
         assert "file" in serializer.errors
+
+
+@pytest.mark.django_db
+class TestPurchaseInvoiceSerializer:
+    def test_purchase_invoice_validation_without_retailer(self, retailer, product):
+        from retailers.models import Supplier
+        supplier = Supplier.objects.create(retailer=retailer, company_name="Test Supplier")
+        
+        data = {
+            "supplier": supplier.id,
+            "invoice_number": "TEST-INV-123",
+            "invoice_date": "2026-06-16",
+            "total_amount": "100.00",
+            "paid_amount": "0.00",
+            "payment_status": "UNPAID",
+            "items": [
+                {
+                    "product": product.id,
+                    "quantity": 10,
+                    "purchase_price": "10.00",
+                    "total": "100.00",
+                    "new_price": "12.00",
+                    "new_original_price": "15.00",
+                    "mrp_updated": True
+                }
+            ]
+        }
+        
+        # Validating without sending 'retailer' in data should be valid because 'retailer' is read-only
+        serializer = PurchaseInvoiceSerializer(data=data, context={"retailer": retailer})
+        assert serializer.is_valid(), serializer.errors
+        
+    def test_purchase_invoice_ledger_creation_no_duplicates(self, retailer, product):
+        from retailers.models import Supplier
+        from products.models import SupplierLedger
+        from unittest.mock import MagicMock
+        
+        supplier = Supplier.objects.create(retailer=retailer, company_name="Test Supplier")
+        
+        data = {
+            "supplier": supplier.id,
+            "invoice_number": "TEST-INV-DUPE",
+            "invoice_date": "2026-06-16",
+            "total_amount": "200.00",
+            "paid_amount": "50.00",
+            "payment_status": "PARTIAL",
+            "items": [
+                {
+                    "product": product.id,
+                    "quantity": 10,
+                    "purchase_price": "10.00",
+                    "total": "100.00"
+                },
+                {
+                    "product": product.id,
+                    "quantity": 10,
+                    "purchase_price": "10.00",
+                    "total": "100.00"
+                }
+            ]
+        }
+        
+        # Mock request with user
+        request = MagicMock()
+        request.user = retailer.user
+        
+        serializer = PurchaseInvoiceSerializer(data=data, context={"request": request, "retailer": retailer})
+        assert serializer.is_valid(), serializer.errors
+        
+        invoice = serializer.save(retailer=retailer)
+        
+        # Check SupplierLedger entries
+        credit_entries = SupplierLedger.objects.filter(reference_invoice=invoice, transaction_type="CREDIT")
+        debit_entries = SupplierLedger.objects.filter(reference_invoice=invoice, transaction_type="DEBIT")
+        
+        # Should only have 1 Credit and 1 Debit entry, despite having 2 items in invoice!
+        assert credit_entries.count() == 1
+        assert credit_entries.first().amount == Decimal("200.00")
+        assert debit_entries.count() == 1
+        assert debit_entries.first().amount == Decimal("50.00")

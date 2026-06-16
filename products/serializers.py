@@ -988,6 +988,10 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
             'invoice_date', 'total_amount', 'refund_amount', 'net_amount', 'is_returned', 'paid_amount', 'payment_status',
             'notes', 'created_at', 'items'
         ]
+        read_only_fields = ['id', 'retailer', 'created_at']
+        extra_kwargs = {
+            'invoice_number': {'required': False, 'allow_blank': True}
+        }
 
     refund_amount = serializers.SerializerMethodField()
     net_amount = serializers.SerializerMethodField()
@@ -1002,10 +1006,6 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
 
     def get_is_returned(self, obj):
         return obj.returns.exists()
-        read_only_fields = ['id', 'retailer', 'created_at']
-        extra_kwargs = {
-            'invoice_number': {'required': False, 'allow_blank': True}
-        }
 
     def _validate_invoice_products_for_retailer(self, items_data, retailer):
         """
@@ -1088,27 +1088,27 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
                 )
 
             # (Balance updates are now handled strictly by Django Signals mathematically on Ledger)
-                
-                # 6. Create Ledger Entry (Credit)
+            
+            # 6. Create Ledger Entry (Credit)
+            SupplierLedger.objects.create(
+                supplier=supplier,
+                date=invoice.invoice_date,
+                amount=invoice.total_amount,
+                transaction_type='CREDIT',
+                reference_invoice=invoice,
+                notes=f"Purchase Bill #{invoice.invoice_number}"
+            )
+            
+            # 7. If there was a partial payment, create a Debit entry too
+            if invoice.paid_amount > 0:
                 SupplierLedger.objects.create(
                     supplier=supplier,
                     date=invoice.invoice_date,
-                    amount=invoice.total_amount,
-                    transaction_type='CREDIT',
+                    amount=invoice.paid_amount,
+                    transaction_type='DEBIT',
                     reference_invoice=invoice,
-                    notes=f"Purchase Bill #{invoice.invoice_number}"
+                    notes=f"Paid against Bill #{invoice.invoice_number}"
                 )
-                
-                # 7. If there was a partial payment, create a Debit entry too
-                if invoice.paid_amount > 0:
-                    SupplierLedger.objects.create(
-                        supplier=supplier,
-                        date=invoice.invoice_date,
-                        amount=invoice.paid_amount,
-                        transaction_type='DEBIT',
-                        reference_invoice=invoice,
-                        notes=f"Paid against Bill #{invoice.invoice_number}"
-                    )
             return invoice
             
     def update(self, instance, validated_data):
@@ -1192,25 +1192,25 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
                 )
 
             # (New balance updates are now handled strictly by Django Signals on Ledger creation)                
-                # Re-create Ledger
+            # Re-create Ledger
+            SupplierLedger.objects.create(
+                supplier=new_supplier,
+                date=instance.invoice_date,
+                amount=instance.total_amount,
+                transaction_type='CREDIT',
+                reference_invoice=instance,
+                notes=f"Purchase Bill (Updated) #{instance.invoice_number}"
+            )
+            
+            if instance.paid_amount > 0:
                 SupplierLedger.objects.create(
                     supplier=new_supplier,
                     date=instance.invoice_date,
-                    amount=instance.total_amount,
-                    transaction_type='CREDIT',
+                    amount=instance.paid_amount,
+                    transaction_type='DEBIT',
                     reference_invoice=instance,
-                    notes=f"Purchase Bill (Updated) #{instance.invoice_number}"
+                    notes=f"Paid (Updated) against Bill #{instance.invoice_number}"
                 )
-                
-                if instance.paid_amount > 0:
-                    SupplierLedger.objects.create(
-                        supplier=new_supplier,
-                        date=instance.invoice_date,
-                        amount=instance.paid_amount,
-                        transaction_type='DEBIT',
-                        reference_invoice=instance,
-                        notes=f"Paid (Updated) against Bill #{instance.invoice_number}"
-                    )
 
             return instance
 
