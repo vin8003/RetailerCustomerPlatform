@@ -132,12 +132,12 @@ class TestCartBXGYRefactoredFailing:
         product.track_inventory = True
         product.save()
 
-        # Create POS order for 2 units (Buy 2 Get 2 free)
+        # Create POS order for 4 units (Buy 2 Get 2 free)
         url_pos = reverse('create_pos_order')
         data = {
-            'items': [{'product_id': product.id, 'quantity': 2, 'unit_price': float(product.price)}],
+            'items': [{'product_id': product.id, 'quantity': 4, 'unit_price': float(product.price)}],
             'payment_mode': 'cash',
-            'subtotal': float(product.price * 2),
+            'subtotal': float(product.price * 4),
             'discount_amount': 0, # Should be calculated by engine
             'total_amount': float(product.price * 2)
         }
@@ -264,9 +264,9 @@ class TestCartBXGYRefactoredFailing:
         api_client.force_authenticate(user=retailer_user)
         url_pos = reverse('create_pos_order')
         data = {
-            'items': [{'product_id': product.id, 'quantity': 1, 'unit_price': float(product.price)}],
+            'items': [{'product_id': product.id, 'quantity': 2, 'unit_price': float(product.price)}],
             'payment_mode': 'cash',
-            'subtotal': float(product.price),
+            'subtotal': float(product.price * 2),
             'discount_amount': 0,
             'total_amount': float(product.price)
         }
@@ -328,9 +328,9 @@ class TestCartBXGYRefactoredFailing:
         )
         OfferTarget.objects.create(offer=offer, target_type="product", product=product)
 
-        # Customer adds 3 units to cart (with BOGO, this requires 3 free, so 6 total)
+        # Customer adds 6 units to cart (with BOGO, group size is 2, so 6 total)
         cart, _ = Cart.objects.get_or_create(customer=customer, retailer=retailer)
-        CartItem.objects.create(cart=cart, product=product, quantity=3)
+        CartItem.objects.create(cart=cart, product=product, quantity=6)
 
         # Validate cart should fail because 6 units are needed, but only 5 are in stock
         url_validate = reverse('validate_cart')
@@ -401,9 +401,9 @@ class TestCartBXGYRefactoredFailing:
         # POST POS order without customer_mobile or customer_name
         url_pos = reverse('create_pos_order')
         data = {
-            'items': [{'product_id': product.id, 'quantity': 1, 'unit_price': float(product.price)}],
+            'items': [{'product_id': product.id, 'quantity': 2, 'unit_price': float(product.price)}],
             'payment_mode': 'cash',
-            'subtotal': float(product.price),
+            'subtotal': float(product.price * 2),
             'discount_amount': 0,
             'total_amount': float(product.price)
         }

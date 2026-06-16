@@ -132,12 +132,12 @@ class TestCartBXGYRefactoredPassing:
         product.track_inventory = True
         product.save()
 
-        # Create POS order for 2 units (Buy 2 Get 2 free)
+        # Create POS order for 4 units (Buy 2 Get 2 free)
         url_pos = reverse('create_pos_order')
         data = {
-            'items': [{'product_id': product.id, 'quantity': 2, 'unit_price': float(product.price)}],
+            'items': [{'product_id': product.id, 'quantity': 4, 'unit_price': float(product.price)}],
             'payment_mode': 'cash',
-            'subtotal': float(product.price * 2),
+            'subtotal': float(product.price * 4),
             'discount_amount': 0, # Should be calculated by engine
             'total_amount': float(product.price * 2)
         }
