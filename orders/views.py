@@ -423,7 +423,21 @@ def cancel_order(request, order_id):
         
         # Restore product quantities
         for item in order.items.all():
+            prev_qty = item.product.quantity
             item.product.increase_quantity(item.quantity)
+            item.product.refresh_from_db()
+            new_qty = item.product.quantity
+            
+            from products.models import ProductInventoryLog
+            ProductInventoryLog.objects.create(
+                product=item.product,
+                log_type='returned',
+                quantity_change=item.quantity,
+                previous_quantity=prev_qty,
+                new_quantity=new_qty,
+                reason=f"Order Cancelled: #{order.order_number}",
+                created_by=user
+            )
             
         # Refund loyalty points if used (Handled in update_status but ensured here logic is consistent)
         # Actually update_status('cancelled') already calls refund logic in models.py.
@@ -884,7 +898,21 @@ def confirm_modification(request, order_id):
             
             # Restore stock for items
             for item in order.items.all():
+                prev_qty = item.product.quantity
                 item.product.increase_quantity(item.quantity)
+                item.product.refresh_from_db()
+                new_qty = item.product.quantity
+                
+                from products.models import ProductInventoryLog
+                ProductInventoryLog.objects.create(
+                    product=item.product,
+                    log_type='returned',
+                    quantity_change=item.quantity,
+                    previous_quantity=prev_qty,
+                    new_quantity=new_qty,
+                    reason=f"Modification Rejected (Order Cancelled): #{order.order_number}",
+                    created_by=request.user
+                )
             
             message = 'Order modification rejected'
         

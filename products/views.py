@@ -355,6 +355,8 @@ def get_retailer_products(request):
                     'image': img_url,
                     'category_name': p.category.name if p.category else 'Uncategorized',
                     'barcode': p.barcode,
+                    'is_active': p.is_active,
+                    'is_seasonal': p.is_seasonal,
                     'has_batches': p.has_batches,
                     'batches': batches
                 })
@@ -833,6 +835,40 @@ def bulk_update_products(request):
 
                 if changed:
                     product.save()
+                    
+                    # Keep the first batch in sync with product fields if multi-batch is OFF
+                    if not product.has_batches:
+                        from products.models import ProductBatch
+                        batch = product.batches.filter(is_active=True).first()
+                        if not batch:
+                            batch = product.batches.filter(batch_number='INITIAL-STOCK').first()
+                            if batch:
+                                batch.is_active = product.is_active
+                                batch.price = product.price
+                                batch.original_price = product.original_price
+                                batch.quantity = product.quantity
+                                batch.barcode = product.barcode
+                                batch.save()
+                            else:
+                                ProductBatch.objects.create(
+                                    product=product,
+                                    retailer=retailer,
+                                    batch_number='INITIAL-STOCK',
+                                    price=product.price,
+                                    original_price=product.original_price,
+                                    purchase_price=product.purchase_price or product.price,
+                                    quantity=product.quantity,
+                                    barcode=product.barcode,
+                                    is_active=product.is_active
+                                )
+                        else:
+                            batch.price = product.price
+                            batch.original_price = product.original_price
+                            batch.quantity = product.quantity
+                            batch.barcode = product.barcode
+                            batch.is_active = product.is_active
+                            batch.save()
+                            
                     updated_count += 1
             
             if logs_to_create:

@@ -694,19 +694,27 @@ class OrderCreateSerializer(serializers.Serializer):
                     total_price=total_price
                 ))
                 
-                # Reduce product quantity in memory (only if tracked)
+                # Reduce product quantity (only if tracked) and log it
                 if cart_item.product.track_inventory:
-                    cart_item.product.quantity -= quantity
-                    products_to_update.append(cart_item.product)
-            
+                    prev_qty = cart_item.product.quantity
+                    cart_item.product.reduce_quantity(quantity)
+                    cart_item.product.refresh_from_db()
+                    new_qty = cart_item.product.quantity
+                    
+                    from products.models import ProductInventoryLog
+                    ProductInventoryLog.objects.create(
+                        product=cart_item.product,
+                        log_type='sold',
+                        quantity_change=-quantity,
+                        previous_quantity=prev_qty,
+                        new_quantity=new_qty,
+                        reason=f"Online Order #{order.order_number}",
+                        created_by=customer
+                    )
+
             # Bulk create items
             OrderItem.objects.bulk_create(order_items)
-            
-            # Bulk update product quantities for tracked items
-            if products_to_update:
-                Product.objects.bulk_update(products_to_update, ['quantity'])
-            
-            # Deduct points from customer profile if used
+
             if points_to_redeem > 0:
                 from customers.models import CustomerLoyalty, LoyaltyTransaction
                 try:
@@ -974,20 +982,54 @@ class OrderModificationSerializer(serializers.Serializer):
                             if quantity == 0:
                                 # Remove item
                                 # Restore stock
+                                prev_qty = item.product.quantity
                                 item.product.increase_quantity(item.quantity)
+                                item.product.refresh_from_db()
+                                new_qty = item.product.quantity
+                                
+                                from products.models import ProductInventoryLog
+                                ProductInventoryLog.objects.create(
+                                    product=item.product,
+                                    log_type='returned',
+                                    quantity_change=item.quantity,
+                                    previous_quantity=prev_qty,
+                                    new_quantity=new_qty,
+                                    reason=f"Order Item Removed: #{instance.order_number}",
+                                    created_by=self.context.get('request').user if self.context.get('request') else None
+                                )
                                 item.delete()
                                 continue
                             
                             # Handle stock change for quantity difference
                             diff = quantity - item.quantity
-                            if diff > 0:
-                                 # Need more
-                                 if not item.product.can_order_quantity(diff):
-                                     raise serializers.ValidationError(f"Not enough stock for {item.product_name}")
-                                 item.product.reduce_quantity(diff)
-                            elif diff < 0:
-                                 # Returning some
-                                 item.product.increase_quantity(abs(diff))
+                            if diff != 0:
+                                 prev_qty = item.product.quantity
+                                 if diff > 0:
+                                      # Need more
+                                      if not item.product.can_order_quantity(diff):
+                                          raise serializers.ValidationError(f"Not enough stock for {item.product_name}")
+                                      item.product.reduce_quantity(diff)
+                                      log_type = 'sold'
+                                      change_val = -diff
+                                 else:
+                                      # Returning some
+                                      item.product.increase_quantity(abs(diff))
+                                      log_type = 'returned'
+                                      change_val = abs(diff)
+                                 
+                                 item.product.refresh_from_db()
+                                 new_qty = item.product.quantity
+                                 
+                                 from products.models import ProductInventoryLog
+                                 ProductInventoryLog.objects.create(
+                                     product=item.product,
+                                     log_type=log_type,
+                                     quantity_change=change_val,
+                                     previous_quantity=prev_qty,
+                                     new_quantity=new_qty,
+                                     reason=f"Order Modification: #{instance.order_number}",
+                                     created_by=self.context.get('request').user if self.context.get('request') else None
+                                 )
                             
                             item.quantity = quantity
                         
@@ -1013,7 +1055,21 @@ class OrderModificationSerializer(serializers.Serializer):
                         raise serializers.ValidationError(f"Not enough stock for {product.name}")
                     
                     # Reduce stock
+                    prev_qty = product.quantity
                     product.reduce_quantity(quantity)
+                    product.refresh_from_db()
+                    new_qty = product.quantity
+                    
+                    from products.models import ProductInventoryLog
+                    ProductInventoryLog.objects.create(
+                        product=product,
+                        log_type='sold',
+                        quantity_change=-quantity,
+                        previous_quantity=prev_qty,
+                        new_quantity=new_qty,
+                        reason=f"Order Item Added: #{instance.order_number}",
+                        created_by=self.context.get('request').user if self.context.get('request') else None
+                    )
                     
                     # Create new OrderItem
                     OrderItem.objects.create(
