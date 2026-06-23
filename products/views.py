@@ -312,6 +312,10 @@ def get_retailer_products(request):
         if low_stock and low_stock.lower() == 'true':
             products = products.filter(quantity__gt=0, quantity__lte=10)
 
+        negative_stock = request.query_params.get('negative_stock')
+        if negative_stock and negative_stock.lower() == 'true':
+            products = products.filter(quantity__lt=0)
+
         # Search functionality
         search = request.query_params.get('search')
         if search:

@@ -21,7 +21,8 @@ class OrderItemSerializer(serializers.ModelSerializer):
         model = OrderItem
         fields = [
             'id', 'product', 'product_name', 'product_image', 'product_price', 'product_unit',
-            'quantity', 'unit_price', 'total_price', 'created_at', 'net_quantity', 'returned_quantity'
+            'quantity', 'unit_price', 'total_price', 'created_at', 'net_quantity', 'returned_quantity',
+            'mrp'
         ]
         read_only_fields = ['id', 'created_at']
 
@@ -64,6 +65,17 @@ class OrderItemSerializer(serializers.ModelSerializer):
             if net == net.to_integral_value(): return int(net)
             return float(net.normalize())
         return net
+
+    mrp = serializers.SerializerMethodField()
+
+    def get_mrp(self, obj):
+        # 1. Try batch original_price (MRP)
+        if obj.batch and obj.batch.original_price:
+            return float(obj.batch.original_price)
+        # 2. Try product original_price (MRP)
+        if obj.product and obj.product.original_price:
+            return float(obj.product.original_price)
+        return None
 
 
 class OrderListSerializer(serializers.ModelSerializer):
@@ -231,6 +243,9 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     retailer_gst_number = serializers.CharField(source='retailer.gst_number', read_only=True)
     retailer_receipt_footer = serializers.CharField(source='retailer.receipt_footer', read_only=True)
     retailer_show_gst = serializers.BooleanField(source='retailer.show_gst_on_receipt', read_only=True)
+    retailer_printer_size = serializers.CharField(source='retailer.printer_size', read_only=True)
+    ledger_previous_balance = serializers.SerializerMethodField()
+    ledger_new_balance = serializers.SerializerMethodField()
     customer_name = serializers.SerializerMethodField()
     customer_phone = serializers.CharField(source='customer.phone_number', read_only=True)
     customer_email = serializers.CharField(source='customer.email', read_only=True)
@@ -266,7 +281,8 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'special_instructions', 'cancellation_reason', 'cancelled_by', 
             'payment_reference_id', 'payment_status', 'payment_edit_count', 'is_payment_locked',
             'cash_amount', 'upi_amount', 'card_amount', 'credit_amount',
-            'delivery_address_text', 'retailer_gst_number', 'retailer_receipt_footer', 'retailer_show_gst',
+            'delivery_address_text', 'retailer_gst_number', 'retailer_receipt_footer', 'retailer_show_gst', 'retailer_printer_size',
+            'ledger_previous_balance', 'ledger_new_balance',
             'delivery_latitude', 'delivery_longitude',
             'items', 'sales_returns', 'applied_offers', 'created_at', 'updated_at', 'confirmed_at', 'delivered_at',
             'cancelled_at', 'unread_messages_count',
@@ -377,6 +393,21 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     def get_upi_amount(self, obj): return self._payment_summary(obj)['upi_amount']
     def get_card_amount(self, obj): return self._payment_summary(obj)['card_amount']
     def get_credit_amount(self, obj): return self._payment_summary(obj)['credit_amount']
+
+    def get_ledger_new_balance(self, obj):
+        ledger_entry = obj.ledger_entries.order_by('-created_at', '-id').first()
+        if ledger_entry:
+            return float(ledger_entry.balance_after)
+        return None
+
+    def get_ledger_previous_balance(self, obj):
+        ledger_entry = obj.ledger_entries.order_by('-created_at', '-id').first()
+        if ledger_entry:
+            if ledger_entry.transaction_type in ['PAYMENT', 'RETURN']:
+                return float(ledger_entry.balance_after + ledger_entry.amount)
+            return float(ledger_entry.balance_after - ledger_entry.amount)
+        return None
+
 
 
 class OrderCreateSerializer(serializers.Serializer):

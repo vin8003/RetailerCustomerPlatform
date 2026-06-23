@@ -506,3 +506,61 @@ class TestCreateRetailerRating:
             {"rating": 4},
         )
         assert res.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.django_db
+class TestOrderDetailPrintFields:
+    def test_print_bill_serializes_fields(self, api_client, retailer_user, retailer, customer, product):
+        from retailers.models import RetailerCustomerMapping, CustomerLedger
+        from orders.models import Order, OrderItem
+        
+        # Configure printer size
+        retailer.printer_size = '58mm'
+        retailer.save()
+        
+        # Configure product original_price (MRP)
+        product.original_price = Decimal("150.00")
+        product.price = Decimal("120.00")
+        product.save()
+        
+        # Create order
+        order = Order.objects.create(
+            customer=customer,
+            retailer=retailer,
+            total_amount=Decimal("120.00"),
+            subtotal=Decimal("120.00"),
+            delivery_mode="pickup",
+            payment_mode="credit",
+            status="delivered"
+        )
+        
+        # Create order item
+        OrderItem.objects.create(
+            order=order,
+            product=product,
+            product_name=product.name,
+            product_price=product.price,
+            product_unit=product.unit,
+            quantity=1,
+            unit_price=Decimal("120.00"),
+            total_price=Decimal("120.00")
+        )
+        
+        # Create ledger transaction
+        mapping = RetailerCustomerMapping.objects.create(retailer=retailer, customer=customer)
+        CustomerLedger.objects.create(
+            mapping=mapping,
+            transaction_type='SALE',
+            amount=Decimal("120.00"),
+            balance_after=Decimal("250.00"),
+            order=order
+        )
+        
+        api_client.force_authenticate(user=retailer_user)
+        url = reverse("get_order_detail", args=[order.id])
+        res = api_client.get(url)
+        assert res.status_code == status.HTTP_200_OK
+        assert res.data['retailer_printer_size'] == '58mm'
+        assert res.data['items'][0]['mrp'] == 150.0
+        assert res.data['ledger_new_balance'] == 250.0
+        assert res.data['ledger_previous_balance'] == 130.0

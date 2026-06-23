@@ -159,3 +159,129 @@ class TestCustomerReferralView:
         response = api_client.post(url, data)
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         assert "first order" in response.data['error'].lower()
+
+
+@pytest.mark.django_db
+class TestRetailerCustomerFilteringAndSorting:
+    def test_filter_by_status(self, api_client, retailer, customer):
+        # Create mapping
+        from retailers.models import RetailerCustomerMapping, RetailerBlacklist
+        mapping = RetailerCustomerMapping.objects.create(retailer=retailer, customer=customer, current_balance=Decimal("10.00"))
+        
+        api_client.force_authenticate(user=retailer.user)
+        url = reverse('get_retailer_customers')
+        
+        # Verify active status
+        res = api_client.get(url, {'status': 'active'})
+        assert res.status_code == status.HTTP_200_OK
+        assert res.data['count'] == 1
+        
+        # Blacklist customer
+        RetailerBlacklist.objects.create(retailer=retailer, customer=customer, reason="Bad")
+        
+        # Verify active status excludes blacklist
+        res = api_client.get(url, {'status': 'active'})
+        assert res.status_code == status.HTTP_200_OK
+        assert res.data['count'] == 0
+        
+        # Verify blacklisted status includes blacklist
+        res = api_client.get(url, {'status': 'blacklisted'})
+        assert res.status_code == status.HTTP_200_OK
+        assert res.data['count'] == 1
+
+    def test_filter_by_due_payment(self, api_client, retailer):
+        from retailers.models import RetailerCustomerMapping
+        from authentication.models import User
+        # Create user 1 with due
+        u1 = User.objects.create_user(username="due_user", password="pwd", user_type="customer")
+        RetailerCustomerMapping.objects.create(retailer=retailer, customer=u1, current_balance=Decimal("150.00"))
+        
+        # Create user 2 with no due
+        u2 = User.objects.create_user(username="nodue_user", password="pwd", user_type="customer")
+        RetailerCustomerMapping.objects.create(retailer=retailer, customer=u2, current_balance=Decimal("0.00"))
+        
+        # Create user 3 with overpayment (negative balance)
+        u3 = User.objects.create_user(username="overdue_user", password="pwd", user_type="customer")
+        RetailerCustomerMapping.objects.create(retailer=retailer, customer=u3, current_balance=Decimal("-50.00"))
+        
+        api_client.force_authenticate(user=retailer.user)
+        url = reverse('get_retailer_customers')
+        
+        # Verify due_payment=true
+        res = api_client.get(url, {'due_payment': 'true'})
+        assert res.status_code == status.HTTP_200_OK
+        assert res.data['count'] == 1
+        assert res.data['results'][0]['customer_id'] == u1.id
+        
+        # Verify due_payment=false (includes both u2 and u3)
+        res = api_client.get(url, {'due_payment': 'false'})
+        assert res.status_code == status.HTTP_200_OK
+        assert res.data['count'] == 2
+        customer_ids = [c['customer_id'] for c in res.data['results']]
+        assert u2.id in customer_ids
+        assert u3.id in customer_ids
+
+    def test_filter_by_customer_type(self, api_client, retailer):
+        from retailers.models import RetailerCustomerMapping
+        from authentication.models import User
+        # App user
+        u1 = User.objects.create_user(username="app_user", password="pwd", user_type="customer", registration_status="registered")
+        RetailerCustomerMapping.objects.create(retailer=retailer, customer=u1)
+        
+        # Shadow user
+        u2 = User.objects.create_user(username="shadow_user", password="pwd", user_type="customer", registration_status="shadow")
+        RetailerCustomerMapping.objects.create(retailer=retailer, customer=u2)
+        
+        api_client.force_authenticate(user=retailer.user)
+        url = reverse('get_retailer_customers')
+        
+        # App Users
+        res = api_client.get(url, {'customer_type': 'registered'})
+        assert res.status_code == status.HTTP_200_OK
+        assert res.data['count'] == 1
+        assert res.data['results'][0]['customer_id'] == u1.id
+        
+        # Walk-in
+        res = api_client.get(url, {'customer_type': 'shadow'})
+        assert res.status_code == status.HTTP_200_OK
+        assert res.data['count'] == 1
+        assert res.data['results'][0]['customer_id'] == u2.id
+
+    def test_sorting_customers(self, api_client, retailer):
+        from retailers.models import RetailerCustomerMapping
+        from authentication.models import User
+        from orders.models import Order
+        
+        u1 = User.objects.create_user(username="cust1", password="pwd", user_type="customer")
+        RetailerCustomerMapping.objects.create(retailer=retailer, customer=u1)
+        Order.objects.create(
+            customer=u1, retailer=retailer, total_amount=Decimal("500.00"),
+            subtotal=Decimal("500.00"), delivery_mode="delivery", payment_mode="cod",
+            status="delivered"
+        )
+        
+        u2 = User.objects.create_user(username="cust2", password="pwd", user_type="customer")
+        RetailerCustomerMapping.objects.create(retailer=retailer, customer=u2)
+        Order.objects.create(
+            customer=u2, retailer=retailer, total_amount=Decimal("100.00"),
+            subtotal=Decimal("100.00"), delivery_mode="delivery", payment_mode="cod",
+            status="delivered"
+        )
+        Order.objects.create(
+            customer=u2, retailer=retailer, total_amount=Decimal("100.00"),
+            subtotal=Decimal("100.00"), delivery_mode="delivery", payment_mode="cod",
+            status="delivered"
+        )
+        
+        api_client.force_authenticate(user=retailer.user)
+        url = reverse('get_retailer_customers')
+        
+        # Sort by most_orders
+        res = api_client.get(url, {'sort_by': 'most_orders'})
+        assert res.status_code == status.HTTP_200_OK
+        assert res.data['results'][0]['customer_id'] == u2.id # 2 orders
+        
+        # Sort by highest_spent
+        res = api_client.get(url, {'sort_by': 'highest_spent'})
+        assert res.status_code == status.HTTP_200_OK
+        assert res.data['results'][0]['customer_id'] == u1.id # 500 spent

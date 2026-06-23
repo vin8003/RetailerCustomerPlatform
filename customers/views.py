@@ -2,7 +2,7 @@ from rest_framework import status, permissions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
-from django.db.models import Count, Sum, Q, Avg, DecimalField, IntegerField, Max, Subquery, OuterRef
+from django.db.models import Count, Sum, Q, Avg, DecimalField, IntegerField, Max, Subquery, OuterRef, F
 from django.shortcuts import get_object_or_404
 from decimal import Decimal
 from common.pagination import StandardResultsSetPagination
@@ -913,9 +913,10 @@ def get_retailer_customers(request):
             _last_order_date=Max('customer__orders__created_at', filter=Q(
                 customer__orders__retailer=retailer
             ))
-        ).order_by('-created_at')
+        )
         
-        # 2. Apply Search Filter if present
+        # 2. Apply Filters
+        # Apply Search Filter if present
         search = request.query_params.get('search')
         if search:
             mappings = mappings.filter(
@@ -924,6 +925,40 @@ def get_retailer_customers(request):
                 Q(customer__last_name__icontains=search) |
                 Q(customer__phone_number__icontains=search)
             )
+
+        # Apply Status Filter if present (active, blacklisted)
+        status_param = request.query_params.get('status')
+        if status_param == 'active':
+            mappings = mappings.exclude(customer__blacklisted_by__retailer=retailer)
+        elif status_param == 'blacklisted':
+            mappings = mappings.filter(customer__blacklisted_by__retailer=retailer)
+
+        # Apply Due Payment Filter if present (true, false)
+        due_payment = request.query_params.get('due_payment')
+        if due_payment == 'true':
+            mappings = mappings.filter(current_balance__gt=0)
+        elif due_payment == 'false':
+            mappings = mappings.filter(current_balance__lte=0)
+
+        # Apply Customer Type Filter if present (registered, shadow)
+        customer_type = request.query_params.get('customer_type')
+        if customer_type == 'registered':
+            mappings = mappings.filter(Q(customer__registration_status='registered') | Q(customer__is_phone_verified=True))
+        elif customer_type == 'shadow':
+            mappings = mappings.exclude(Q(customer__registration_status='registered') | Q(customer__is_phone_verified=True))
+
+        # 3. Apply Sorting
+        sort_by = request.query_params.get('sort_by', 'joined_date')
+        if sort_by == 'most_orders':
+            mappings = mappings.order_by('-_total_orders', '-created_at')
+        elif sort_by == 'highest_spent':
+            mappings = mappings.order_by('-_total_spent', '-created_at')
+        elif sort_by == 'lowest_rating':
+            mappings = mappings.order_by('customer__customer_profile__average_rating', '-created_at')
+        elif sort_by == 'recent_activity':
+            mappings = mappings.order_by(F('_last_order_date').desc(nulls_last=True), '-created_at')
+        else: # joined_date
+            mappings = mappings.order_by('-created_at')
 
         # 3. Apply Pagination
         paginator = StandardResultsSetPagination()
