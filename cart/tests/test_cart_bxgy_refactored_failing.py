@@ -132,12 +132,12 @@ class TestCartBXGYRefactoredFailing:
         product.track_inventory = True
         product.save()
 
-        # Create POS order for 2 units (Buy 2 Get 2 free)
+        # Create POS order for 4 units (Buy 2 Get 2 free)
         url_pos = reverse('create_pos_order')
         data = {
-            'items': [{'product_id': product.id, 'quantity': 2, 'unit_price': float(product.price)}],
+            'items': [{'product_id': product.id, 'quantity': 4, 'unit_price': float(product.price)}],
             'payment_mode': 'cash',
-            'subtotal': float(product.price * 2),
+            'subtotal': float(product.price * 4),
             'discount_amount': 0, # Should be calculated by engine
             'total_amount': float(product.price * 2)
         }
@@ -264,9 +264,9 @@ class TestCartBXGYRefactoredFailing:
         api_client.force_authenticate(user=retailer_user)
         url_pos = reverse('create_pos_order')
         data = {
-            'items': [{'product_id': product.id, 'quantity': 1, 'unit_price': float(product.price)}],
+            'items': [{'product_id': product.id, 'quantity': 2, 'unit_price': float(product.price)}],
             'payment_mode': 'cash',
-            'subtotal': float(product.price),
+            'subtotal': float(product.price * 2),
             'discount_amount': 0,
             'total_amount': float(product.price)
         }
@@ -328,9 +328,9 @@ class TestCartBXGYRefactoredFailing:
         )
         OfferTarget.objects.create(offer=offer, target_type="product", product=product)
 
-        # Customer adds 3 units to cart (with BOGO, this requires 3 free, so 6 total)
+        # Customer adds 6 units to cart (with BOGO, group size is 2, so 6 total)
         cart, _ = Cart.objects.get_or_create(customer=customer, retailer=retailer)
-        CartItem.objects.create(cart=cart, product=product, quantity=3)
+        CartItem.objects.create(cart=cart, product=product, quantity=6)
 
         # Validate cart should fail because 6 units are needed, but only 5 are in stock
         url_validate = reverse('validate_cart')
@@ -401,9 +401,9 @@ class TestCartBXGYRefactoredFailing:
         # POST POS order without customer_mobile or customer_name
         url_pos = reverse('create_pos_order')
         data = {
-            'items': [{'product_id': product.id, 'quantity': 1, 'unit_price': float(product.price)}],
+            'items': [{'product_id': product.id, 'quantity': 2, 'unit_price': float(product.price)}],
             'payment_mode': 'cash',
-            'subtotal': float(product.price),
+            'subtotal': float(product.price * 2),
             'discount_amount': 0,
             'total_amount': float(product.price)
         }
@@ -425,4 +425,26 @@ class TestCartBXGYRefactoredFailing:
         redemptions = OfferRedemption.objects.filter(order=order, offer=offer)
         assert redemptions.exists()
         assert redemptions.first().customer is None
+
+    def test_bxgy_partial_group_distribution(self, retailer, product):
+        """
+        FAILING TEST: Verify that a partial group correctly calculates free items
+        for the remainder. Under Buy 2 Get 2, scanning 3 items should give 1 free item.
+        """
+        engine = OfferEngine()
+        offer = Offer.objects.create(
+            retailer=retailer, name="Buy 2 Get 2", offer_type="bxgy",
+            buy_quantity=2, get_quantity=2, is_active=True,
+            bxgy_strategy='same_product', value=0
+        )
+        OfferTarget.objects.create(offer=offer, target_type="product", product=product)
+
+        # Total scanned quantity = 3. Under Buy 2 Get 2, group size is 4.
+        # full_groups = 3 // 4 = 0
+        # remainder = 3 % 4 = 3
+        # free_qty = 0 + max(0, 3 - 2) = 1
+        cart_items = [DummyCartItem(product, 3, 100)]
+        result = engine.calculate_offers(cart_items, retailer)
+        
+        assert result['total_savings'] == Decimal("100.00")
 

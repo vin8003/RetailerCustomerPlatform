@@ -100,10 +100,12 @@ class TestOfferEngine:
         )
         OfferTarget.objects.create(offer=offer, target_type="product", product=product)
         
-        # 3 items of same product. Buy 1 get 1 means 3 sets applied (since database strictly holds purchased quantity).
+        # 3 items of same product. Group size = 2. 3 // 2 = 1 free item.
         cart_items = [DummyCartItem(product, 3, 100)]
         result = engine.calculate_offers(cart_items, retailer)
-        assert result['total_savings'] == Decimal("300.00")
+        assert result['total_savings'] == Decimal("100.00")
+        assert result['discounted_total'] == Decimal("200.00")
+        assert result['subtotal'] == Decimal("300.00")
 
     def test_stacking_logic(self, engine, retailer, product):
         # Offer 1: 10% Off (Non-stackable)

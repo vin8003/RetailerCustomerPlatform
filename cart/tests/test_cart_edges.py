@@ -37,16 +37,16 @@ class TestCartViewEdges:
         # Offer Target - Product
         OfferTarget.objects.create(offer=offer, target_type="product", product=product)
         
-        # Add 1 item
+        # Add 2 items
         url = reverse('add_to_cart')
-        data = {'product_id': product.id, 'quantity': 1}
+        data = {'product_id': product.id, 'quantity': 2}
         response = api_client.post(url, data)
         assert response.status_code == status.HTTP_201_CREATED
         
-        # Database quantity MUST strictly remain 1 (no forceful mutation!)
+        # Database quantity MUST strictly remain 2 (no forceful mutation!)
         cart_item = CartItem.objects.get(product=product, cart__customer=customer)
-        assert cart_item.quantity == 1
-
+        assert cart_item.quantity == 2
+ 
         # Retrieve the cart - OfferEngine should dynamically return total display quantity 2
         url_get = reverse('get_cart') + f"?retailer_id={retailer.id}"
         response_get = api_client.get(url_get)
