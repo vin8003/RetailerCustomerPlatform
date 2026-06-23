@@ -291,7 +291,8 @@ def get_order_detail(request, order_id):
             'delivery_address'
         ).prefetch_related(
             'items',
-            'items__product'
+            'items__product',
+            'items__batch'
         )
 
         if user.user_type == 'customer':

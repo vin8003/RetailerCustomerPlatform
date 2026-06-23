@@ -938,7 +938,7 @@ def get_retailer_customers(request):
         if due_payment == 'true':
             mappings = mappings.filter(current_balance__gt=0)
         elif due_payment == 'false':
-            mappings = mappings.filter(current_balance__lte=0)
+            mappings = mappings.filter(current_balance=0)
 
         # Apply Customer Type Filter if present (registered, shadow)
         customer_type = request.query_params.get('customer_type')
