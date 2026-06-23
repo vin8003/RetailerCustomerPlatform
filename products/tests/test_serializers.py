@@ -4,7 +4,7 @@ from products.serializers import (
     ProductCategorySerializer, ProductListSerializer, 
     ProductDetailSerializer, ProductCreateSerializer,
     ProductUpdateSerializer, ProductBulkUploadSerializer,
-    PurchaseInvoiceSerializer
+    PurchaseInvoiceSerializer, SupplierLedgerSerializer
 )
 from products.models import Product, ProductReview, ProductImage
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -274,3 +274,47 @@ class TestPurchaseInvoiceSerializer:
         assert credit_entries.first().amount == Decimal("200.00")
         assert debit_entries.count() == 1
         assert debit_entries.first().amount == Decimal("50.00")
+
+
+@pytest.mark.django_db
+class TestSupplierLedgerSerializer:
+    def test_supplier_ledger_serialization_with_and_without_invoice(self, retailer):
+        from retailers.models import Supplier
+        from products.models import SupplierLedger
+        
+        supplier = Supplier.objects.create(retailer=retailer, company_name="Test Supplier Ledger")
+        
+        # 1. Create a ledger entry without an invoice
+        ledger_no_inv = SupplierLedger.objects.create(
+            supplier=supplier,
+            date="2026-06-24",
+            amount=Decimal("150.00"),
+            transaction_type="DEBIT",
+            notes="General Payment"
+        )
+        
+        # This serialization should NOT raise AttributeError
+        serializer = SupplierLedgerSerializer(ledger_no_inv)
+        assert serializer.data["reference_invoice_number"] is None
+        
+        # 2. Create a ledger entry with an invoice
+        from products.models import PurchaseInvoice
+        invoice = PurchaseInvoice.objects.create(
+            retailer=retailer,
+            supplier=supplier,
+            invoice_number="INV-12345",
+            invoice_date="2026-06-24",
+            total_amount=Decimal("150.00")
+        )
+        ledger_with_inv = SupplierLedger.objects.create(
+            supplier=supplier,
+            date="2026-06-24",
+            amount=Decimal("150.00"),
+            transaction_type="CREDIT",
+            reference_invoice=invoice,
+            notes="Credit for invoice"
+        )
+        
+        serializer_with_inv = SupplierLedgerSerializer(ledger_with_inv)
+        assert serializer_with_inv.data["reference_invoice_number"] == "INV-12345"
+

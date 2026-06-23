@@ -1218,11 +1218,13 @@ class SupplierLedgerSerializer(serializers.ModelSerializer):
     """
     Serializer for Supplier Ledger
     """
-    reference_invoice_number = serializers.CharField(source='reference_invoice.invoice_number', read_only=True)
+    reference_invoice_number = serializers.SerializerMethodField()
 
     class Meta:
         model = SupplierLedger
         fields = '__all__'
         read_only_fields = ['id', 'created_at']
-        fields = '__all__'
-        read_only_fields = ['id', 'created_at']
+
+    def get_reference_invoice_number(self, obj):
+        return obj.reference_invoice.invoice_number if obj.reference_invoice else None
+
