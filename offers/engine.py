@@ -368,7 +368,9 @@ class OfferEngine:
                 continue
 
             # Calculate total free quantity for this product group (within scanned quantity)
-            total_free_qty = int(total_scanned_qty // group_size) * y
+            full_groups = total_scanned_qty // group_size
+            remainder = total_scanned_qty % group_size
+            total_free_qty = (full_groups * y) + max(0, remainder - x)
             if total_free_qty <= 0:
                 continue
 
