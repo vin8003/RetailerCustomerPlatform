@@ -929,16 +929,16 @@ def get_retailer_customers(request):
         # Apply Status Filter if present (active, blacklisted)
         status_param = request.query_params.get('status')
         if status_param == 'active':
-            mappings = mappings.exclude(customer_id__in=RetailerBlacklist.objects.filter(retailer=retailer).values_list('customer_id', flat=True))
+            mappings = mappings.exclude(customer__blacklisted_by__retailer=retailer)
         elif status_param == 'blacklisted':
-            mappings = mappings.filter(customer_id__in=RetailerBlacklist.objects.filter(retailer=retailer).values_list('customer_id', flat=True))
+            mappings = mappings.filter(customer__blacklisted_by__retailer=retailer)
 
         # Apply Due Payment Filter if present (true, false)
         due_payment = request.query_params.get('due_payment')
         if due_payment == 'true':
             mappings = mappings.filter(current_balance__gt=0)
         elif due_payment == 'false':
-            mappings = mappings.filter(current_balance=0)
+            mappings = mappings.filter(current_balance__lte=0)
 
         # Apply Customer Type Filter if present (registered, shadow)
         customer_type = request.query_params.get('customer_type')

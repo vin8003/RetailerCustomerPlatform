@@ -395,16 +395,19 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     def get_credit_amount(self, obj): return self._payment_summary(obj)['credit_amount']
 
     def get_ledger_new_balance(self, obj):
-        ledger_entry = obj.ledger_entries.first()
+        ledger_entry = obj.ledger_entries.order_by('-created_at', '-id').first()
         if ledger_entry:
             return float(ledger_entry.balance_after)
         return None
 
     def get_ledger_previous_balance(self, obj):
-        ledger_entry = obj.ledger_entries.first()
+        ledger_entry = obj.ledger_entries.order_by('-created_at', '-id').first()
         if ledger_entry:
+            if ledger_entry.transaction_type in ['PAYMENT', 'RETURN']:
+                return float(ledger_entry.balance_after + ledger_entry.amount)
             return float(ledger_entry.balance_after - ledger_entry.amount)
         return None
+
 
 
 class OrderCreateSerializer(serializers.Serializer):

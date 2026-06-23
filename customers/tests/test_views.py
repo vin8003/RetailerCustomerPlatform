@@ -200,6 +200,10 @@ class TestRetailerCustomerFilteringAndSorting:
         u2 = User.objects.create_user(username="nodue_user", password="pwd", user_type="customer")
         RetailerCustomerMapping.objects.create(retailer=retailer, customer=u2, current_balance=Decimal("0.00"))
         
+        # Create user 3 with overpayment (negative balance)
+        u3 = User.objects.create_user(username="overdue_user", password="pwd", user_type="customer")
+        RetailerCustomerMapping.objects.create(retailer=retailer, customer=u3, current_balance=Decimal("-50.00"))
+        
         api_client.force_authenticate(user=retailer.user)
         url = reverse('get_retailer_customers')
         
@@ -209,11 +213,13 @@ class TestRetailerCustomerFilteringAndSorting:
         assert res.data['count'] == 1
         assert res.data['results'][0]['customer_id'] == u1.id
         
-        # Verify due_payment=false
+        # Verify due_payment=false (includes both u2 and u3)
         res = api_client.get(url, {'due_payment': 'false'})
         assert res.status_code == status.HTTP_200_OK
-        assert res.data['count'] == 1
-        assert res.data['results'][0]['customer_id'] == u2.id
+        assert res.data['count'] == 2
+        customer_ids = [c['customer_id'] for c in res.data['results']]
+        assert u2.id in customer_ids
+        assert u3.id in customer_ids
 
     def test_filter_by_customer_type(self, api_client, retailer):
         from retailers.models import RetailerCustomerMapping
