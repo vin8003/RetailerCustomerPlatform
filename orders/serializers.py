@@ -21,7 +21,8 @@ class OrderItemSerializer(serializers.ModelSerializer):
         model = OrderItem
         fields = [
             'id', 'product', 'product_name', 'product_image', 'product_price', 'product_unit',
-            'quantity', 'unit_price', 'total_price', 'created_at', 'net_quantity', 'returned_quantity'
+            'quantity', 'unit_price', 'total_price', 'created_at', 'net_quantity', 'returned_quantity',
+            'mrp'
         ]
         read_only_fields = ['id', 'created_at']
 
@@ -64,6 +65,17 @@ class OrderItemSerializer(serializers.ModelSerializer):
             if net == net.to_integral_value(): return int(net)
             return float(net.normalize())
         return net
+
+    mrp = serializers.SerializerMethodField()
+
+    def get_mrp(self, obj):
+        # 1. Try batch original_price (MRP)
+        if obj.batch and obj.batch.original_price:
+            return float(obj.batch.original_price)
+        # 2. Try product original_price (MRP)
+        if obj.product and obj.product.original_price:
+            return float(obj.product.original_price)
+        return None
 
 
 class OrderListSerializer(serializers.ModelSerializer):
@@ -231,6 +243,9 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     retailer_gst_number = serializers.CharField(source='retailer.gst_number', read_only=True)
     retailer_receipt_footer = serializers.CharField(source='retailer.receipt_footer', read_only=True)
     retailer_show_gst = serializers.BooleanField(source='retailer.show_gst_on_receipt', read_only=True)
+    retailer_printer_size = serializers.CharField(source='retailer.printer_size', read_only=True)
+    ledger_previous_balance = serializers.SerializerMethodField()
+    ledger_new_balance = serializers.SerializerMethodField()
     customer_name = serializers.SerializerMethodField()
     customer_phone = serializers.CharField(source='customer.phone_number', read_only=True)
     customer_email = serializers.CharField(source='customer.email', read_only=True)
@@ -266,7 +281,8 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'special_instructions', 'cancellation_reason', 'cancelled_by', 
             'payment_reference_id', 'payment_status', 'payment_edit_count', 'is_payment_locked',
             'cash_amount', 'upi_amount', 'card_amount', 'credit_amount',
-            'delivery_address_text', 'retailer_gst_number', 'retailer_receipt_footer', 'retailer_show_gst',
+            'delivery_address_text', 'retailer_gst_number', 'retailer_receipt_footer', 'retailer_show_gst', 'retailer_printer_size',
+            'ledger_previous_balance', 'ledger_new_balance',
             'delivery_latitude', 'delivery_longitude',
             'items', 'sales_returns', 'applied_offers', 'created_at', 'updated_at', 'confirmed_at', 'delivered_at',
             'cancelled_at', 'unread_messages_count',
@@ -377,6 +393,21 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     def get_upi_amount(self, obj): return self._payment_summary(obj)['upi_amount']
     def get_card_amount(self, obj): return self._payment_summary(obj)['card_amount']
     def get_credit_amount(self, obj): return self._payment_summary(obj)['credit_amount']
+
+    def get_ledger_new_balance(self, obj):
+        ledger_entry = obj.ledger_entries.order_by('-created_at', '-id').first()
+        if ledger_entry:
+            return float(ledger_entry.balance_after)
+        return None
+
+    def get_ledger_previous_balance(self, obj):
+        ledger_entry = obj.ledger_entries.order_by('-created_at', '-id').first()
+        if ledger_entry:
+            if ledger_entry.transaction_type in ['PAYMENT', 'RETURN']:
+                return float(ledger_entry.balance_after + ledger_entry.amount)
+            return float(ledger_entry.balance_after - ledger_entry.amount)
+        return None
+
 
 
 class OrderCreateSerializer(serializers.Serializer):
@@ -666,6 +697,7 @@ class OrderCreateSerializer(serializers.Serializer):
             # Prepare for bulk operations
             order_items = []
             products_to_update = []
+            logs_to_create = []
             from products.models import Product  # Ensure Product is imported
             
             # Get item discounts map
@@ -694,19 +726,30 @@ class OrderCreateSerializer(serializers.Serializer):
                     total_price=total_price
                 ))
                 
-                # Reduce product quantity in memory (only if tracked)
+                # Reduce product quantity (only if tracked) and log it
                 if cart_item.product.track_inventory:
-                    cart_item.product.quantity -= quantity
-                    products_to_update.append(cart_item.product)
-            
+                    prev_qty = cart_item.product.quantity
+                    cart_item.product.reduce_quantity(quantity)
+                    new_qty = prev_qty - quantity
+                    
+                    from products.models import ProductInventoryLog
+                    logs_to_create.append(ProductInventoryLog(
+                        product=cart_item.product,
+                        log_type='sold',
+                        quantity_change=-quantity,
+                        previous_quantity=prev_qty,
+                        new_quantity=new_qty,
+                        reason=f"Online Order #{order.order_number}",
+                        created_by=customer
+                    ))
+
             # Bulk create items
             OrderItem.objects.bulk_create(order_items)
             
-            # Bulk update product quantities for tracked items
-            if products_to_update:
-                Product.objects.bulk_update(products_to_update, ['quantity'])
-            
-            # Deduct points from customer profile if used
+            if logs_to_create:
+                from products.models import ProductInventoryLog
+                ProductInventoryLog.objects.bulk_create(logs_to_create)
+
             if points_to_redeem > 0:
                 from customers.models import CustomerLoyalty, LoyaltyTransaction
                 try:
@@ -957,6 +1000,7 @@ class OrderModificationSerializer(serializers.Serializer):
             
             # Create a map of existing items for easy access
             existing_items = {item.id: item for item in instance.items.all()}
+            logs_to_create = []
             
             for item_data in items_data:
                 # Handle existing items
@@ -974,20 +1018,51 @@ class OrderModificationSerializer(serializers.Serializer):
                             if quantity == 0:
                                 # Remove item
                                 # Restore stock
+                                prev_qty = item.product.quantity
                                 item.product.increase_quantity(item.quantity)
+                                new_qty = prev_qty + item.quantity
+                                
+                                from products.models import ProductInventoryLog
+                                logs_to_create.append(ProductInventoryLog(
+                                    product=item.product,
+                                    log_type='returned',
+                                    quantity_change=item.quantity,
+                                    previous_quantity=prev_qty,
+                                    new_quantity=new_qty,
+                                    reason=f"Order Item Removed: #{instance.order_number}",
+                                    created_by=self.context.get('request').user if self.context.get('request') else None
+                                ))
                                 item.delete()
                                 continue
                             
                             # Handle stock change for quantity difference
                             diff = quantity - item.quantity
-                            if diff > 0:
-                                 # Need more
-                                 if not item.product.can_order_quantity(diff):
-                                     raise serializers.ValidationError(f"Not enough stock for {item.product_name}")
-                                 item.product.reduce_quantity(diff)
-                            elif diff < 0:
-                                 # Returning some
-                                 item.product.increase_quantity(abs(diff))
+                            if diff != 0:
+                                 prev_qty = item.product.quantity
+                                 if diff > 0:
+                                      # Need more
+                                      if not item.product.can_order_quantity(diff):
+                                          raise serializers.ValidationError(f"Not enough stock for {item.product_name}")
+                                      item.product.reduce_quantity(diff)
+                                      log_type = 'sold'
+                                      change_val = -diff
+                                      new_qty = prev_qty - diff
+                                 else:
+                                      # Returning some
+                                      item.product.increase_quantity(abs(diff))
+                                      log_type = 'returned'
+                                      change_val = abs(diff)
+                                      new_qty = prev_qty - diff
+                                 
+                                 logs_to_create.append(ProductInventoryLog(
+                                     product=item.product,
+                                     log_type=log_type,
+                                     quantity_change=change_val,
+                                     previous_quantity=prev_qty,
+                                     new_quantity=new_qty,
+                                     reason=f"Order Modification: #{instance.order_number}",
+                                     created_by=self.context.get('request').user if self.context.get('request') else None
+                                 ))
                             
                             item.quantity = quantity
                         
@@ -1013,7 +1088,19 @@ class OrderModificationSerializer(serializers.Serializer):
                         raise serializers.ValidationError(f"Not enough stock for {product.name}")
                     
                     # Reduce stock
+                    prev_qty = product.quantity
                     product.reduce_quantity(quantity)
+                    new_qty = prev_qty - quantity
+                    
+                    logs_to_create.append(ProductInventoryLog(
+                        product=product,
+                        log_type='sold',
+                        quantity_change=-quantity,
+                        previous_quantity=prev_qty,
+                        new_quantity=new_qty,
+                        reason=f"Order Item Added: #{instance.order_number}",
+                        created_by=self.context.get('request').user if self.context.get('request') else None
+                    ))
                     
                     # Create new OrderItem
                     OrderItem.objects.create(
@@ -1026,6 +1113,10 @@ class OrderModificationSerializer(serializers.Serializer):
                         unit_price=product.price, # Default to current product price
                         total_price=product.price * quantity
                     )
+            
+            if logs_to_create:
+                from products.models import ProductInventoryLog
+                ProductInventoryLog.objects.bulk_create(logs_to_create)
             
             # Recalculate order subtotal from scratch to be safe
             # (In case some items were not in the update list but still exist)

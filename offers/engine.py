@@ -344,6 +344,7 @@ class OfferEngine:
         Apply Buy X Get Y Free logic per product (Same Product Strategy).
         No database mutation; dynamically calculates purchased, free, and total display quantities.
         Aggregates quantities across identical products in cart before calculating free quantities.
+        The quantity in the cart/POS represents the total quantity, and free items are calculated within it.
         """
         total_savings = Decimal(0)
         
@@ -358,31 +359,35 @@ class OfferEngine:
             
         x = offer.buy_quantity
         y = offer.get_quantity
+        group_size = x + y
 
         for pid, indices in product_groups.items():
-            # Calculate total purchased quantity for this product group
-            total_purchased_qty = sum(item_context[idx]['quantity'] for idx in indices)
-            if total_purchased_qty <= 0:
+            # Calculate total scanned quantity for this product group
+            total_scanned_qty = sum(item_context[idx]['quantity'] for idx in indices)
+            if total_scanned_qty <= 0:
                 continue
 
-            # Calculate total free quantity for this product group
-            total_free_qty = int(total_purchased_qty // x) * y
+            # Calculate total free quantity for this product group (within scanned quantity)
+            full_groups = total_scanned_qty // group_size
+            remainder = total_scanned_qty % group_size
+            total_free_qty = (full_groups * y) + max(0, remainder - x)
             if total_free_qty <= 0:
                 continue
 
             remaining_free = total_free_qty
             for i, idx in enumerate(indices):
                 item_data = item_context[idx]
-                purchased_qty = item_data['quantity']
+                scanned_qty = item_data['quantity']
 
                 # Proportional distribution of free qty across items
                 if i == len(indices) - 1:
                     line_free_qty = remaining_free
                 else:
-                    line_free_qty = int(total_free_qty * purchased_qty // total_purchased_qty)
+                    line_free_qty = int(total_free_qty * scanned_qty // total_scanned_qty) if total_scanned_qty > 0 else 0
                     remaining_free -= line_free_qty
 
-                total_qty = purchased_qty + line_free_qty
+                purchased_qty = scanned_qty - line_free_qty
+                total_qty = scanned_qty
                 price = item_data['current_price']
                 
                 # Savings is the value of the free items
@@ -397,10 +402,6 @@ class OfferEngine:
                 # Effective average unit price for the entire total quantity
                 effective_price = (purchased_qty * price) / total_qty if total_qty > 0 else price
                 
-                # Update item context quantity to total quantity so that:
-                # - original_subtotal = original_price * total_qty
-                # - final_total = effective_price * total_qty = purchased_qty * price
-                # - total_savings = original_subtotal - final_total = free_qty * price
                 item_data['quantity'] = total_qty
                 item_data['current_price'] = effective_price
                 

@@ -312,6 +312,10 @@ def get_retailer_products(request):
         if low_stock and low_stock.lower() == 'true':
             products = products.filter(quantity__gt=0, quantity__lte=10)
 
+        negative_stock = request.query_params.get('negative_stock')
+        if negative_stock and negative_stock.lower() == 'true':
+            products = products.filter(quantity__lt=0)
+
         # Search functionality
         search = request.query_params.get('search')
         if search:
@@ -355,6 +359,8 @@ def get_retailer_products(request):
                     'image': img_url,
                     'category_name': p.category.name if p.category else 'Uncategorized',
                     'barcode': p.barcode,
+                    'is_active': p.is_active,
+                    'is_seasonal': p.is_seasonal,
                     'has_batches': p.has_batches,
                     'batches': batches
                 })
@@ -746,6 +752,15 @@ def bulk_update_products(request):
             product_dict = {p.id: p for p in products}
             logs_to_create = []
             
+            from collections import defaultdict
+            from products.models import ProductBatch
+            batches_by_product = defaultdict(list)
+            for batch in ProductBatch.objects.filter(product_id__in=product_ids):
+                batches_by_product[batch.product_id].append(batch)
+                
+            batches_to_create = []
+            batches_to_update = []
+            
             for item in items:
                 p_id = item.get('id')
                 product = product_dict.get(p_id)
@@ -833,7 +848,46 @@ def bulk_update_products(request):
 
                 if changed:
                     product.save()
+                    
+                    # Keep the first batch in sync with product fields if multi-batch is OFF
+                    if not product.has_batches:
+                        prod_batches = batches_by_product.get(product.id, [])
+                        batch = next((b for b in prod_batches if b.is_active), None)
+                        if not batch:
+                            batch = next((b for b in prod_batches if b.batch_number == 'INITIAL-STOCK'), None)
+                            if batch:
+                                batch.is_active = product.is_active
+                                batch.price = product.price
+                                batch.original_price = product.original_price
+                                batch.quantity = product.quantity
+                                batch.barcode = product.barcode
+                                batches_to_update.append(batch)
+                            else:
+                                batches_to_create.append(ProductBatch(
+                                    product=product,
+                                    retailer=retailer,
+                                    batch_number='INITIAL-STOCK',
+                                    price=product.price,
+                                    original_price=product.original_price,
+                                    purchase_price=product.purchase_price or product.price,
+                                    quantity=product.quantity,
+                                    barcode=product.barcode,
+                                    is_active=product.is_active
+                                ))
+                        else:
+                            batch.price = product.price
+                            batch.original_price = product.original_price
+                            batch.quantity = product.quantity
+                            batch.barcode = product.barcode
+                            batch.is_active = product.is_active
+                            batches_to_update.append(batch)
+                            
                     updated_count += 1
+            
+            if batches_to_create:
+                ProductBatch.objects.bulk_create(batches_to_create)
+            if batches_to_update:
+                ProductBatch.objects.bulk_update(batches_to_update, ['price', 'original_price', 'quantity', 'barcode', 'is_active'])
             
             if logs_to_create:
                 ProductInventoryLog.objects.bulk_create(logs_to_create)

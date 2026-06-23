@@ -56,6 +56,26 @@ class TestGetRetailerProducts:
         res = api_client.get(reverse("get_retailer_products"), {"low_stock": "true"})
         assert res.status_code == status.HTTP_200_OK
 
+    def test_filter_negative_stock(self, api_client, retailer_user, retailer, product):
+        api_client.force_authenticate(user=retailer_user)
+        product.quantity = -5
+        product.save()
+        
+        # Create a positive stock product to ensure filtering works correctly
+        Product.objects.create(
+            retailer=retailer,
+            name="Positive Stock Prod",
+            price=Decimal("10.00"),
+            quantity=10,
+            unit="piece"
+        )
+        
+        res = api_client.get(reverse("get_retailer_products"), {"negative_stock": "true"})
+        assert res.status_code == status.HTTP_200_OK
+        assert res.data["count"] >= 1
+        for item in res.data["results"]:
+            assert float(item["quantity"]) < 0
+
     @patch("products.views.smart_product_search", side_effect=mock_smart_search)
     def test_search_retailer_products(self, mock_search, api_client, retailer_user, retailer, product):
         api_client.force_authenticate(user=retailer_user)

@@ -76,6 +76,12 @@ class RetailerProfile(models.Model):
     timezone = models.CharField(max_length=50, default='Asia/Kolkata')
     receipt_footer = models.TextField(blank=True, help_text="Custom message at the bottom of thermal receipts")
     show_gst_on_receipt = models.BooleanField(default=True)
+    printer_size = models.CharField(
+        max_length=10,
+        choices=[('80mm', '80mm (Standard)'), ('58mm', '58mm (Compact)')],
+        default='80mm',
+        help_text="Paper size for thermal receipts"
+    )
     
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)

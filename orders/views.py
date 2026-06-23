@@ -291,7 +291,8 @@ def get_order_detail(request, order_id):
             'delivery_address'
         ).prefetch_related(
             'items',
-            'items__product'
+            'items__product',
+            'items__batch'
         )
 
         if user.user_type == 'customer':
@@ -422,8 +423,27 @@ def cancel_order(request, order_id):
         order.save()
         
         # Restore product quantities
-        for item in order.items.all():
+        logs_to_create = []
+        items = order.items.select_related('product').all()
+        for item in items:
+            prev_qty = item.product.quantity
             item.product.increase_quantity(item.quantity)
+            new_qty = prev_qty + item.quantity
+            
+            from products.models import ProductInventoryLog
+            logs_to_create.append(ProductInventoryLog(
+                product=item.product,
+                log_type='returned',
+                quantity_change=item.quantity,
+                previous_quantity=prev_qty,
+                new_quantity=new_qty,
+                reason=f"Order Cancelled: #{order.order_number}",
+                created_by=user
+            ))
+            
+        if logs_to_create:
+            from products.models import ProductInventoryLog
+            ProductInventoryLog.objects.bulk_create(logs_to_create)
             
         # Refund loyalty points if used (Handled in update_status but ensured here logic is consistent)
         # Actually update_status('cancelled') already calls refund logic in models.py.
@@ -883,8 +903,27 @@ def confirm_modification(request, order_id):
             # the current order.points_redeemed.
             
             # Restore stock for items
-            for item in order.items.all():
+            logs_to_create = []
+            items = order.items.select_related('product').all()
+            for item in items:
+                prev_qty = item.product.quantity
                 item.product.increase_quantity(item.quantity)
+                new_qty = prev_qty + item.quantity
+                
+                from products.models import ProductInventoryLog
+                logs_to_create.append(ProductInventoryLog(
+                    product=item.product,
+                    log_type='returned',
+                    quantity_change=item.quantity,
+                    previous_quantity=prev_qty,
+                    new_quantity=new_qty,
+                    reason=f"Modification Rejected (Order Cancelled): #{order.order_number}",
+                    created_by=request.user
+                ))
+            
+            if logs_to_create:
+                from products.models import ProductInventoryLog
+                ProductInventoryLog.objects.bulk_create(logs_to_create)
             
             message = 'Order modification rejected'
         
