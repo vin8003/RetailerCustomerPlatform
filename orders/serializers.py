@@ -666,6 +666,7 @@ class OrderCreateSerializer(serializers.Serializer):
             # Prepare for bulk operations
             order_items = []
             products_to_update = []
+            logs_to_create = []
             from products.models import Product  # Ensure Product is imported
             
             # Get item discounts map
@@ -698,11 +699,10 @@ class OrderCreateSerializer(serializers.Serializer):
                 if cart_item.product.track_inventory:
                     prev_qty = cart_item.product.quantity
                     cart_item.product.reduce_quantity(quantity)
-                    cart_item.product.refresh_from_db()
-                    new_qty = cart_item.product.quantity
+                    new_qty = prev_qty - quantity
                     
                     from products.models import ProductInventoryLog
-                    ProductInventoryLog.objects.create(
+                    logs_to_create.append(ProductInventoryLog(
                         product=cart_item.product,
                         log_type='sold',
                         quantity_change=-quantity,
@@ -710,10 +710,14 @@ class OrderCreateSerializer(serializers.Serializer):
                         new_quantity=new_qty,
                         reason=f"Online Order #{order.order_number}",
                         created_by=customer
-                    )
+                    ))
 
             # Bulk create items
             OrderItem.objects.bulk_create(order_items)
+            
+            if logs_to_create:
+                from products.models import ProductInventoryLog
+                ProductInventoryLog.objects.bulk_create(logs_to_create)
 
             if points_to_redeem > 0:
                 from customers.models import CustomerLoyalty, LoyaltyTransaction
@@ -965,6 +969,7 @@ class OrderModificationSerializer(serializers.Serializer):
             
             # Create a map of existing items for easy access
             existing_items = {item.id: item for item in instance.items.all()}
+            logs_to_create = []
             
             for item_data in items_data:
                 # Handle existing items
@@ -984,11 +989,10 @@ class OrderModificationSerializer(serializers.Serializer):
                                 # Restore stock
                                 prev_qty = item.product.quantity
                                 item.product.increase_quantity(item.quantity)
-                                item.product.refresh_from_db()
-                                new_qty = item.product.quantity
+                                new_qty = prev_qty + item.quantity
                                 
                                 from products.models import ProductInventoryLog
-                                ProductInventoryLog.objects.create(
+                                logs_to_create.append(ProductInventoryLog(
                                     product=item.product,
                                     log_type='returned',
                                     quantity_change=item.quantity,
@@ -996,7 +1000,7 @@ class OrderModificationSerializer(serializers.Serializer):
                                     new_quantity=new_qty,
                                     reason=f"Order Item Removed: #{instance.order_number}",
                                     created_by=self.context.get('request').user if self.context.get('request') else None
-                                )
+                                ))
                                 item.delete()
                                 continue
                             
@@ -1011,17 +1015,15 @@ class OrderModificationSerializer(serializers.Serializer):
                                       item.product.reduce_quantity(diff)
                                       log_type = 'sold'
                                       change_val = -diff
+                                      new_qty = prev_qty - diff
                                  else:
                                       # Returning some
                                       item.product.increase_quantity(abs(diff))
                                       log_type = 'returned'
                                       change_val = abs(diff)
+                                      new_qty = prev_qty - diff
                                  
-                                 item.product.refresh_from_db()
-                                 new_qty = item.product.quantity
-                                 
-                                 from products.models import ProductInventoryLog
-                                 ProductInventoryLog.objects.create(
+                                 logs_to_create.append(ProductInventoryLog(
                                      product=item.product,
                                      log_type=log_type,
                                      quantity_change=change_val,
@@ -1029,7 +1031,7 @@ class OrderModificationSerializer(serializers.Serializer):
                                      new_quantity=new_qty,
                                      reason=f"Order Modification: #{instance.order_number}",
                                      created_by=self.context.get('request').user if self.context.get('request') else None
-                                 )
+                                 ))
                             
                             item.quantity = quantity
                         
@@ -1057,11 +1059,9 @@ class OrderModificationSerializer(serializers.Serializer):
                     # Reduce stock
                     prev_qty = product.quantity
                     product.reduce_quantity(quantity)
-                    product.refresh_from_db()
-                    new_qty = product.quantity
+                    new_qty = prev_qty - quantity
                     
-                    from products.models import ProductInventoryLog
-                    ProductInventoryLog.objects.create(
+                    logs_to_create.append(ProductInventoryLog(
                         product=product,
                         log_type='sold',
                         quantity_change=-quantity,
@@ -1069,7 +1069,7 @@ class OrderModificationSerializer(serializers.Serializer):
                         new_quantity=new_qty,
                         reason=f"Order Item Added: #{instance.order_number}",
                         created_by=self.context.get('request').user if self.context.get('request') else None
-                    )
+                    ))
                     
                     # Create new OrderItem
                     OrderItem.objects.create(
@@ -1082,6 +1082,10 @@ class OrderModificationSerializer(serializers.Serializer):
                         unit_price=product.price, # Default to current product price
                         total_price=product.price * quantity
                     )
+            
+            if logs_to_create:
+                from products.models import ProductInventoryLog
+                ProductInventoryLog.objects.bulk_create(logs_to_create)
             
             # Recalculate order subtotal from scratch to be safe
             # (In case some items were not in the update list but still exist)
