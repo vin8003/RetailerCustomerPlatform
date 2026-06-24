@@ -751,23 +751,8 @@ class OrderCreateSerializer(serializers.Serializer):
                 ProductInventoryLog.objects.bulk_create(logs_to_create)
 
             if points_to_redeem > 0:
-                from customers.models import CustomerLoyalty, LoyaltyTransaction
-                try:
-                    loyalty = CustomerLoyalty.objects.get(customer=customer, retailer=retailer)
-                    loyalty.points -= points_to_redeem
-                    loyalty.save()
-                    
-                    # Log redemption transaction
-                    LoyaltyTransaction.objects.create(
-                        customer=customer,
-                        retailer=retailer,
-                        amount=points_to_redeem,
-                        transaction_type='redeem',
-                        description=f"Redeemed on order #{order.order_number}"
-                    )
-                except CustomerLoyalty.DoesNotExist:
-                    # Should not happen given validation above, but safe handle
-                    pass
+                from orders.services.loyalty_service import redeem_points
+                redeem_points(order, points_to_redeem)
             
             # Clear cart
             cart.items.all().delete()
@@ -1221,9 +1206,12 @@ class RetailerRatingSerializer(serializers.ModelSerializer):
         if hasattr(order, 'retailer_rating'):
             raise serializers.ValidationError("Rating already provided for this customer on this order")
         
-        return RetailerRating.objects.create(
+        rating = RetailerRating.objects.create(
             order=order,
             retailer=retailer,
             customer=customer,
             **validated_data
         )
+        from orders.services.rating_service import apply_retailer_rating_effects
+        apply_retailer_rating_effects(rating)
+        return rating
