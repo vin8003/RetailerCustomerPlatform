@@ -1152,3 +1152,149 @@ def resend_email_otp(request):
     except Exception as e:
         logger.error(f"Error in resend_email_otp: {str(e)}")
         return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+def customer_google_login(request):
+    """
+    Login or signup a customer using Firebase Google Auth ID Token
+    """
+    try:
+        firebase_token = request.data.get('firebase_token')
+        phone_number = request.data.get('phone_number')
+
+        if not firebase_token:
+            return Response(
+                {'error': 'Firebase token is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Verify Google ID Token
+        decoded_token = verify_firebase_id_token(firebase_token)
+        if not decoded_token:
+            return Response(
+                {'error': 'Invalid Firebase token'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        email = decoded_token.get('email')
+        name = decoded_token.get('name', '')
+
+        if not email:
+            return Response(
+                {'error': 'Email not found in Google token'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Try to find user by email
+        user = User.objects.filter(email=email, user_type='customer').first()
+
+        if user:
+            # User exists, log them in
+            # Make sure email is verified
+            if not user.is_email_verified:
+                user.is_email_verified = True
+                user.save()
+            
+            refresh = RefreshToken.for_user(user)
+            return Response({
+                'status': 'success',
+                'message': 'Login successful',
+                'user': UserProfileSerializer(user).data,
+                'tokens': {
+                    'access': str(refresh.access_token),
+                    'refresh': str(refresh),
+                }
+            }, status=status.HTTP_200_OK)
+
+        # User does not exist, check if phone_number is provided for signup
+        if not phone_number:
+            return Response({
+                'status': 'phone_required',
+                'email': email,
+                'name': name,
+                'message': 'Mobile number is required to complete signup.'
+            }, status=status.HTTP_200_OK)
+
+        # Clean/Format phone number
+        from .utils import clean_phone_number
+        cleaned_phone = clean_phone_number(phone_number)
+
+        # Ensure it has the correct prefix and format (+91XXXXXXXXXX)
+        digits = ''.join(c for c in cleaned_phone if c.isdigit())
+        if len(digits) == 10:
+            cleaned_phone = '+91' + digits
+        elif len(digits) == 12 and digits.startswith('91'):
+            cleaned_phone = '+' + digits
+        elif len(digits) != 10 and not (len(digits) == 12 and digits.startswith('91')):
+            return Response(
+                {'error': 'Please enter a valid 10-digit mobile number.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Check for shadow users to claim (match by normalized phone or username)
+        last_10 = digits[-10:]
+        existing_shadow_user = User.objects.filter(
+            phone_number__endswith=last_10,
+            user_type='customer',
+            registration_status='shadow'
+        ).first()
+
+        if existing_shadow_user:
+            # Claim shadow user
+            user = existing_shadow_user
+            user.email = email
+            user.first_name = name
+            user.is_email_verified = True
+            user.is_phone_verified = False
+            user.registration_status = 'registered'
+            user.is_active = True
+            user.set_unusable_password()
+            user.save()
+            logger.info(f"Google signup: Claimed existing shadow user {user.username}")
+        else:
+            # Check if phone number is already registered by another customer
+            if User.objects.filter(phone_number=cleaned_phone, user_type='customer').exists():
+                return Response(
+                    {'error': 'A customer with this phone number is already registered.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Create a brand new user
+            user = User.objects.create_user(
+                username=cleaned_phone,
+                phone_number=cleaned_phone,
+                email=email,
+                first_name=name,
+                is_email_verified=True,
+                is_phone_verified=False,
+                user_type='customer',
+                registration_status='registered'
+            )
+            user.set_unusable_password()
+            user.save()
+            logger.info(f"Google signup: Created new user {user.username}")
+
+        # Lazy initialize profile
+        from customers.models import CustomerProfile
+        CustomerProfile.objects.get_or_create(user=user)
+
+        refresh = RefreshToken.for_user(user)
+        return Response({
+            'status': 'success',
+            'message': 'Signup successful',
+            'user': UserProfileSerializer(user).data,
+            'tokens': {
+                'access': str(refresh.access_token),
+                'refresh': str(refresh),
+            }
+        }, status=status.HTTP_201_CREATED)
+
+    except Exception as e:
+        logger.error(f"Error in customer_google_login: {str(e)}")
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+

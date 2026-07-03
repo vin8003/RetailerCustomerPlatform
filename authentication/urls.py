@@ -10,6 +10,7 @@ urlpatterns = [
     # Customer authentication
     path('customer/signup/', views.customer_signup, name='customer_signup'),
     path('customer/login/', views.customer_login, name='customer_login'),
+    path('customer/google-login/', views.customer_google_login, name='customer_google_login'),
     path('customer/verify-otp/', views.verify_otp, name='verify_otp'),
     path('customer/resend-otp/', views.resend_otp, name='resend_otp'),
     path('customer/request-verification/', views.request_phone_verification, name='request_phone_verification'),
