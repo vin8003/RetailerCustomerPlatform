@@ -1163,6 +1163,7 @@ def customer_google_login(request):
     try:
         firebase_token = request.data.get('firebase_token')
         phone_number = request.data.get('phone_number')
+        otp_code = request.data.get('otp_code')
 
         if not firebase_token:
             return Response(
@@ -1233,35 +1234,96 @@ def customer_google_login(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Check for shadow users to claim (match by normalized phone or username)
-        last_10 = digits[-10:]
-        existing_shadow_user = User.objects.filter(
-            phone_number__endswith=last_10,
-            user_type='customer',
-            registration_status='shadow'
-        ).first()
+        # Query User by phone_number globally to avoid Retailer conflict or hijacking
+        existing_user = User.objects.filter(phone_number=cleaned_phone).first()
 
-        if existing_shadow_user:
-            # Claim shadow user
-            user = existing_shadow_user
-            user.email = email
-            user.first_name = name
-            user.is_email_verified = True
-            user.is_phone_verified = False
-            user.registration_status = 'registered'
-            user.is_active = True
-            user.set_unusable_password()
-            user.save()
-            logger.info(f"Google signup: Claimed existing shadow user {user.username}")
-        else:
-            # Check if phone number is already registered by another customer
-            if User.objects.filter(phone_number=cleaned_phone, user_type='customer').exists():
+        if existing_user:
+            # Check Case A: User is a retailer
+            if existing_user.user_type == 'retailer':
                 return Response(
-                    {'error': 'A customer with this phone number is already registered.'},
+                    {'error': 'This phone number is registered as a Retailer account. Please use a different phone number.'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
+
+            # Case B / Case C: Existing active customer OR Shadow customer
+            # Since these accounts have history, we require verification via OTP to claim/link them.
+            if not otp_code:
+                # Generate and send SMS OTP
+                otp_code_gen, secret_key = generate_otp()
+                
+                # Delete any old OTPs for this user
+                OTPVerification.objects.filter(user=existing_user).delete()
+                
+                # Create OTPVerification record
+                OTPVerification.objects.create(
+                    user=existing_user,
+                    phone_number=cleaned_phone,
+                    otp_code=otp_code_gen,
+                    secret_key=secret_key,
+                    expires_at=timezone.now() + timezone.timedelta(seconds=settings.OTP_EXPIRY_TIME)
+                )
+                
+                # Send SMS
+                send_sms_otp(cleaned_phone, otp_code_gen)
+                logger.info(f"Google login: Sent OTP to link existing account for phone: {cleaned_phone}")
+                
+                return Response({
+                    'status': 'otp_required',
+                    'message': 'OTP sent to link your existing account.'
+                }, status=status.HTTP_200_OK)
             
-            # Create a brand new user
+            else:
+                # Verify OTP
+                try:
+                    otp_verification = OTPVerification.objects.get(
+                        phone_number=cleaned_phone,
+                        is_verified=False
+                    )
+                except OTPVerification.DoesNotExist:
+                    return Response(
+                        {'error': 'Invalid OTP request'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                # Check if OTP is expired
+                if otp_verification.is_expired():
+                    return Response(
+                        {'error': 'OTP has expired'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                # Verify OTP code matches
+                if str(otp_verification.otp_code) == str(otp_code):
+                    # Mark OTP as verified
+                    otp_verification.is_verified = True
+                    otp_verification.save()
+
+                    # Link/Claim user account
+                    user = existing_user
+                    user.email = email
+                    user.first_name = name
+                    user.is_email_verified = True
+                    user.is_phone_verified = True
+                    user.registration_status = 'registered'
+                    user.is_active = True
+                    user.set_unusable_password()
+                    
+                    # Standardize username and phone number format upon claim
+                    user.username = cleaned_phone
+                    user.phone_number = cleaned_phone
+                    user.save()
+                    
+                    logger.info(f"Google signup: Claimed/Linked user account {user.username} successfully via OTP")
+                else:
+                    return Response(
+                        {'error': 'Invalid OTP code. Please try again.'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+        else:
+            # Case D: Completely new phone number (No user exists with this phone number)
+            # Create a brand new user. No OTP is sent at signup (Cost = ₹0).
+            # Phone verification will happen during their 1st order.
             user = User.objects.create_user(
                 username=cleaned_phone,
                 phone_number=cleaned_phone,
@@ -1274,7 +1336,7 @@ def customer_google_login(request):
             )
             user.set_unusable_password()
             user.save()
-            logger.info(f"Google signup: Created new user {user.username}")
+            logger.info(f"Google signup: Created new user {user.username} (OTP deferred to 1st order)")
 
         # Lazy initialize profile
         from customers.models import CustomerProfile
@@ -1297,4 +1359,5 @@ def customer_google_login(request):
             {'error': 'Internal server error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
 
