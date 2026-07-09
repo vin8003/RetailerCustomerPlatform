@@ -14,34 +14,50 @@ import jwt
 logger = logging.getLogger(__name__)
 
 
-def verify_firebase_id_token(id_token):
+def verify_firebase_id_token(id_token_str):
     """
-    Verify Firebase ID Token
+    Verify Firebase ID Token or raw Google ID Token
     """
+    # 1. Try verifying as a Firebase ID token
     try:
-        decoded_token = firebase_auth.verify_id_token(id_token)
+        decoded_token = firebase_auth.verify_id_token(id_token_str)
         return decoded_token
-    except ValueError as e:
-        # Token is invalid (expired, malformed, etc.)
-        logger.error(f"Invalid Firebase ID token: {str(e)}")
-        return None
-    except Exception as e:
-        # Check if the error is related to missing or invalid local credentials during development
+    except Exception as firebase_err:
+        # Check if the error is related to missing or invalid credentials in local development
         cred_error_keywords = ["default credentials", "project ID", "was not found", "No such file"]
-        is_cred_error = any(keyword in str(e) for keyword in cred_error_keywords)
+        is_cred_error = any(keyword in str(firebase_err) for keyword in cred_error_keywords)
 
         if is_cred_error and settings.DEBUG:
             logger.warning("DEVELOPMENT MODE: Firebase credential error detected. Bypassing verification via jwt.decode (UNSAFE).")
             try:
-                # Fallback to unverified decode ONLY in DEBUG mode when credentials are missing
-                unverified_claims = jwt.decode(id_token, options={"verify_signature": False})
+                unverified_claims = jwt.decode(id_token_str, options={"verify_signature": False})
                 return unverified_claims
             except Exception as decode_e:
                 logger.error(f"Failed to decode token for bypass: {decode_e}")
                 return None
+
+        logger.info(f"Firebase token verification failed, trying Google ID token: {firebase_err}")
         
-        logger.error(f"Error verifying Firebase ID token: {str(e)}")
-        return None
+        # 2. Try verifying as a raw Google ID token (sent by Capacitor native client)
+        try:
+            from google.oauth2 import id_token as google_id_token
+            from google.auth.transport import requests as google_requests
+            
+            # Verify using Google's public oauth certificates
+            # We do not restrict the audience (aud check) to allow both Web and Android Client IDs seamlessly
+            decoded_token = google_id_token.verify_oauth2_token(
+                id_token_str, 
+                google_requests.Request()
+            )
+            
+            # Map Google token keys to match Firebase token keys for compatibility in views
+            if decoded_token:
+                if 'user_id' not in decoded_token and 'sub' in decoded_token:
+                    decoded_token['user_id'] = decoded_token['sub']
+            return decoded_token
+        except Exception as google_err:
+            logger.error(f"Google ID token verification failed: {google_err}")
+            return None
 
 
 def generate_otp():
