@@ -1,6 +1,7 @@
 from decimal import Decimal
 from rest_framework import viewsets, permissions, status
 from rest_framework.exceptions import ValidationError
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from django.utils import timezone
 from rest_framework.decorators import action, api_view, permission_classes
@@ -34,6 +35,7 @@ class SupplierViewSet(viewsets.ModelViewSet):
 class PurchaseInvoiceViewSet(viewsets.ModelViewSet):
     serializer_class = PurchaseInvoiceSerializer
     permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def get_queryset(self):
         retailer = RetailerProfile.objects.get(user=self.request.user)
