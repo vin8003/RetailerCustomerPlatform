@@ -588,7 +588,7 @@ def get_product_detail(request, product_id):
             Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
         ).order_by('-priority').prefetch_related('targets'))
 
-        serializer = ProductDetailSerializer(product, context={'request': request, 'active_offers': active_offers})
+        serializer = ProductDetailSerializer(product, context={'request': request, 'active_offers': active_offers, 'include_inactive_batches': True})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     except Exception as e:
@@ -660,7 +660,7 @@ def update_product(request, product_id):
                     Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
                 ).order_by('-priority').prefetch_related('targets'))
 
-                response_serializer = ProductDetailSerializer(product, context={'request': request, 'active_offers': active_offers})
+                response_serializer = ProductDetailSerializer(product, context={'request': request, 'active_offers': active_offers, 'include_inactive_batches': True})
                 logger.info(f"Product updated: {product.name} by {retailer.shop_name}")
                 return Response(response_serializer.data, status=status.HTTP_200_OK)
 

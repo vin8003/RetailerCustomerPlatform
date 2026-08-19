@@ -3,7 +3,7 @@ from unittest.mock import patch
 from django.urls import reverse
 from rest_framework import status
 from decimal import Decimal
-from products.models import Product, ProductCategory, ProductBrand
+from products.models import Product, ProductCategory, ProductBrand, ProductBatch
 
 def mock_smart_search(queryset, search_query):
     """Fallback mock search for SQLite tests"""
@@ -125,6 +125,24 @@ class TestGetProductDetail:
         res = api_client.get(reverse("get_product_detail", args=[product.id]))
         assert res.status_code == status.HTTP_403_FORBIDDEN
 
+    def test_get_detail_includes_inactive_batches(self, api_client, retailer_user, retailer, product):
+        ProductBatch.objects.create(
+            product=product,
+            retailer=retailer,
+            batch_number="INITIAL-STOCK",
+            price=product.price,
+            original_price=product.original_price,
+            quantity=product.quantity,
+            barcode=product.barcode,
+            is_active=False,
+        )
+        product.is_active = False
+        product.save(update_fields=["is_active"])
+        api_client.force_authenticate(user=retailer_user)
+        res = api_client.get(reverse("get_product_detail", args=[product.id]))
+        assert res.status_code == status.HTTP_200_OK
+        assert any(b.get("batch_number") == "INITIAL-STOCK" for b in res.data.get("batches") or [])
+
 
 @pytest.mark.django_db
 class TestUpdateProduct:
@@ -155,6 +173,61 @@ class TestUpdateProduct:
             {"price": "50"},
         )
         assert res.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_patch_inactive_product_without_activating(self, api_client, retailer_user, retailer, product):
+        """KAN-62: bulk-deactivate leaves INITIAL-STOCK inactive; PATCH must still work."""
+        batch = ProductBatch.objects.create(
+            product=product,
+            retailer=retailer,
+            batch_number="INITIAL-STOCK",
+            price=product.price,
+            original_price=product.original_price,
+            purchase_price=product.purchase_price,
+            quantity=product.quantity,
+            barcode=product.barcode,
+            is_active=False,
+        )
+        product.is_active = False
+        product.has_batches = False
+        product.save(update_fields=["is_active", "has_batches"])
+        api_client.force_authenticate(user=retailer_user)
+        res = api_client.patch(
+            reverse("update_product", args=[product.id]),
+            {"name": "Updated Inactive", "price": "77.00", "is_active": "false"},
+        )
+        assert res.status_code == status.HTTP_200_OK, res.data
+        product.refresh_from_db()
+        batch.refresh_from_db()
+        assert product.is_active is False
+        assert product.name == "Updated Inactive"
+        assert product.price == Decimal("77.00")
+        assert batch.is_active is False
+        assert ProductBatch.objects.filter(product=product, batch_number="INITIAL-STOCK").count() == 1
+
+    def test_patch_reactivates_initial_stock_batch(self, api_client, retailer_user, retailer, product):
+        batch = ProductBatch.objects.create(
+            product=product,
+            retailer=retailer,
+            batch_number="INITIAL-STOCK",
+            price=product.price,
+            original_price=product.original_price,
+            quantity=product.quantity,
+            is_active=False,
+        )
+        product.is_active = False
+        product.has_batches = False
+        product.save(update_fields=["is_active", "has_batches"])
+        api_client.force_authenticate(user=retailer_user)
+        res = api_client.patch(
+            reverse("update_product", args=[product.id]),
+            {"is_active": "true"},
+        )
+        assert res.status_code == status.HTTP_200_OK, res.data
+        product.refresh_from_db()
+        batch.refresh_from_db()
+        assert product.is_active is True
+        assert batch.is_active is True
+        assert ProductBatch.objects.filter(product=product, batch_number="INITIAL-STOCK").count() == 1
 
 
 @pytest.mark.django_db

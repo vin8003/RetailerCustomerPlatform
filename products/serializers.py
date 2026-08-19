@@ -344,9 +344,15 @@ class ProductDetailSerializer(serializers.ModelSerializer):
         return val
 
     def get_batches(self, obj):
-        """Only return active batches for detail view"""
-        active_batches = obj.batches.filter(is_active=True).order_by('id')
-        return ProductBatchSerializer(active_batches, many=True).data
+        """Return batches for detail view.
+
+        Customer/public callers only see active batches. Retailer detail/update
+        pass include_inactive_batches so inactive products remain editable.
+        """
+        batches = obj.batches.all().order_by('id')
+        if not self.context.get('include_inactive_batches'):
+            batches = batches.filter(is_active=True)
+        return ProductBatchSerializer(batches, many=True).data
     
     def get_category_name(self, obj):
         try:
@@ -793,8 +799,15 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
             instance.sync_inventory_from_batches()
         
         elif not has_batches:
-            # If multi-batch is OFF, keep the first batch in sync with product fields
+            # If multi-batch is OFF, keep one INITIAL-STOCK row in sync.
+            # Reuse the existing row even if inactive (bulk deactivate sets
+            # batch.is_active=False). Creating a second INITIAL-STOCK hits
+            # unique_together (product, batch_number) and 500s KAN-62.
             batch = instance.batches.filter(is_active=True).first()
+            if not batch:
+                batch = instance.batches.filter(batch_number='INITIAL-STOCK').first()
+            if not batch:
+                batch = instance.batches.order_by('id').first()
             if not batch:
                 batch = ProductBatch.objects.create(
                     product=instance, 
@@ -804,7 +817,8 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
                     original_price=instance.original_price,
                     purchase_price=instance.purchase_price,
                     quantity=instance.quantity,
-                    barcode=instance.barcode
+                    barcode=instance.barcode,
+                    is_active=instance.is_active,
                 )
             else:
                 batch.price = instance.price
@@ -812,6 +826,7 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
                 batch.purchase_price = instance.purchase_price
                 batch.quantity = instance.quantity
                 batch.barcode = instance.barcode
+                batch.is_active = instance.is_active
                 batch.save()
             
         return instance
