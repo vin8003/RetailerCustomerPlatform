@@ -1001,7 +1001,7 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'retailer', 'supplier', 'supplier_name', 'invoice_number',
             'invoice_date', 'total_amount', 'refund_amount', 'net_amount', 'is_returned', 'paid_amount', 'payment_status',
-            'notes', 'created_at', 'items'
+            'notes', 'bill_image', 'created_at', 'items'
         ]
         read_only_fields = ['id', 'retailer', 'created_at']
         extra_kwargs = {
@@ -1127,7 +1127,15 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
             return invoice
             
     def update(self, instance, validated_data):
-        items_data = validated_data.pop('items', [])
+        # PATCH with only scalar fields (e.g. bill_image) must not reverse stock
+        # or delete line items. Only rebuild lines when items is present.
+        if 'items' not in validated_data:
+            for attr, value in validated_data.items():
+                setattr(instance, attr, value)
+            instance.save()
+            return instance
+
+        items_data = validated_data.pop('items')
         new_supplier = validated_data.get('supplier', instance.supplier)
         retailer = instance.retailer
         

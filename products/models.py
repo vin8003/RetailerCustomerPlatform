@@ -839,6 +839,7 @@ class PurchaseInvoice(models.Model):
     paid_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     payment_status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='UNPAID')
     notes = models.TextField(blank=True)
+    bill_image = models.ImageField(upload_to=generate_upload_path, blank=True, null=True)
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -852,6 +853,11 @@ class PurchaseInvoice(models.Model):
 
     def __str__(self):
         return f"Invoice {self.invoice_number} - {self.supplier.company_name if self.supplier else 'Unknown'}"
+
+    def save(self, *args, **kwargs):
+        if self.bill_image:
+            resize_image(self.bill_image)
+        super().save(*args, **kwargs)
 
 
 class PurchaseItem(models.Model):
