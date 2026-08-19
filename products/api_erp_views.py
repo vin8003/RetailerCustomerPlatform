@@ -511,42 +511,45 @@ def search_pos_customers(request):
     query = request.GET.get('q', '').strip()
     if len(query) < 3:
         return Response([])
-        
-    from django.contrib.auth import get_user_model
-    User = get_user_model()
-    
+
+    last_10 = normalize_phone_number(query)
     suggestions = []
     seen_mobiles = set()
-    
-    # 1. Search Online list
-    if len(query) >= 10:
-        # Full match: search globally across all app users
-        last_10 = normalize_phone_number(query)
-        online_users = User.objects.filter(
-            Q(username__endswith=last_10) | Q(phone_number__endswith=last_10)
-        ).exclude(is_staff=True)[:5]
-    else:
-        # Partial match
-        online_users = User.objects.filter(
-            Q(username__icontains=query) | Q(phone_number__icontains=query)
-        ).exclude(is_staff=True)[:5]
 
-    for u in online_users:
-        mobile = normalize_phone_number(u.username)
-        if mobile not in seen_mobiles:
-            suggestions.append({
-                'mobile': mobile,
-                'name': u.get_full_name() or u.username,
-                'status': 'verified' if u.registration_status == 'registered' else 'shadow'
-            })
-            seen_mobiles.add(mobile)
-            
-    # 2. Search Offline Guest list
+    # This retailer's mapped customers only — never the global user directory.
+    mappings = RetailerCustomerMapping.objects.filter(
+        retailer=retailer
+    ).select_related('customer')
+    if len(query) >= 10 and last_10:
+        mappings = mappings.filter(
+            Q(customer__username__endswith=last_10) |
+            Q(customer__phone_number__endswith=last_10)
+        )
+    else:
+        mappings = mappings.filter(
+            Q(customer__username__icontains=query) |
+            Q(customer__phone_number__icontains=query)
+        )
+
+    for mapping in mappings[:8]:
+        u = mapping.customer
+        mobile = normalize_phone_number(u.username) or normalize_phone_number(u.phone_number or '')
+        if not mobile or mobile in seen_mobiles:
+            continue
+        name = (mapping.nickname or u.get_full_name() or '').strip() or u.username
+        suggestions.append({
+            'mobile': mobile,
+            'name': name,
+            'status': 'verified' if u.registration_status == 'registered' else 'shadow'
+        })
+        seen_mobiles.add(mobile)
+
+    # This retailer's walk-in guests (may not have a mapping yet)
     guest_orders = Order.objects.filter(
         retailer=retailer,
         guest_mobile__icontains=query
     ).exclude(guest_name__isnull=True).exclude(guest_name='').order_by('-created_at')[:30]
-    
+
     for o in guest_orders:
         mobile = normalize_phone_number(o.guest_mobile)
         if mobile and mobile not in seen_mobiles:
@@ -558,7 +561,7 @@ def search_pos_customers(request):
             seen_mobiles.add(mobile)
             if len(suggestions) >= 8:
                 break
-                
+
     return Response(suggestions)
 
 
