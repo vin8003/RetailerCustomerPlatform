@@ -29,6 +29,10 @@ All movements are recorded in `CustomerLedger`:
 
 ### Flow
 
+![Credit and Khata System](../visuals/credit-khata-system.jpg)
+
+*Illustrative diagram: Left side shows Customer Credit (Retailer–Customer mapping + ledger entries that increase/decrease balance). Right side shows Supplier Khata (Purchase Invoice increases what you owe; Payment to supplier decreases it).*
+
 ```mermaid
 flowchart LR
     Map[RetailerCustomerMapping<br/>credit_limit + current_balance]
