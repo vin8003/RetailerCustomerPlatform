@@ -6,7 +6,7 @@ The platform follows a classic **API-first** architecture. All client applicatio
 
 ## High-Level Architecture
 
-![System Architecture Overview](../visuals/architecture-overview.jpg)
+![System Architecture Overview](visuals/architecture-overview.jpg)
 
 *Illustrative diagram: Customer App, Retailer Dashboard + POS, and Flutter Scanner App all talk to the central Django REST API at `api.ordereasy.win` using JWT authentication.*
 
