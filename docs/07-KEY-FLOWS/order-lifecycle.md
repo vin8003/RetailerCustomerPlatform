@@ -6,6 +6,10 @@ Orders move through a well-defined set of statuses. The backend enforces valid t
 
 ## Status State Machine
 
+![Order Status Lifecycle](../visuals/order-status-lifecycle.jpg)
+
+*Illustrative diagram showing the main happy path (Pending → Confirmed → Processing → Packed → Out for Delivery / Ready for Pickup → Delivered) plus the Cancelled and Waiting for Customer Approval branches.*
+
 ```mermaid
 stateDiagram-v2
     [*] --> pending
