@@ -1,0 +1,13 @@
+---
+description: Backend deploy — merge to deploy/dev via approved PR triggers GHA SSH to Oracle; never deploy unless user asks
+alwaysApply: true
+---
+
+# Deploy backend
+
+- Landing commits on **`deploy/dev` via an approved PR** runs [`.github/workflows/deploy.yml`](../../.github/workflows/deploy.yml) (SSH → `/home/ubuntu/deploy.sh` on Oracle VM).
+- **Never commit or push directly to `deploy/dev`.** Open a PR into `deploy/dev`, wait for review time, merge only with ≥1 approval.
+- Feature work stays on feature branches → PR → merge path the user specifies.
+- **Live BE only when the user explicitly asks to deploy.**
+- Never force-push `deploy/dev`.
+- For the deploy checklist, use the `deploy-backend` skill (which runs `review-before-push` first).

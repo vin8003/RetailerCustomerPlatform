@@ -1,0 +1,18 @@
+---
+description: Backend engineering standards — ask don't guess, surgical, phased, UTs, pytest suite, negative QA, no silent deploy
+alwaysApply: true
+---
+
+# Engineering standards (backend)
+
+- **Ask, don't guess** — stop on ambiguous requirements, missing env, unclear deploy target, or conflicting acceptance criteria.
+- **Surgical changes** — smallest diff; no drive-by refactors or unrelated files.
+- **Phased delivery** — break multi-concern work into ordered phases. One isolated change at a time; UT + mini-review per phase. Do not batch a large multi-file change and only test/review at the end. See `phased-delivery` rule/skill.
+- **Readable code** — match existing patterns; clear names; no cleverness.
+- **Unit tests with the change** — pytest under `<app>/tests/` (`pytest.ini` already set).
+- **Full test suite** — before marking a phase merge-ready, and always before push/PR/`review-before-push`: run `pytest`. Fix failures before continuing or pushing.
+- **Negative QA before "done"** — list/run failure cases (auth missing, empty states, invalid IDs, permission denied, network errors, race/double-submit). Prefer at least one negative/edge test on critical paths.
+- **No silent deploy** — never update `deploy/dev` unless the user explicitly asks to deploy (and only via approved PR — see `pr-workflow`).
+- **PR-only protected branches** — never commit/merge directly on `main` / `master` / `deploy/dev`; wait for review; never merge without ≥1 approval.
+- **Review before push** — before any `git push`, present a short review (what changed, risks, tests, negative cases); wait for go-ahead unless the user already said push/deploy.
+- **Secret leakage on commit** — before every `git commit`, scan staged files. Never stage `.env`, `*.pem`, `*.key`, service-account JSON, Firebase/Oracle keys, or hardcoded tokens. If sensitive, stop, unstage, and warn.

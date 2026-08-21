@@ -1,0 +1,24 @@
+---
+description: PR-only workflow — never commit/push directly to main, master, or deploy/dev; require approval before merge
+alwaysApply: true
+---
+
+# PR workflow
+
+## Protected branches
+
+Never commit, push, or merge **directly** onto: `main`, `master`, or `deploy/dev`.
+
+All changes land via a **pull request** into those branches so they can be reviewed.
+
+## Before merge
+
+1. Open a PR (link Jira key when applicable).
+2. **Wait** — do not merge immediately after opening; give reviewers time to comment.
+3. **Never merge a PR with zero approvals.** Merge only after at least one approval (and CI green if required).
+4. If the user asks to merge without approvals, remind them of this rule and wait for an approval.
+
+## Agent behavior
+
+- Feature work: branch off the appropriate base → commit on the feature branch → PR → await approval → merge only when approved.
+- Deploy paths (`deploy/dev`, build-repo `main`) also go through PRs with approval — no direct push to those branches.
