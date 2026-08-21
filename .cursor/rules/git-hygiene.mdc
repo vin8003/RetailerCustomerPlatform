@@ -1,0 +1,19 @@
+---
+description: Git hygiene — secret scan on commit; review-before-push checklist on push
+alwaysApply: true
+---
+
+# Git hygiene
+
+## On commit
+
+- Run `git status` + `git diff --cached` (or full diff of what will be committed).
+- Reject/warn on filenames and content: `.env*`, `credentials`, `service_account`, `*.pem`, `*.key`, `id_rsa`, `Authorization: Bearer`, `AKIA…`, `BEGIN … PRIVATE KEY`, long base64-looking secrets in source.
+- If unsure, ask before committing.
+- Never use `--no-verify` unless the user explicitly requests it.
+
+## On push
+
+- Never push commits meant for `main` / `master` / `deploy/dev` by committing on those branches — use a feature branch + PR (see `pr-workflow`).
+- Invoke **review-before-push**: summarize commits, target branch, whether merge would trigger deploy (`deploy/dev` → Oracle via GHA), confirm no secrets in `@{upstream}..HEAD` (or equivalent), and cite full `pytest` green.
+- Do not push until the user confirms, unless they already ordered push/deploy in the same turn.
