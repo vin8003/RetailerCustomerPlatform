@@ -28,6 +28,10 @@ When an order or POS sale reduces stock:
 
 ## Flow Diagram
 
+![Inventory and Batch Management](../visuals/inventory-and-batches.jpg)
+
+*Illustrative diagram: Products can have multiple batches (each with own quantity & price). Total available stock is the sum of active batches. FIFO deduction sells oldest batch first. Parent bulk products can create fractional child products via a conversion factor.*
+
 ```mermaid
 flowchart TD
     P[Product] -->|has_batches = true| B[ProductBatches]
