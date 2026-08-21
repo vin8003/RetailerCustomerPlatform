@@ -1,12 +1,15 @@
 from rest_framework import status, permissions
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.throttling import AnonRateThrottle
 from django.db.models import Q, Avg
 from django.shortcuts import get_object_or_404
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
+import ipaddress
 import logging
+import requests
 from common.error_utils import format_exception
 
 from .models import (
@@ -23,6 +26,87 @@ from .serializers import (
 from common.permissions import IsRetailerOwner, IsCustomerUser
 
 logger = logging.getLogger(__name__)
+
+
+class GeoEstimateThrottle(AnonRateThrottle):
+    scope = 'geo_estimate'
+
+
+# Map common state abbreviations ↔ full names for retailer filters
+_STATE_CODE_TO_NAME = {
+    'AN': 'Andaman and Nicobar Islands',
+    'AP': 'Andhra Pradesh',
+    'AR': 'Arunachal Pradesh',
+    'AS': 'Assam',
+    'BR': 'Bihar',
+    'CH': 'Chandigarh',
+    'CT': 'Chhattisgarh',
+    'CG': 'Chhattisgarh',
+    'DN': 'Dadra and Nagar Haveli and Daman and Diu',
+    'DD': 'Dadra and Nagar Haveli and Daman and Diu',
+    'DL': 'Delhi',
+    'GA': 'Goa',
+    'GJ': 'Gujarat',
+    'HR': 'Haryana',
+    'HP': 'Himachal Pradesh',
+    'JK': 'Jammu and Kashmir',
+    'JH': 'Jharkhand',
+    'KA': 'Karnataka',
+    'KL': 'Kerala',
+    'LA': 'Ladakh',
+    'LD': 'Lakshadweep',
+    'MP': 'Madhya Pradesh',
+    'MH': 'Maharashtra',
+    'MN': 'Manipur',
+    'ML': 'Meghalaya',
+    'MZ': 'Mizoram',
+    'NL': 'Nagaland',
+    'OR': 'Odisha',
+    'OD': 'Odisha',
+    'PY': 'Puducherry',
+    'PB': 'Punjab',
+    'RJ': 'Rajasthan',
+    'SK': 'Sikkim',
+    'TN': 'Tamil Nadu',
+    'TS': 'Telangana',
+    'TG': 'Telangana',
+    'TR': 'Tripura',
+    'UP': 'Uttar Pradesh',
+    'UK': 'Uttarakhand',
+    'UA': 'Uttarakhand',
+    'WB': 'West Bengal',
+}
+_STATE_NAME_TO_CODES = {}
+for _code, _name in _STATE_CODE_TO_NAME.items():
+    _STATE_NAME_TO_CODES.setdefault(_name.lower(), []).append(_code)
+
+
+def _state_filter_q(state: str) -> Q:
+    """Match full state name or common abbreviation (case-insensitive)."""
+    variants = {state}
+    upper = state.strip().upper()
+    if upper in _STATE_CODE_TO_NAME:
+        variants.add(_STATE_CODE_TO_NAME[upper])
+    for code in _STATE_NAME_TO_CODES.get(state.strip().lower(), []):
+        variants.add(code)
+    q = Q()
+    for v in variants:
+        q |= Q(state__iexact=v)
+    return q
+
+
+def _is_public_ip(ip: str) -> bool:
+    try:
+        addr = ipaddress.ip_address(ip)
+        return not (
+            addr.is_private
+            or addr.is_loopback
+            or addr.is_link_local
+            or addr.is_reserved
+            or addr.is_multicast
+        )
+    except ValueError:
+        return False
 
 
 class RetailerPagination(PageNumberPagination):
@@ -174,10 +258,10 @@ def list_retailers(request):
         has_referral = request.query_params.get('has_referral')
         
         if city:
-            queryset = queryset.filter(city__icontains=city)
+            queryset = queryset.filter(city__iexact=city)
         
         if state:
-            queryset = queryset.filter(state__icontains=state)
+            queryset = queryset.filter(_state_filter_q(state))
         
         if pincode:
             queryset = queryset.filter(pincode=pincode)
@@ -219,10 +303,6 @@ def list_retailers(request):
         lat = request.query_params.get('lat')
         lng = request.query_params.get('lng')
         user_pincode = request.query_params.get('user_pincode')
-        
-        # City-wise filtering (Compulsory if city provided)
-        if city:
-            queryset = queryset.filter(city__iexact=city)
 
         if lat and lng:
             try:
@@ -327,6 +407,79 @@ def get_retailer_categories(request):
         return Response(
             {'error': format_exception(e)}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def list_operational_cities(request):
+    """
+    Distinct city/state pairs for active retailers (lightweight empty-state helper).
+    """
+    try:
+        cities = list(
+            RetailerProfile.objects.filter(is_active=True)
+            .exclude(city__isnull=True)
+            .exclude(city='')
+            .exclude(state__isnull=True)
+            .exclude(state='')
+            .values('city', 'state')
+            .distinct()
+            .order_by('state', 'city')
+        )
+        return Response({'results': cities}, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error listing operational cities: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+def _client_ip(request):
+    """Prefer REMOTE_ADDR; only use first X-Forwarded-For hop when present (proxy)."""
+    forwarded = request.META.get('HTTP_X_FORWARDED_FOR')
+    if forwarded:
+        return forwarded.split(',')[0].strip()
+    return request.META.get('REMOTE_ADDR')
+
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+@throttle_classes([GeoEstimateThrottle])
+def geo_estimate(request):
+    """
+    Fallback IP→city estimate for the customer app when browser IP APIs fail.
+    Uses free ip-api.com (no key) server-side. Throttled to limit egress abuse.
+    """
+    try:
+        ip = _client_ip(request)
+        params = {'fields': 'status,message,city,regionName,zip'}
+        # Private/local IPs: let provider resolve via this server's egress IP
+        if ip and _is_public_ip(ip):
+            url = f'http://ip-api.com/json/{ip}'
+        else:
+            url = 'http://ip-api.com/json/'
+        resp = requests.get(url, params=params, timeout=3)
+        data = resp.json() if resp.ok else {}
+        if data.get('status') != 'success':
+            return Response(
+                {'city': None, 'state': None, 'pincode': None},
+                status=status.HTTP_200_OK
+            )
+        return Response(
+            {
+                'city': data.get('city') or None,
+                'state': data.get('regionName') or None,
+                'pincode': data.get('zip') or None,
+            },
+            status=status.HTTP_200_OK
+        )
+    except Exception as e:
+        logger.error(f"Error estimating geo from IP: {str(e)}")
+        return Response(
+            {'city': None, 'state': None, 'pincode': None},
+            status=status.HTTP_200_OK
         )
 
 

@@ -183,6 +183,7 @@ REST_FRAMEWORK = {
         'user': '1000/hour',
         'login': '5/minute',
         'otp': '3/minute',
+        'geo_estimate': '20/hour',
     }
 }
 
@@ -419,6 +420,7 @@ if 'test' in sys.argv or 'pytest' in sys.modules:
             'otp': '10000/minute',
             'anon': '10000/minute',
             'user': '10000/minute',
+            'geo_estimate': '10000/minute',
         },
         'DEFAULT_PAGINATION_CLASS': 'common.pagination.StandardResultsSetPagination',
         'PAGE_SIZE': 20,

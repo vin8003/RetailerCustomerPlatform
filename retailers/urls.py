@@ -11,9 +11,11 @@ urlpatterns = [
     
     # Public retailer endpoints
     path('', views.list_retailers, name='list_retailers'),
-    path('<int:retailer_id>/', views.get_retailer_detail, name='get_retailer_detail'),
+    path('cities/', views.list_operational_cities, name='list_operational_cities'),
+    path('geo-estimate/', views.geo_estimate, name='geo_estimate'),
     path('search/', views.search_retailers, name='search_retailers'),
     path('categories/', views.get_retailer_categories, name='get_retailer_categories'),
+    path('<int:retailer_id>/', views.get_retailer_detail, name='get_retailer_detail'),
     
     # Reviews
     path('<int:retailer_id>/reviews/', views.get_retailer_reviews, name='get_retailer_reviews'),
