@@ -21,6 +21,10 @@ The offer engine evaluates active offers against a cart (or POS items) and appli
 
 ## Application Flow
 
+![Offer Calculation Engine](../visuals/offer-calculation-engine.jpg)
+
+*Illustrative diagram: Cart items enter the Offer Engine, which evaluates BXGY, percentage, flat amount, cart-value and other rules, then outputs applied discounts and/or loyalty points.*
+
 ```mermaid
 flowchart TD
     Cart[Cart / POS Items] --> Fetch[Fetch active Offers<br/>filter by channel, dates, usage limits]
