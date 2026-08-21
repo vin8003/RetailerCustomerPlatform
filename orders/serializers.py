@@ -246,6 +246,8 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     retailer_printer_size = serializers.CharField(source='retailer.printer_size', read_only=True)
     ledger_previous_balance = serializers.SerializerMethodField()
     ledger_new_balance = serializers.SerializerMethodField()
+    credit_limit = serializers.SerializerMethodField()
+    current_balance = serializers.SerializerMethodField()
     customer_name = serializers.SerializerMethodField()
     customer_phone = serializers.CharField(source='customer.phone_number', read_only=True)
     customer_email = serializers.CharField(source='customer.email', read_only=True)
@@ -283,6 +285,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'cash_amount', 'upi_amount', 'card_amount', 'credit_amount',
             'delivery_address_text', 'retailer_gst_number', 'retailer_receipt_footer', 'retailer_show_gst', 'retailer_printer_size',
             'ledger_previous_balance', 'ledger_new_balance',
+            'credit_limit', 'current_balance',
             'delivery_latitude', 'delivery_longitude',
             'items', 'sales_returns', 'applied_offers', 'created_at', 'updated_at', 'confirmed_at', 'delivered_at',
             'cancelled_at', 'unread_messages_count',
@@ -407,6 +410,26 @@ class OrderDetailSerializer(serializers.ModelSerializer):
                 return float(ledger_entry.balance_after + ledger_entry.amount)
             return float(ledger_entry.balance_after - ledger_entry.amount)
         return None
+
+    def _customer_credit_mapping(self, obj):
+        from retailers.models import RetailerCustomerMapping
+        if not obj.customer or not obj.retailer:
+            return None
+        return RetailerCustomerMapping.objects.filter(
+            retailer=obj.retailer, customer=obj.customer
+        ).first()
+
+    def get_credit_limit(self, obj):
+        mapping = self._customer_credit_mapping(obj)
+        if not mapping:
+            return None
+        return float(mapping.credit_limit)
+
+    def get_current_balance(self, obj):
+        mapping = self._customer_credit_mapping(obj)
+        if not mapping:
+            return None
+        return float(mapping.current_balance)
 
 
 
