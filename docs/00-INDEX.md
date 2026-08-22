@@ -4,7 +4,21 @@ This is the central knowledge base for the entire multi-repository project.
 
 It is designed for both humans and AI agents. **Canonical copy is this Git tree** — see [DOCUMENTATION.md](DOCUMENTATION.md). GitBook is optional presentation.
 
-## Structure
+## User wiki (start here for retailers & customers)
+
+The **[`wiki/`](../wiki/README.md)** folder is the plain-language help centre — getting started, customer guide, retailer guide, scanner, FAQ, and end-to-end project map. Use [`wiki/SUMMARY.md`](../wiki/SUMMARY.md) as the table of contents.
+
+| Wiki section | Audience |
+|--------------|----------|
+| [Welcome](../wiki/welcome/what-is-ordereasy.md) | Everyone |
+| [Getting started](../wiki/getting-started/for-customers.md) | New users |
+| [Customer guide](../wiki/customer-guide/README.md) | Shoppers |
+| [Retailer guide](../wiki/retailer-guide/README.md) | Shop owners & staff |
+| [Scanner guide](../wiki/scanner-guide/README.md) | Bulk catalog capture |
+| [FAQ](../wiki/faq/common-questions.md) | Quick answers |
+| [Full project](../wiki/project/all-apps.md) | All apps end to end |
+
+## Technical docs (`docs/`)
 
 | File / Folder | Description |
 |---------------|-------------|
@@ -19,14 +33,16 @@ It is designed for both humans and AI agents. **Canonical copy is this Git tree*
 | [visuals/](visuals/) | Illustrative diagrams and screenshot rules |
 | [gitbook-migration/](gitbook-migration/) | Migration history (preserve) |
 
-### Not written yet (do not invent content)
+### Covered in wiki (user-facing)
 
-These were listed in an earlier index draft and still have **no** source files. Add them when the knowledge exists, as their own focused documents:
+- Frontend apps and full project map — [wiki/project/all-apps.md](../wiki/project/all-apps.md), [how-it-works-together.md](../wiki/project/how-it-works-together.md)
+- Setup / onboarding — [wiki/getting-started/](../wiki/getting-started/for-customers.md)
+
+### Not written yet in `docs/` (do not invent technical content)
 
 - Domain models (`04-DOMAIN-MODELS/`)
 - API surface (`05-API-SURFACE.md`)
-- Frontend apps (`06-FRONTEND-APPS/`)
-- Setup (`08-SETUP.md`)
+- Developer setup (`08-SETUP.md`)
 
 ## Canonical Diagrams
 

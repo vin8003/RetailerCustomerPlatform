@@ -1,6 +1,17 @@
 # OrderEasy docs (canonical)
 
-This folder is the source of truth for platform knowledge. GitBook is optional. Confluence is historical and retained.
+This folder is the **technical and durable** source of truth for platform knowledge. GitBook is optional. Confluence is historical and retained.
+
+## User-friendly wiki
+
+For retailers, customers, and anyone learning the product end to end, start at the **[wiki](../wiki/README.md)** — plain-language guides, FAQ, and full project coverage.
+
+| Audience | Start here |
+|----------|------------|
+| Customers & retailers | [wiki/README.md](../wiki/README.md) |
+| Engineers & agents | This `docs/` tree |
+
+## Technical docs
 
 | Start | Purpose |
 |-------|---------|
