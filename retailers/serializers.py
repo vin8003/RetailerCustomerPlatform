@@ -235,7 +235,8 @@ class RetailerListSerializer(serializers.ModelSerializer):
         model = RetailerProfile
         fields = [
             'id', 'shop_name', 'shop_description', 'shop_image',
-            'city', 'state', 'pincode', 'average_rating', 'total_ratings',
+            'city', 'state', 'pincode', 'latitude', 'longitude',
+            'average_rating', 'total_ratings',
             'offers_delivery', 'offers_pickup', 'delivery_radius',
             'minimum_order_amount', 'categories', 'distance', 'is_currently_open', 'next_open_time'
         ]

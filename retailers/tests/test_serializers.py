@@ -82,3 +82,13 @@ class TestRetailerListSerializer:
         serializer = RetailerListSerializer(retailer, context={"request": request})
         assert serializer.data["distance"] is not None
         assert 1140 <= serializer.data["distance"] <= 1160
+        assert float(serializer.data["latitude"]) == pytest.approx(28.6139)
+        assert float(serializer.data["longitude"]) == pytest.approx(77.2090)
+
+    def test_null_coordinates_stay_null(self, retailer):
+        retailer.latitude = None
+        retailer.longitude = None
+        retailer.save()
+        serializer = RetailerListSerializer(retailer)
+        assert serializer.data["latitude"] is None
+        assert serializer.data["longitude"] is None
