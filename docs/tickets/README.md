@@ -25,6 +25,7 @@ They are **not** automatically durable knowledge. Many pages are builder briefs,
 | [KAN-19.md](KAN-19.md) | temporary | — (PDP add-button polish) |
 | [KAN-20.md](KAN-20.md) | durable | [order-stats-polling](../requirements/order-stats-polling.md) |
 | [KAN-29.md](KAN-29.md) | durable | [pos-customer-typeahead](../requirements/pos-customer-typeahead.md) |
+| [KAN-46.md](KAN-46.md) | durable | [daily-db-backup](../requirements/daily-db-backup.md) |
 | [KAN-47.md](KAN-47.md) | durable | [google-social-login](../07-KEY-FLOWS/google-social-login.md) |
 | [KAN-51.md](KAN-51.md) | temporary | — (product-group search bug) |
 | [KAN-53.md](KAN-53.md) | durable | [retailer-store-location](../requirements/retailer-store-location.md) |
@@ -35,8 +36,9 @@ They are **not** automatically durable knowledge. Many pages are builder briefs,
 | [KAN-60.md](KAN-60.md) | durable | [purchase-bill-image](../requirements/purchase-bill-image.md) |
 | [KAN-61.md](KAN-61.md) | durable | [credit-remaining-balance](../requirements/credit-remaining-balance.md) |
 | [KAN-62.md](KAN-62.md) | durable | [inactive-product-edit](../requirements/inactive-product-edit.md) |
+| [KAN-69.md](KAN-69.md) | durable | [customer-retailer-city-map](../requirements/customer-retailer-city-map.md) |
 
-Skipped (no Confluence page at migration time): KAN-46, KAN-48, KAN-49, KAN-52, KAN-57, KAN-63.
+Skipped (no Confluence page at migration time): KAN-48, KAN-49, KAN-52, KAN-57, KAN-63.
 
 ## Duplication (intentional)
 

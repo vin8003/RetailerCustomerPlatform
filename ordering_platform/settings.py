@@ -298,6 +298,7 @@ EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', 'True').lower() == 'true'
 EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER)
+BACKUP_EMAIL_TO = os.getenv('BACKUP_EMAIL_TO', 'shopeasy.bte@gmail.com')
 
 # FCM Django Settings
 FCM_DJANGO_SETTINGS = {

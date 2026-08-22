@@ -6,7 +6,12 @@ from unittest.mock import MagicMock, patch
 
 from authentication.models import User
 from retailers.models import RetailerProfile, RetailerOperatingHours, RetailerReview
-from retailers.views import _is_public_ip, _state_filter_q
+from retailers.views import (
+    RetailerPagination,
+    _is_public_ip,
+    _parse_bool,
+    _state_filter_q,
+)
 
 
 def _make_retailer(username, shop_name, city, state, *, is_active=True, pincode='400001'):
@@ -216,6 +221,141 @@ class TestRetailerListViews:
         # Far away (Mumbai)
         response = api_client.get(url, {"lat": 19.0760, "lng": 72.8777})
         assert len(response.data['results']) == 0
+
+    def test_list_retailers_without_radius_filter_keeps_far_shops(self, api_client, retailer):
+        # Delhi shop, small radius
+        retailer.latitude = Decimal("28.6139")
+        retailer.longitude = Decimal("77.2090")
+        retailer.delivery_radius = 5
+        retailer.save()
+
+        url = reverse('list_retailers')
+        # Mumbai user: far outside the 5km radius
+        response = api_client.get(
+            url,
+            {"lat": 19.0760, "lng": 72.8777, "filter_by_radius": "false"},
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        results = response.data['results']
+        assert len(results) == 1
+        assert results[0]['id'] == retailer.id
+        assert 1140 <= results[0]['distance'] <= 1160
+
+    def test_list_retailers_without_radius_filter_keeps_shops_missing_coords(
+        self, api_client, retailer
+    ):
+        retailer.latitude = None
+        retailer.longitude = None
+        retailer.save()
+
+        url = reverse('list_retailers')
+        response = api_client.get(
+            url,
+            {"lat": 28.6139, "lng": 77.2090, "filter_by_radius": "false"},
+        )
+
+        results = response.data['results']
+        assert len(results) == 1
+        assert results[0]['latitude'] is None
+        assert results[0]['longitude'] is None
+        assert results[0]['distance'] is None
+
+    def test_list_retailers_radius_filter_on_by_default(self, api_client, retailer):
+        retailer.latitude = Decimal("28.6139")
+        retailer.longitude = Decimal("77.2090")
+        retailer.delivery_radius = 5
+        retailer.save()
+
+        url = reverse('list_retailers')
+        # Omitted flag must behave exactly like the pre-existing filtering.
+        response = api_client.get(url, {"lat": 19.0760, "lng": 72.8777})
+        assert response.data['results'] == []
+
+    def test_list_retailers_radius_filter_explicit_true(self, api_client, retailer):
+        retailer.latitude = Decimal("28.6139")
+        retailer.longitude = Decimal("77.2090")
+        retailer.delivery_radius = 5
+        retailer.save()
+
+        url = reverse('list_retailers')
+        response = api_client.get(
+            url, {"lat": 19.0760, "lng": 72.8777, "filter_by_radius": "true"}
+        )
+        assert response.data['results'] == []
+
+    def test_list_retailers_exposes_coordinates(self, api_client, retailer):
+        retailer.latitude = Decimal("28.6139")
+        retailer.longitude = Decimal("77.2090")
+        retailer.save()
+
+        url = reverse('list_retailers')
+        response = api_client.get(url)
+
+        result = response.data['results'][0]
+        assert float(result['latitude']) == pytest.approx(28.6139)
+        assert float(result['longitude']) == pytest.approx(77.2090)
+
+    def test_list_retailers_map_contract_matches_customer_client(self, api_client, retailer):
+        """Keys and encodings the city map reads from GET /api/retailers/."""
+        retailer.latitude = Decimal("28.6139")
+        retailer.longitude = Decimal("77.2090")
+        retailer.delivery_radius = 5
+        retailer.save()
+
+        url = reverse('list_retailers')
+        response = api_client.get(
+            url,
+            {
+                "city": retailer.city,
+                "state": retailer.state,
+                "lat": "28.6139",
+                "lng": "77.2090",
+                "filter_by_radius": "false",
+                "page_size": "100",
+            },
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert RetailerPagination.max_page_size == 100
+        assert set(response.data.keys()) >= {'count', 'next', 'previous', 'results'}
+        result = response.data['results'][0]
+        for key in (
+            'id', 'shop_name', 'shop_description', 'shop_image',
+            'city', 'state', 'pincode', 'latitude', 'longitude',
+            'average_rating', 'total_ratings',
+            'offers_delivery', 'offers_pickup', 'delivery_radius',
+            'minimum_order_amount', 'categories', 'distance',
+            'is_currently_open', 'next_open_time',
+        ):
+            assert key in result
+        # DecimalField JSON is a string; PositiveIntegerField is a number.
+        assert isinstance(result['latitude'], str)
+        assert isinstance(result['longitude'], str)
+        assert isinstance(result['delivery_radius'], int)
+        assert isinstance(result['minimum_order_amount'], str)
+        assert isinstance(result['distance'], (int, float))
+        assert result['distance'] == pytest.approx(0, abs=0.05)
+
+
+class TestParseBool:
+    def test_missing_value_uses_default(self):
+        assert _parse_bool(None, default=True) is True
+        assert _parse_bool('', default=False) is False
+        assert _parse_bool('   ', default=True) is True
+
+    def test_explicit_values_win_over_default(self):
+        assert _parse_bool('false', default=True) is False
+        assert _parse_bool('FALSE', default=True) is False
+        assert _parse_bool('0', default=True) is False
+        assert _parse_bool('no', default=True) is False
+        assert _parse_bool('true', default=False) is True
+        assert _parse_bool(' yes ', default=False) is True
+
+    def test_unrecognised_value_uses_default(self):
+        assert _parse_bool('maybe', default=True) is True
+        assert _parse_bool('flase', default=True) is True
+        assert _parse_bool('maybe', default=False) is False
 
 
 class TestStateFilterHelpers:
