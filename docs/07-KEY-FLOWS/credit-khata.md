@@ -54,3 +54,4 @@ flowchart LR
 - Balance is always updated in real time.
 - Credit limit can be used to block or warn on further credit sales.
 - Full history is available through the ledger entries.
+- Customer-facing credit bills must show remaining balance on the bill itself ([credit-remaining-balance.md](../requirements/credit-remaining-balance.md), KAN-61).

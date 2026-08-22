@@ -52,3 +52,5 @@ flowchart TB
 ## Data Flow Principle
 
 All state changes go through the backend. The frontends never write directly to the database. This ensures a single source of truth for inventory, pricing, offers, and order status.
+
+Documentation for this architecture lives in Git (`docs/`). GitBook is optional presentation. See [DOCUMENTATION.md](DOCUMENTATION.md).

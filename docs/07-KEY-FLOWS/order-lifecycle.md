@@ -40,6 +40,7 @@ stateDiagram-v2
 - If the retailer modifies the order, it moves to `waiting_for_customer_approval`.
 - Delivery orders go through `out_for_delivery`; pickup orders go directly from `packed` to `delivered`.
 - Status transitions are enforced by the backend policy (`orders/domain/status_policy.py`).
+- There is no separate delivery/rider app. Shop-level dispatch stays on this API ([ADR-001](../decisions/ADR-001-no-delivery-app.md), KAN-58).
 
 ## Related Models
 
