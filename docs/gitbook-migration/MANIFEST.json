@@ -1,0 +1,161 @@
+{
+  "open_issues": 24,
+  "with_confluence_docs": [
+    "KAN-11",
+    "KAN-14",
+    "KAN-16",
+    "KAN-17",
+    "KAN-18",
+    "KAN-19",
+    "KAN-20",
+    "KAN-29",
+    "KAN-47",
+    "KAN-51",
+    "KAN-53",
+    "KAN-54",
+    "KAN-55",
+    "KAN-56",
+    "KAN-58",
+    "KAN-60",
+    "KAN-61",
+    "KAN-62"
+  ],
+  "without_confluence_docs": [
+    "KAN-63",
+    "KAN-52",
+    "KAN-48",
+    "KAN-57",
+    "KAN-49",
+    "KAN-46"
+  ],
+  "pages": {
+    "KAN-11": {
+      "pageId": "98346",
+      "title": "[KAN-11] Retailer Web \u2014 Mobile Friendly",
+      "confluence": "https://vin8003.atlassian.net/wiki/spaces/KAN/pages/98346/KAN-11+Retailer+Web+Mobile+Friendly"
+    },
+    "KAN-14": {
+      "pageId": "98367",
+      "title": "[KAN-14] Cart Lost During Signup (Back Button Bug) - Technical Proposal",
+      "confluence": "https://vin8003.atlassian.net/wiki/spaces/KAN/pages/98367/KAN-14+Cart+Lost+During+Signup+Back+Button+Bug+-+Technical+Proposal"
+    },
+    "KAN-16": {
+      "pageId": "98388",
+      "title": "[KAN-16] Promotional Email Strategy",
+      "confluence": "https://vin8003.atlassian.net/wiki/spaces/KAN/pages/98388/KAN-16+Promotional+Email+Strategy"
+    },
+    "KAN-17": {
+      "pageId": "98411",
+      "title": "[KAN-17] Frequently Bought Together (Cross-sell)",
+      "confluence": "https://vin8003.atlassian.net/wiki/spaces/KAN/pages/98411/KAN-17+Frequently+Bought+Together+Cross-sell"
+    },
+    "KAN-18": {
+      "pageId": "491586",
+      "title": "[KAN-18] Scanner App Crash Review & Logging",
+      "confluence": "https://vin8003.atlassian.net/wiki/spaces/KAN/pages/491586/KAN-18+Scanner+App+Crash+Review+Logging"
+    },
+    "KAN-19": {
+      "pageId": "459037",
+      "title": "[KAN-19] Product Detail Page \u2014 Add Button UX Fix",
+      "confluence": "https://vin8003.atlassian.net/wiki/spaces/KAN/pages/459037/KAN-19+Product+Detail+Page+Add+Button+UX+Fix"
+    },
+    "KAN-20": {
+      "pageId": "294938",
+      "title": "[KAN-20] Order/Stats API \u2014 Continuous Polling Fix",
+      "confluence": "https://vin8003.atlassian.net/wiki/spaces/KAN/pages/294938/KAN-20+Order+Stats+API+Continuous+Polling+Fix"
+    },
+    "KAN-29": {
+      "pageId": "29851651",
+      "title": "KAN-29 POS customer typeahead",
+      "confluence": "https://vin8003.atlassian.net/wiki/spaces/OrderEasy/pages/29851651/KAN-29+POS+customer+typeahead"
+    },
+    "KAN-47": {
+      "pageId": "17432578",
+      "title": "[Release Log] KAN-47 Google Social Login",
+      "confluence": "https://vin8003.atlassian.net/wiki/spaces/KAN/pages/17432578/Release+Log+KAN-47+Google+Social+Login"
+    },
+    "KAN-51": {
+      "pageId": "29949953",
+      "title": "KAN-51 Product-group search on add/update",
+      "confluence": "https://vin8003.atlassian.net/wiki/spaces/OrderEasy/pages/29949953/KAN-51+Product-group+search+on+add+update"
+    },
+    "KAN-53": {
+      "pageId": "30146562",
+      "title": "KAN-53 Retailer store location on map",
+      "confluence": "https://vin8003.atlassian.net/wiki/spaces/OrderEasy/pages/30146562/KAN-53+Retailer+store+location+on+map"
+    },
+    "KAN-54": {
+      "pageId": "30015490",
+      "title": "KAN-54 Customer location at start",
+      "confluence": "https://vin8003.atlassian.net/wiki/spaces/OrderEasy/pages/30015490/KAN-54+Customer+location+at+start"
+    },
+    "KAN-55": {
+      "pageId": "30081025",
+      "title": "KAN-55 Link history rows to order detail",
+      "confluence": "https://vin8003.atlassian.net/wiki/spaces/OrderEasy/pages/30081025/KAN-55+Link+history+rows+to+order+detail"
+    },
+    "KAN-56": {
+      "pageId": "29523971",
+      "title": "KAN-56 Add supplier without mobile",
+      "confluence": "https://vin8003.atlassian.net/wiki/spaces/OrderEasy/pages/29523971/KAN-56+Add+supplier+without+mobile"
+    },
+    "KAN-58": {
+      "pageId": "29425665",
+      "title": "[KAN-58] Delivery app \u2014 do not build yet",
+      "confluence": "https://vin8003.atlassian.net/wiki/spaces/OrderEasy/pages/29425665/KAN-58+Delivery+app+do+not+build+yet"
+    },
+    "KAN-60": {
+      "pageId": "30048258",
+      "title": "KAN-60 Attach purchase bill image",
+      "confluence": "https://vin8003.atlassian.net/wiki/spaces/OrderEasy/pages/30048258/KAN-60+Attach+purchase+bill+image"
+    },
+    "KAN-61": {
+      "pageId": "29982722",
+      "title": "KAN-61 Remaining credit on customer bill",
+      "confluence": "https://vin8003.atlassian.net/wiki/spaces/OrderEasy/pages/29982722/KAN-61+Remaining+credit+on+customer+bill"
+    },
+    "KAN-62": {
+      "pageId": "29917185",
+      "title": "KAN-62 Inactive product edit/update",
+      "confluence": "https://vin8003.atlassian.net/wiki/spaces/OrderEasy/pages/29917185/KAN-62+Inactive+product+edit+update"
+    }
+  },
+  "policy": "Copy to GitBook; keep Confluence links; add GitBook links to Jira; do not delete Confluence",
+  "gitbook_org_id": "Uytui5skXVecXruzm1yN",
+  "gitbook_site_id": "site_y3rLP",
+  "status": "completed",
+  "gitbook_app_url": "https://app.gitbook.com/o/Uytui5skXVecXruzm1yN/home",
+  "note": "Confluence pages retained. Jira descriptions include GitBook + Confluence links. Site not published publicly (app.gitbook.com links work when logged in).",
+  "gitbook_space_id": "iu06pIi3CiBqpw30jhyU",
+  "change_request_id": "UdehX5ZKSYUJHJ8N8KuF",
+  "gitbook_index": "https://app.gitbook.com/s/iu06pIi3CiBqpw30jhyU/open-jira-ticket-docs",
+  "jira_updated": 18,
+  "confluence_deleted": false,
+  "site_published": false,
+  "source_of_truth": {
+    "canonical": "git:RetailerCustomerPlatform/docs",
+    "jira": "work/status only",
+    "gitbook": "optional presentation layer (free plan not suitable as team SOT)",
+    "confluence": "historical, retained; copy don't replace"
+  },
+  "phase2_git_as_sot": {
+    "status": "completed",
+    "docs_entry": "docs/DOCUMENTATION.md",
+    "tickets": "docs/tickets/",
+    "durable_extracts": [
+      "docs/requirements/",
+      "docs/decisions/",
+      "docs/07-KEY-FLOWS/guest-cart-signup.md",
+      "docs/07-KEY-FLOWS/google-social-login.md",
+      "docs/03-USER-JOURNEYS.md"
+    ],
+    "gitbook_deleted": false,
+    "confluence_deleted": false,
+    "jira_confluence_links_removed": false,
+    "site_published": false,
+    "note": "Track A and Track B GitBook copies retained. Git is now the durable SOT. Jira Documentation section should include Git snapshot URLs in addition to GitBook and Confluence."
+  },
+  "visuals_commit": "429dbfc3bce4b076def8f2756b0fc179bcee91d8",
+  "gitbook_platform_kb": "https://app.gitbook.com/s/iu06pIi3CiBqpw30jhyU/platform-knowledge-base",
+  "gitbook_kb_change_request_id": "PuPcLVEfle3Xbjoa29Ed"
+}
