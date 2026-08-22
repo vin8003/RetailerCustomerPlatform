@@ -18,3 +18,4 @@ Ticket snapshots (acceptance context, ship notes) stay in [`../tickets/`](../tic
 | [daily-db-backup.md](daily-db-backup.md) | KAN-46 |
 | [inactive-product-edit.md](inactive-product-edit.md) | KAN-62 |
 | [retailer-web-mobile.md](retailer-web-mobile.md) | KAN-11 |
+| [customer-retailer-city-map.md](customer-retailer-city-map.md) | KAN-69 |

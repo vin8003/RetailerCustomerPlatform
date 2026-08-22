@@ -2,7 +2,7 @@
 
 Illustrative journeys for humans and agents. Images contain **no real customer data**. Text and Mermaid are the source of the rules; JPGs are supporting visuals.
 
-Related work: [KAN-53](requirements/retailer-store-location.md), [KAN-54](requirements/customer-location-at-start.md). Ticket snapshots stay under [`tickets/`](tickets/).
+Related work: [KAN-53](requirements/retailer-store-location.md), [KAN-54](requirements/customer-location-at-start.md), [KAN-69](requirements/customer-retailer-city-map.md). Ticket snapshots stay under [`tickets/`](tickets/).
 
 ## Customer journey
 
@@ -24,6 +24,7 @@ flowchart LR
 - Customers use `customer_ordereasy_njs` (web + Capacitor) against the Django API.
 - Guest cart exists before signup; tokens must not wipe it (see [guest-cart-signup.md](07-KEY-FLOWS/guest-cart-signup.md)).
 - At start, the app should ask for location rather than forcing a manual pin first ([customer-location-at-start.md](requirements/customer-location-at-start.md)). Manual override may remain.
+- Discovery is a city map centred on the customer, with unpinned shops parked at the map edge and a nearest-first list as the fallback ([customer-retailer-city-map.md](requirements/customer-retailer-city-map.md)).
 - Pickup and delivery are `Order.delivery_mode` on the backend. There is **no** separate delivery/rider app ([ADR-001](decisions/ADR-001-no-delivery-app.md)).
 
 ## Retailer POS and online orders
