@@ -36,7 +36,7 @@ def test_build_database_config_uses_current_defaults_when_env_missing():
     assert config["NAME"] == "buyez_db"
     assert config["USER"] == "buyez_user"
     assert config["PASSWORD"] == "strongpassword"
-    assert config["HOST"] == "10.0.0.105"
+    assert config["HOST"] == "localhost"
     assert config["PORT"] == "5432"
     assert config["CONN_MAX_AGE"] == 600
 
