@@ -272,6 +272,18 @@ class TestRetailerListViews:
         response = api_client.get(url, {"lat": 19.0760, "lng": 72.8777})
         assert response.data['results'] == []
 
+    def test_list_retailers_radius_filter_explicit_true(self, api_client, retailer):
+        retailer.latitude = Decimal("28.6139")
+        retailer.longitude = Decimal("77.2090")
+        retailer.delivery_radius = 5
+        retailer.save()
+
+        url = reverse('list_retailers')
+        response = api_client.get(
+            url, {"lat": 19.0760, "lng": 72.8777, "filter_by_radius": "true"}
+        )
+        assert response.data['results'] == []
+
     def test_list_retailers_exposes_coordinates(self, api_client, retailer):
         retailer.latitude = Decimal("28.6139")
         retailer.longitude = Decimal("77.2090")
@@ -330,16 +342,20 @@ class TestParseBool:
     def test_missing_value_uses_default(self):
         assert _parse_bool(None, default=True) is True
         assert _parse_bool('', default=False) is False
+        assert _parse_bool('   ', default=True) is True
 
     def test_explicit_values_win_over_default(self):
         assert _parse_bool('false', default=True) is False
         assert _parse_bool('FALSE', default=True) is False
         assert _parse_bool('0', default=True) is False
+        assert _parse_bool('no', default=True) is False
         assert _parse_bool('true', default=False) is True
         assert _parse_bool(' yes ', default=False) is True
 
-    def test_unrecognised_value_is_false(self):
-        assert _parse_bool('maybe', default=True) is False
+    def test_unrecognised_value_uses_default(self):
+        assert _parse_bool('maybe', default=True) is True
+        assert _parse_bool('flase', default=True) is True
+        assert _parse_bool('maybe', default=False) is False
 
 
 class TestStateFilterHelpers:

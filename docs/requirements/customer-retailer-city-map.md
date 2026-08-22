@@ -22,7 +22,7 @@
 GET /api/retailers/?city=&state=&lat=&lng=&filter_by_radius=false&page_size=100
 ```
 
-`distance` is kilometres from the supplied `lat`/`lng` (JSON number), or `null` when either side has no coordinates. `latitude` / `longitude` are DRF decimal strings; `delivery_radius` is an integer km. `filter_by_radius` is true for `true`/`1`/`yes` (default true when omitted). `page_size=100` is the list paginator's max.
+`distance` is kilometres from the supplied `lat`/`lng` (JSON number), or `null` when either side has no coordinates. `latitude` / `longitude` are DRF decimal strings; `delivery_radius` is an integer km. `filter_by_radius` is true for `true`/`1`/`yes`, false for `false`/`0`/`no`, and keeps the default (filter on) when omitted, blank, or unrecognised. When `lat`/`lng` are present, `filter_by_radius=false` skips both radius and serviceable-pincode exclusion. `page_size=100` is the list paginator's max.
 
 ## Related
 

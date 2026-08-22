@@ -96,10 +96,21 @@ def _state_filter_q(state: str) -> Q:
 
 
 def _parse_bool(value, *, default: bool) -> bool:
-    """Read a query-string boolean, falling back to default when absent."""
-    if value is None or value == '':
+    """Read a query-string boolean.
+
+    Absent, blank, or unrecognised values keep `default` so a typo cannot
+    silently disable a safety-on flag such as filter_by_radius.
+    """
+    if value is None:
         return default
-    return value.strip().lower() in ('true', '1', 'yes')
+    token = str(value).strip().lower()
+    if token == '':
+        return default
+    if token in ('true', '1', 'yes'):
+        return True
+    if token in ('false', '0', 'no'):
+        return False
+    return default
 
 
 def _is_public_ip(ip: str) -> bool:
