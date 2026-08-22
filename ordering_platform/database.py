@@ -9,5 +9,13 @@ def build_database_config(getenv=os.getenv):
         "PASSWORD": getenv("DB_PASSWORD", "strongpassword"),
         "HOST": getenv("DB_HOST", "10.0.0.105"),
         "PORT": getenv("DB_PORT", "5432"),
-        "CONN_MAX_AGE": int(getenv("DB_CONN_MAX_AGE", "600")),
+        "CONN_MAX_AGE": _int_env(getenv, "DB_CONN_MAX_AGE", "600"),
     }
+
+
+def _int_env(getenv, name, default):
+    raw = getenv(name, default)
+    try:
+        return int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be an integer, got {raw!r}") from exc
