@@ -12,6 +12,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Load environment variables
 from dotenv import load_dotenv
+from ordering_platform.database import build_database_config
+
 env_path = os.path.join(BASE_DIR, '.env')
 load_dotenv(env_path)
 
@@ -92,19 +94,10 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'ordering_platform.wsgi.application'
 
-# Database
+# Database — credentials come from .env (see .env.example)
 # https://docs.djangoproject.com/en/stable/ref/settings/#databases
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'buyez_db',
-        'USER': 'buyez_user',
-        'PASSWORD': 'strongpassword',
-        'HOST': '10.0.0.105',
-        'PORT': '5432',
-        'CONN_MAX_AGE': 600,
-    }
-
+    'default': build_database_config(),
 }
 
 # Testing override: Use SQLite for faster and environment-independent tests

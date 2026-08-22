@@ -1,0 +1,19 @@
+---
+description: Systems of record — Jira work, GitHub implementation, GitBook/Markdown knowledge, MCP/API agent interface
+alwaysApply: true
+---
+
+# Systems of record
+
+| System | Role | Agent behavior |
+|--------|------|----------------|
+| **Jira** | Work | Source of truth for tickets (`KAN-*`). Fetch acceptance criteria via Atlassian MCP before coding. Update status/comments when starting/finishing; never invent ticket scope. |
+| **GitHub** | Implementation | Branches, PRs, reviews, CI, deploy triggers. Code and deploy history live here. Link PRs to Jira keys. |
+| **GitBook / Markdown** | Knowledge | Durable how/why (architecture, runbooks, product). Prefer updating/creating markdown over burying facts only in chat or Jira. No GitBook MCP — use repo markdown. |
+| **MCP / API** | Agent interface | Prefer MCP (Jira, GitHub, browser, etc.) over guessing or scraping. If MCP is missing/auth-failed, stop and ask — do not invent data. |
+
+```
+Jira (work) → Agent via MCP → GitHub (implementation)
+                            → Docs (GitBook / Markdown)
+GitHub → Deploy triggers
+```

@@ -1,0 +1,23 @@
+---
+description: Phased delivery — phase plan then per-phase implement→UT→full suite→mini-review; forbid big-bang
+alwaysApply: true
+---
+
+# Phased delivery
+
+## When starting non-trivial work
+
+1. Split into phases (e.g. model/API → serializers/views → edge cases → docs). Prefer phases that each leave the tree green.
+2. Share the phase list with the user when useful; adjust if they reorder/cut scope.
+
+## Per phase (hard loop)
+
+1. Implement only that phase's files/behavior.
+2. Add/update **unit tests for that phase** (happy + at least one negative/edge when relevant).
+3. Run **focused tests** for the touched area, then the **full suite** (`pytest`) before calling the phase done.
+4. **Mini-review** the phase diff (correctness, readability, secrets) — present a short summary; do not start the next phase until this phase is verified.
+5. Optionally commit the phase alone (easier bisect/review) when the user wants commits.
+
+## Forbidden
+
+- Implementing everything, then one giant test run and one giant review at the end.

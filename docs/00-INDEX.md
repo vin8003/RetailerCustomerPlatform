@@ -1,0 +1,58 @@
+# OrderEasy / BuyEasy Platform – Knowledge Base Index
+
+This is the central knowledge base for the entire multi-repository project.
+
+It is designed for both humans and AI agents. **Canonical copy is this Git tree** — see [DOCUMENTATION.md](DOCUMENTATION.md). GitBook is optional presentation.
+
+## Structure
+
+| File / Folder | Description |
+|---------------|-------------|
+| [DOCUMENTATION.md](DOCUMENTATION.md) | Source-of-truth model: Jira, Git, GitBook, Confluence, agents |
+| [01-OVERVIEW.md](01-OVERVIEW.md) | Project identity, purpose, value proposition, component map |
+| [02-ARCHITECTURE.md](02-ARCHITECTURE.md) | High-level system architecture (Mermaid + illustration) |
+| [03-USER-JOURNEYS.md](03-USER-JOURNEYS.md) | Customer, retailer POS, and scanner journeys |
+| [07-KEY-FLOWS/](07-KEY-FLOWS/) | Detailed key business flows |
+| [requirements/](requirements/) | Durable product/engineering requirements extracted from tickets |
+| [decisions/](decisions/) | Architecture Decision Records (ADRs) |
+| [tickets/](tickets/) | Jira work snapshots (not a substitute for Jira status) |
+| [visuals/](visuals/) | Illustrative diagrams and screenshot rules |
+| [gitbook-migration/](gitbook-migration/) | Migration history (preserve) |
+
+### Not written yet (do not invent content)
+
+These were listed in an earlier index draft and still have **no** source files. Add them when the knowledge exists, as their own focused documents:
+
+- Domain models (`04-DOMAIN-MODELS/`)
+- API surface (`05-API-SURFACE.md`)
+- Frontend apps (`06-FRONTEND-APPS/`)
+- Setup (`08-SETUP.md`)
+
+## Canonical Diagrams
+
+All image files live in [`visuals/`](visuals/) and are referenced with **repository-relative** paths.
+
+- System Architecture — [02-ARCHITECTURE.md](02-ARCHITECTURE.md)
+- Order Status Lifecycle — [07-KEY-FLOWS/order-lifecycle.md](07-KEY-FLOWS/order-lifecycle.md)
+- Inventory & Batch Logic — [07-KEY-FLOWS/inventory-and-batches.md](07-KEY-FLOWS/inventory-and-batches.md)
+- Offer Calculation Engine — [07-KEY-FLOWS/offer-calculation.md](07-KEY-FLOWS/offer-calculation.md)
+- Credit / Khata System — [07-KEY-FLOWS/credit-khata.md](07-KEY-FLOWS/credit-khata.md)
+- Customer / retailer / scanner journeys — [03-USER-JOURNEYS.md](03-USER-JOURNEYS.md)
+
+## Design Principles
+
+- Text is primary. Diagrams support the text.
+- Prefer Mermaid for machine-readable diagrams.
+- Small, focused documents.
+- Three layers: Human-readable explanation → Mermaid → Visuals.
+- Every important visual has a textual explanation.
+- Durable knowledge does not live only inside a Jira ticket or a GitBook page.
+
+---
+
+**Repositories**
+
+- Backend (this repo, docs SOT): `RetailerCustomerPlatform`
+- Customer App: `customer_ordereasy_njs`
+- Retailer App: `retailer_ordereasy_njs`
+- Scanner: `buyeasy_retailer_scanner`
