@@ -20,7 +20,7 @@ from .serializers import (
     OrderStatsSerializer, OrderModificationSerializer, OrderChatMessageSerializer,
     RetailerRatingSerializer
 )
-from retailers.models import RetailerProfile, RetailerReview, RetailerRewardConfig
+from retailers.models import RetailerProfile, RetailerReview, RetailerRewardConfig, RetailerCustomerMapping
 from retailers.serializers import RetailerReviewSerializer
 from customers.models import CustomerAddress, CustomerLoyalty
 from django.db.models import Exists, OuterRef, Prefetch
@@ -315,14 +315,17 @@ def get_order_detail(request, order_id):
         # Optimization: Check if data has changed
         last_updated = request.query_params.get('last_updated')
         if last_updated:
-            # Convert order.updated_at to string format used by serializer
-            # or simply compare timestamps if client sends iso format
-            current_updated = order.updated_at.isoformat().replace('+00:00', 'Z')
-            
-            # Simple check - if the passed timestamp matches current, return 304
-            # Note: exact string matching depends on client carrying over the exact string
-            # We'll try to match broadly or use Parse
-            if last_updated == current_updated or last_updated == order.updated_at.isoformat():
+            # Credit fields on the bill come from RetailerCustomerMapping, which
+            # can change (limit / payment) without touching order.updated_at.
+            freshness = order.updated_at
+            if order.customer_id and order.retailer_id:
+                mapping = RetailerCustomerMapping.objects.filter(
+                    retailer=order.retailer, customer=order.customer
+                ).only('updated_at').first()
+                if mapping and mapping.updated_at and mapping.updated_at > freshness:
+                    freshness = mapping.updated_at
+            current_updated = freshness.isoformat().replace('+00:00', 'Z')
+            if last_updated == current_updated or last_updated == freshness.isoformat():
                 return Response(status=status.HTTP_304_NOT_MODIFIED)
         
         serializer = OrderDetailSerializer(order, context={'request': request})
