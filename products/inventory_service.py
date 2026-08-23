@@ -75,7 +75,8 @@ def consolidate_stock_to_initial_batch(product: Product) -> None:
 def apply_stock_increase(product: Product, quantity, batch=None, *, allow_negative: bool = False) -> Decimal:
     """Increase stock via model helpers; returns new product.quantity."""
     qty = Decimal(str(quantity))
-    product.increase_quantity(qty, batch=batch)
+    if not product.increase_quantity(qty, batch=batch):
+        raise ValueError(f'Failed to increase stock for product {product.pk}')
     if not product.has_batches:
         sync_initial_stock_batch(product)
     product.refresh_from_db()
@@ -85,7 +86,8 @@ def apply_stock_increase(product: Product, quantity, batch=None, *, allow_negati
 def apply_stock_decrease(product: Product, quantity, batch=None, *, allow_negative: bool = False) -> Decimal:
     """Decrease stock via model helpers; returns new product.quantity."""
     qty = Decimal(str(quantity))
-    product.reduce_quantity(qty, batch=batch, allow_negative=allow_negative)
+    if not product.reduce_quantity(qty, batch=batch, allow_negative=allow_negative):
+        raise ValueError(f'Failed to decrease stock for product {product.pk}')
     if not product.has_batches:
         sync_initial_stock_batch(product)
     product.refresh_from_db()
@@ -179,6 +181,18 @@ def reconcile_product_from_logs(
         batch.save(update_fields=['quantity', 'is_active'])
 
     if product.has_batches:
+        # Keep remaining real batches; put leftover reconstructed qty on INITIAL-STOCK
+        # so sync_inventory_from_batches cannot overwrite the replayed total.
+        remaining_other = (
+            product.batches.filter(is_active=True)
+            .exclude(batch_number='INITIAL-STOCK')
+            .aggregate(total=Sum('quantity'))['total']
+            or Decimal('0')
+        )
+        initial = product.batches.filter(batch_number='INITIAL-STOCK').first()
+        if initial:
+            initial.quantity = replayed_qty - Decimal(str(remaining_other))
+            initial.save(update_fields=['quantity'])
         product.sync_inventory_from_batches()
 
     log_inventory_change(
