@@ -309,13 +309,7 @@ def get_order_detail(request, order_id):
         # Optimization: Check if data has changed
         last_updated = request.query_params.get('last_updated')
         if last_updated:
-            # Convert order.updated_at to string format used by serializer
-            # or simply compare timestamps if client sends iso format
             current_updated = order.updated_at.isoformat().replace('+00:00', 'Z')
-            
-            # Simple check - if the passed timestamp matches current, return 304
-            # Note: exact string matching depends on client carrying over the exact string
-            # We'll try to match broadly or use Parse
             if last_updated == current_updated or last_updated == order.updated_at.isoformat():
                 return Response(status=status.HTTP_304_NOT_MODIFIED)
         
@@ -400,30 +394,24 @@ def cancel_order(request, order_id):
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        # Check if order can be cancelled
         if not order.can_be_cancelled:
             return Response(
                 {'error': 'Order cannot be cancelled'}, 
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Get cancellation reason
         reason = request.data.get('reason', '')
-        
-        # Cancel order
         order.update_status('cancelled', user)
         order.cancellation_reason = reason
         order.cancelled_by = user.user_type
         order.save()
         
-        # Restore product quantities
         logs_to_create = []
         items = order.items.select_related('product').all()
         for item in items:
             prev_qty = item.product.quantity
             item.product.increase_quantity(item.quantity)
             new_qty = prev_qty + item.quantity
-            
             from products.models import ProductInventoryLog
             logs_to_create.append(ProductInventoryLog(
                 product=item.product,
@@ -434,24 +422,50 @@ def cancel_order(request, order_id):
                 reason=f"Order Cancelled: #{order.order_number}",
                 created_by=user
             ))
-            
         if logs_to_create:
             from products.models import ProductInventoryLog
             ProductInventoryLog.objects.bulk_create(logs_to_create)
-            
-        # Refund loyalty points if used (Handled in update_status but ensured here logic is consistent)
-        # Actually update_status('cancelled') already calls refund logic in models.py.
-        # So we don't need to duplicate it here, BUT we should verify that update_status IS called correctly.
-        # It is called above.
-        
         logger.info(f"Order cancelled: {order.order_number} by {user.username}")
-        
         serializer = OrderDetailSerializer(order, context={'request': request})
         return Response(serializer.data, status=status.HTTP_200_OK)
-    
     except Exception as e:
         logger.error(f"Error cancelling order: {str(e)}")
-        return Response(
-            {'error': format_exception(e)}, 
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
+        return Response({'error': format_exception(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def create_order_feedback(request, order_id):
+    """Create feedback for an order - only for customers"""
+    try:
+        if request.user.user_type != 'customer':
+            return Response({'error': 'Only customers can provide feedback'}, status=status.HTTP_403_FORBIDDEN)
+        order = get_object_or_404(Order, id=order_id, customer=request.user)
+        serializer = OrderFeedbackSerializer(data=request.data, context={'order': order, 'customer': request.user})
+        if serializer.is_valid():
+            feedback = serializer.save()
+            logger.info(f"Feedback created for order: {order.order_number}")
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Error creating order feedback: {str(e)}")
+        return Response({'error': format_exception(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def create_return_request(request, order_id):
+    """Create return request for an order - only for customers"""
+    try:
+        if request.user.user_type != 'customer':
+            return Response({'error': 'Only customers can create return requests'}, status=status.HTTP_403_FORBIDDEN)
+        order = get_object_or_404(Order, id=order_id, customer=request.user)
+        serializer = OrderReturnSerializer(data=request.data, context={'order': order, 'customer': request.user})
+        if serializer.is_valid():
+            return_request = serializer.save()
+            logger.info(f"Return request created for order: {order.order_number}")
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Error creating return request: {str(e)}")
+        return Response({'error': format_exception(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
