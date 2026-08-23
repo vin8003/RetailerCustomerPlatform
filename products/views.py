@@ -26,7 +26,7 @@ from .models import (
     ProductUpload, ProductInventoryLog, MasterProduct,
     ProductUploadSession, UploadSessionItem, ProductBatch,
 )
-from products.inventory_service import apply_stock_decrease, apply_stock_increase
+from products.inventory_service import apply_stock_decrease, apply_stock_increase, log_inventory_change
 from .serializers import (
     ProductListSerializer, ProductDetailSerializer, ProductCreateSerializer,
     ProductUpdateSerializer, ProductCategorySerializer, ProductBrandSerializer,
@@ -640,14 +640,14 @@ def update_product(request, product_id):
                     quantity_change = new_quantity - old_quantity
                     log_type = 'added' if quantity_change > 0 else 'removed'
 
-                    ProductInventoryLog.objects.create(
+                    log_inventory_change(
                         product=product,
                         log_type=log_type,
                         quantity_change=abs(quantity_change),
                         previous_quantity=old_quantity,
                         new_quantity=new_quantity,
                         reason='Product update',
-                        created_by=request.user
+                        created_by=request.user,
                     )
 
                 # Pre-fetch active offers for optimization
@@ -780,11 +780,12 @@ def bulk_update_products(request):
                         
                 if 'quantity' in item:
                     try:
-                        new_quantity = int(item['quantity'])
+                        new_quantity = Decimal(str(item['quantity']))
                         if new_quantity >= 0:
                             if old_quantity != new_quantity:
+                                old_qty = Decimal(str(old_quantity))
                                 if product.has_batches:
-                                    delta = Decimal(str(new_quantity)) - Decimal(str(old_quantity))
+                                    delta = new_quantity - old_qty
                                     target_batch = (
                                         product.batches.filter(batch_number='INITIAL-STOCK').first()
                                         or product.batches.filter(is_active=True).order_by('created_at').first()
@@ -799,19 +800,19 @@ def bulk_update_products(request):
                                             allow_negative=True,
                                         )
                                     product.refresh_from_db()
-                                    new_quantity = int(product.quantity)
+                                    new_quantity = Decimal(str(product.quantity))
                                 else:
                                     product.quantity = new_quantity
                                 changed = True
 
-                                quantity_change = new_quantity - int(old_quantity)
+                                quantity_change = new_quantity - old_qty
                                 log_type = 'added' if quantity_change > 0 else 'removed'
                                 logs_to_create.append(
                                     ProductInventoryLog(
                                         product=product,
                                         log_type=log_type,
                                         quantity_change=abs(quantity_change),
-                                        previous_quantity=old_quantity,
+                                        previous_quantity=old_qty,
                                         new_quantity=new_quantity,
                                         reason='Bulk update',
                                         created_by=request.user
