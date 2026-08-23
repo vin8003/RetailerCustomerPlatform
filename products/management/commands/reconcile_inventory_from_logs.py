@@ -1,23 +1,27 @@
 """
 Replay inventory logs to repair product/batch drift (KAN-75).
 
-Default is dry-run — safe to review on production DB without writing.
-Use --apply only on staging or after explicit approval (not on prod directly).
+Default is dry-run — no writes and no row locks. Use --apply only on staging
+or after explicit approval (not on prod directly).
+
+--apply without --product-id rewrites every selected SKU; require
+--confirm-all-drifted for that blast radius.
 """
 from decimal import Decimal
 
-from django.db.models import Sum
-
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
+from django.db.models import DecimalField, F, Q, Sum, Value
+from django.db.models.functions import Coalesce
 
 from products.inventory_service import reconcile_product_from_logs
-from products.models import Product, ProductBatch
+from products.models import Product
 
 
 class Command(BaseCommand):
     help = (
         'Replay product_inventory_log movements to repair stock drift. '
-        'Dry-run by default; pass --apply to write changes.'
+        'Dry-run by default; pass --apply to write changes. '
+        '--apply without --product-id also requires --confirm-all-drifted.'
     )
 
     def add_arguments(self, parser):
@@ -36,6 +40,11 @@ class Command(BaseCommand):
             action='store_true',
             help='Write repaired quantities (default is dry-run only)',
         )
+        parser.add_argument(
+            '--confirm-all-drifted',
+            action='store_true',
+            help='Required with --apply when --product-id is omitted (bulk rewrite)',
+        )
 
     def handle(self, *args, **options):
         dry_run = not options['apply']
@@ -49,21 +58,30 @@ class Command(BaseCommand):
             )
             return
 
+        if options['apply'] and not product_id and not options.get('confirm_all_drifted'):
+            raise CommandError(
+                '--apply without --product-id rewrites every selected SKU. '
+                'Re-run with --confirm-all-drifted, or pass --product-id=<id>.'
+            )
+
         products = Product.objects.filter(track_inventory=True)
         if product_id:
             products = products.filter(id=product_id)
         if drifted_only:
-            drifted_ids = []
-            for product in products.filter(has_batches=True):
-                batch_sum = (
-                    product.batches.filter(is_active=True).aggregate(
-                        total=Sum('quantity')
-                    )['total']
-                    or Decimal('0')
+            products = (
+                products.filter(has_batches=True)
+                .annotate(
+                    batch_sum=Coalesce(
+                        Sum(
+                            'batches__quantity',
+                            filter=Q(batches__is_active=True),
+                        ),
+                        Value(0),
+                        output_field=DecimalField(max_digits=12, decimal_places=3),
+                    )
                 )
-                if Decimal(str(product.quantity)) != Decimal(str(batch_sum)):
-                    drifted_ids.append(product.id)
-            products = products.filter(id__in=drifted_ids)
+                .exclude(quantity=F('batch_sum'))
+            )
 
         if not products.exists():
             self.stdout.write(self.style.WARNING('No matching products found.'))
@@ -82,12 +100,16 @@ class Command(BaseCommand):
             )
             if result['phantom_batch_ids']:
                 line += f" phantom_batches={result['phantom_batch_ids']}"
+            if not result.get('base_trusted', True):
+                line += ' base_untrusted=True'
             if dry_run:
                 self.stdout.write(line)
             else:
                 self.stdout.write(self.style.SUCCESS(
                     f"{line} applied={result.get('applied_quantity')}"
                 ))
+            if result.get('warning'):
+                self.stdout.write(self.style.WARNING(f"  warning: {result['warning']}"))
 
         if dry_run:
             self.stdout.write(

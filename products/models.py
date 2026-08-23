@@ -643,6 +643,7 @@ class ProductInventoryLog(models.Model):
         ('returned', 'Returned'),
         ('damaged', 'Damaged'),
         ('expired', 'Expired'),
+        ('reconciled', 'Reconciled'),
     ]
     
     product = models.ForeignKey(
