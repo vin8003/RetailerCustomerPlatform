@@ -1,6 +1,11 @@
 from django.db import transaction
 from django.utils import timezone
-from products.models import Product, ProductBatch, ProductInventoryLog, SupplierLedger
+from products.inventory_service import (
+    apply_stock_decrease,
+    apply_stock_increase,
+    log_inventory_change,
+)
+from products.models import SupplierLedger
 from retailers.models import RetailerCustomerMapping
 from .models import SalesReturn, SalesReturnItem, PurchaseReturn, PurchaseReturnItem
 from django.db.models import Sum
@@ -41,18 +46,19 @@ def process_sales_return(retailer, order, items_data, refund_payment_mode, reaso
                     raise ValueError(f"Cannot return {qty} units of {product.name}. Already returned: {already_returned}, Purchased: {order_item.quantity}")
 
             # 1. Update Inventory
-            product.increase_quantity(qty, batch=batch)
-            
+            prev_qty = product.quantity
+            new_qty = apply_stock_increase(product, qty, batch=batch)
+
             # 2. Log Change
-            ProductInventoryLog.objects.create(
+            log_inventory_change(
                 product=product,
                 batch=batch,
                 log_type='returned',
                 quantity_change=qty,
-                previous_quantity=product.quantity - qty,
-                new_quantity=product.quantity,
+                previous_quantity=prev_qty,
+                new_quantity=new_qty,
                 reason=f"Sales Return: {reason}" if reason else "Sales Return",
-                created_by=created_by
+                created_by=created_by,
             )
             
             item_total = qty * unit_price
@@ -182,18 +188,19 @@ def process_purchase_return(retailer, supplier, invoice, items_data, notes, crea
                     raise ValueError(f"Cannot return {qty} units of {product.name}. Already returned: {already_returned}, Purchased: {purchase_item.quantity}")
 
             # 1. Update Inventory (- quantity)
-            product.reduce_quantity(qty, batch=batch, allow_negative=True)
-            
+            prev_qty = product.quantity
+            new_qty = apply_stock_decrease(product, qty, batch=batch, allow_negative=True)
+
             # 2. Log Change
-            ProductInventoryLog.objects.create(
+            log_inventory_change(
                 product=product,
                 batch=batch,
                 log_type='removed',
                 quantity_change=-qty,
-                previous_quantity=product.quantity + qty,
-                new_quantity=product.quantity,
+                previous_quantity=prev_qty,
+                new_quantity=new_qty,
                 reason=f"Purchase Return to Supplier: {notes}" if notes else "Purchase Return",
-                created_by=created_by
+                created_by=created_by,
             )
             
             item_total = qty * price
