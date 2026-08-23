@@ -9,6 +9,11 @@ from django.db import transaction
 from retailers.models import Supplier, RetailerProfile, RetailerCustomerMapping
 from retailers.serializers import SupplierSerializer
 from products.models import PurchaseInvoice, PurchaseItem, SupplierLedger, Product, ProductBatch, ProductInventoryLog
+from products.inventory_service import (
+    apply_stock_decrease,
+    apply_stock_increase,
+    log_inventory_change,
+)
 from orders.models import Order, OrderItem
 from django.db.models import Sum, Q, Count, F, Case, When, DecimalField
 from products.serializers import PurchaseInvoiceSerializer, SupplierLedgerSerializer
@@ -66,18 +71,21 @@ class PurchaseInvoiceViewSet(viewsets.ModelViewSet):
             for old_item in old_items:
                 product = old_item.product
                 if product:
-                    Product.objects.filter(id=product.id, retailer=retailer).update(
-                        quantity=F('quantity') - old_item.quantity
+                    product = Product.objects.select_for_update().get(id=product.id, retailer=retailer)
+                    prev_qty = product.quantity
+                    apply_stock_decrease(
+                        product,
+                        old_item.quantity,
+                        allow_negative=True,
                     )
-                    product.refresh_from_db()
-                    ProductInventoryLog.objects.create(
+                    log_inventory_change(
                         product=product,
-                        created_by=self.request.user,
-                        quantity_change=-old_item.quantity,
-                        previous_quantity=product.quantity + old_item.quantity,
-                        new_quantity=product.quantity,
                         log_type='removed',
-                        reason=f'Purchase Invoice Deleted: #{instance.invoice_number}'
+                        quantity_change=-old_item.quantity,
+                        previous_quantity=prev_qty,
+                        new_quantity=product.quantity,
+                        reason=f'Purchase Invoice Deleted: #{instance.invoice_number}',
+                        created_by=self.request.user,
                     )
             
             # 2. Delete invoice 
@@ -398,15 +406,16 @@ def create_pos_order(request):
                     unit_price = info['final_price']
                     qty = info.get('total_display_quantity', qty)
                 
-                # Calculate previous quantity for logging
-                prev_qty = batch.quantity if (batch and product.track_inventory) else product.quantity
-                
+                # Always log product-level balances (batch_id is audit-only)
+                prev_qty = product.quantity
+
                 # Reduce inventory using the model method (handles FIFO if batch is None)
                 # POS allows negative stock (allow_negative=True)
                 if not product.reduce_quantity(qty, batch=batch, allow_negative=True):
                     raise ValueError(f"Unexpected error reducing stock for {product.name}")
-                
-                new_qty = batch.quantity if (batch and product.track_inventory) else product.quantity
+
+                product.refresh_from_db()
+                new_qty = product.quantity
 
                 OrderItem.objects.create(
                     order=order,
@@ -421,8 +430,7 @@ def create_pos_order(request):
                 )
 
                 if product.track_inventory:
-                    # Log inventory
-                    ProductInventoryLog.objects.create(
+                    log_inventory_change(
                         product=product,
                         batch=batch,
                         created_by=request.user,
@@ -430,7 +438,7 @@ def create_pos_order(request):
                         previous_quantity=prev_qty,
                         new_quantity=new_qty,
                         log_type='sold',
-                        reason=f'POS Sale: Order #{order.order_number}'
+                        reason=f'POS Sale: Order #{order.order_number}',
                     )
 
         response_data = {

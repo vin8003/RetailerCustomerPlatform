@@ -24,7 +24,7 @@ from decimal import Decimal, InvalidOperation
 from .models import (
     Product, ProductCategory, ProductBrand, ProductReview,
     ProductUpload, ProductInventoryLog, MasterProduct,
-    ProductUploadSession, UploadSessionItem
+    ProductUploadSession, UploadSessionItem, ProductBatch,
 )
 from .serializers import (
     ProductListSerializer, ProductDetailSerializer, ProductCreateSerializer,
@@ -781,11 +781,24 @@ def bulk_update_products(request):
                     try:
                         new_quantity = int(item['quantity'])
                         if new_quantity >= 0:
-                            product.quantity = new_quantity
-                            changed = True
-                            
                             if old_quantity != new_quantity:
-                                quantity_change = new_quantity - old_quantity
+                                if product.has_batches:
+                                    product.quantity = new_quantity
+                                    product.save(update_fields=['quantity'])
+                                    initial = product.batches.filter(
+                                        batch_number='INITIAL-STOCK'
+                                    ).first()
+                                    if initial:
+                                        initial.quantity = new_quantity
+                                        initial.save(update_fields=['quantity'])
+                                    product.sync_inventory_from_batches()
+                                    product.refresh_from_db()
+                                    new_quantity = int(product.quantity)
+                                else:
+                                    product.quantity = new_quantity
+                                changed = True
+
+                                quantity_change = new_quantity - int(old_quantity)
                                 log_type = 'added' if quantity_change > 0 else 'removed'
                                 logs_to_create.append(
                                     ProductInventoryLog(
