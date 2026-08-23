@@ -26,6 +26,7 @@ from .models import (
     ProductUpload, ProductInventoryLog, MasterProduct,
     ProductUploadSession, UploadSessionItem, ProductBatch,
 )
+from products.inventory_service import apply_stock_decrease, apply_stock_increase
 from .serializers import (
     ProductListSerializer, ProductDetailSerializer, ProductCreateSerializer,
     ProductUpdateSerializer, ProductCategorySerializer, ProductBrandSerializer,
@@ -783,15 +784,20 @@ def bulk_update_products(request):
                         if new_quantity >= 0:
                             if old_quantity != new_quantity:
                                 if product.has_batches:
-                                    product.quantity = new_quantity
-                                    product.save(update_fields=['quantity'])
-                                    initial = product.batches.filter(
-                                        batch_number='INITIAL-STOCK'
-                                    ).first()
-                                    if initial:
-                                        initial.quantity = new_quantity
-                                        initial.save(update_fields=['quantity'])
-                                    product.sync_inventory_from_batches()
+                                    delta = Decimal(str(new_quantity)) - Decimal(str(old_quantity))
+                                    target_batch = (
+                                        product.batches.filter(batch_number='INITIAL-STOCK').first()
+                                        or product.batches.filter(is_active=True).order_by('created_at').first()
+                                    )
+                                    if delta > 0:
+                                        apply_stock_increase(product, delta, batch=target_batch)
+                                    else:
+                                        apply_stock_decrease(
+                                            product,
+                                            abs(delta),
+                                            batch=target_batch,
+                                            allow_negative=True,
+                                        )
                                     product.refresh_from_db()
                                     new_quantity = int(product.quantity)
                                 else:
