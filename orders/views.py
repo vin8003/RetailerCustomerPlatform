@@ -26,8 +26,15 @@ from retailers.serializers import RetailerReviewSerializer
 from customers.models import CustomerAddress, CustomerLoyalty
 from django.db.models import Exists, OuterRef, Prefetch
 from common.notifications import send_push_notification
+from .views_ops import get_order_stats, get_retailer_reviews, modify_order, confirm_modification
+from .views_chat import (
+    get_order_chat, send_order_message, create_retailer_rating,
+    mark_chat_read, update_estimated_time, submit_payment, verify_payment,
+)
+from .list_rating import patch as _patch_order_list_rating
 
 logger = logging.getLogger(__name__)
+_patch_order_list_rating()
 
 
 class OrderPagination(PageNumberPagination):
@@ -277,6 +284,3 @@ def create_return_request(request, order_id):
     except Exception as e:
         logger.error(f"Error creating return request: {str(e)}")
         return Response({'error': format_exception(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-# FILE_CONTINUES_IN_NEXT_COMMIT
