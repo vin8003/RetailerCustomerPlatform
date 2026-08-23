@@ -303,42 +303,27 @@ FCM_DJANGO_SETTINGS = {
 # Firebase Admin SDK Initialization
 import firebase_admin
 from firebase_admin import credentials
+import json
 
 if not firebase_admin._apps:
     try:
-        # Check for service account JSON
-        cred_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
-        print(f"DEBUG: Ensure CWD is {os.getcwd()}")
-        print(f"DEBUG: GOOGLE_APPLICATION_CREDENTIALS = {cred_path}")
-        
-        if cred_path and os.path.exists(cred_path):
-            print(f"DEBUG: Found valid credential file at {cred_path}")
-            cred = credentials.Certificate(cred_path)
+        # 1. Try initializing via JSON string env var (ideal for production)
+        firebase_json = os.getenv('FIREBASE_SERVICE_ACCOUNT_JSON')
+        if firebase_json:
+            cred_dict = json.loads(firebase_json)
+            cred = credentials.Certificate(cred_dict)
             firebase_admin.initialize_app(cred)
         else:
-            print(f"DEBUG: Credential file NOT found or var not set. Using default options.")
-            # Default initialization (uses GOOGLE_APPLICATION_CREDENTIALS if set,
-            # but won't crash if it's not and we are just testing)
-            firebase_admin.initialize_app(options={'projectId': 'ordereasy-win'})
-    except Exception as e:
-        print(f"Warning: Firebase Admin SDK could not be initialized: {e}")
-if not ('test' in sys.argv or 'pytest' in sys.modules):
-    if not firebase_admin._apps:
-        try:
-            # Check for service account JSON
+            # 2. Fallback to file path
             cred_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
-            
             if cred_path and os.path.exists(cred_path):
                 cred = credentials.Certificate(cred_path)
                 firebase_admin.initialize_app(cred)
             else:
-                # Default initialization (uses GOOGLE_APPLICATION_CREDENTIALS if set)
-                firebase_admin.initialize_app(options={'projectId': 'buyeasy-4003f'})
-        except Exception as e:
-            print(f"Warning: Firebase Admin SDK could not be initialized: {e}")
-else:
-     # Mock or skip during tests
-     pass
+                # 3. Default initialization
+                firebase_admin.initialize_app(options={'projectId': 'ordereasy-win'})
+    except Exception as e:
+        print(f"Warning: Firebase Admin SDK could not be initialized: {e}")
 
 
 AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID', '')
