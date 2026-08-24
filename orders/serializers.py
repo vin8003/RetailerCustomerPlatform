@@ -574,7 +574,7 @@ class OrderCreateSerializer(serializers.Serializer):
     
     def create(self, validated_data):
         """Create order from cart"""
-        from retailers.models import RetailerProfile
+        from retailers.models import RetailerProfile, RetailerCustomerMapping
         
         customer = self.context['customer']
         retailer = RetailerProfile.objects.get(id=validated_data['retailer_id'])
@@ -705,6 +705,12 @@ class OrderCreateSerializer(serializers.Serializer):
                 )
             
             order = Order.objects.create(**order_data)
+
+            RetailerCustomerMapping.objects.get_or_create(
+                retailer=retailer,
+                customer=customer,
+                defaults={'customer_type': 'online'},
+            )
             
             # Create Offer Redemptions
             from offers.models import OfferRedemption
