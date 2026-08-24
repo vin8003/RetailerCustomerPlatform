@@ -1,6 +1,7 @@
 from decimal import Decimal
 from rest_framework import viewsets, permissions, status
 from rest_framework.exceptions import ValidationError
+from rest_framework.filters import SearchFilter
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from django.utils import timezone
@@ -20,12 +21,12 @@ from customers.models import CustomerProfile
 class SupplierViewSet(viewsets.ModelViewSet):
     serializer_class = SupplierSerializer
     permission_classes = [permissions.IsAuthenticated]
+    filter_backends = [SearchFilter]
+    search_fields = ['company_name', 'contact_person', 'phone_number']
 
     def get_queryset(self):
         retailer = RetailerProfile.objects.get(user=self.request.user)
         return Supplier.objects.filter(retailer=retailer).order_by('-id')
-    
-    search_fields = ['company_name', 'contact_person', 'phone_number', 'email']
 
     def perform_create(self, serializer):
         retailer = RetailerProfile.objects.get(user=self.request.user)
