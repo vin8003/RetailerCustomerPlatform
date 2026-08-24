@@ -5,6 +5,7 @@ from decimal import Decimal
 from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVector
 from common.utils import generate_upload_path, resize_image
+from .customer_stock import ProductManager
 
 
 class ProductCategory(models.Model):
@@ -328,6 +329,8 @@ class Product(models.Model):
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = ProductManager()
     
     class Meta:
         db_table = 'product'
@@ -926,4 +929,3 @@ class SupplierLedger(models.Model):
 
     def __str__(self):
         return f"{self.transaction_type} of {self.amount} on {self.date}"
-

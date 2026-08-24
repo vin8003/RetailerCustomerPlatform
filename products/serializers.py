@@ -9,6 +9,7 @@ from .models import (
     ProductUploadSession, UploadSessionItem,
     PurchaseInvoice, PurchaseItem, SupplierLedger
 )
+from .customer_stock import filter_in_stock_for_customer
 import logging
 
 logger = logging.getLogger(__name__)
@@ -532,12 +533,12 @@ class ProductDetailSerializer(serializers.ModelSerializer):
         """Get all other active products in the same group for this retailer, sorting parent/child first"""
         try:
             if obj.product_group:
-                siblings = Product.objects.filter(
+                siblings = filter_in_stock_for_customer(Product.objects.filter(
                     retailer=obj.retailer,
                     product_group=obj.product_group,
                     is_active=True,
                     is_available=True
-                ).exclude(id=obj.id).only(
+                )).exclude(id=obj.id).only(
                     'id', 'name', 'unit', 'price', 'original_price', 
                     'is_parent_bulk', 'parent_bulk_product'
                 )
@@ -1250,4 +1251,3 @@ class SupplierLedgerSerializer(serializers.ModelSerializer):
 
     def get_reference_invoice_number(self, obj):
         return obj.reference_invoice.invoice_number if obj.reference_invoice else None
-
