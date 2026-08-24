@@ -1044,6 +1044,15 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
                 )
             })
 
+    def _validate_supplier_active_for_purchase(self, supplier, previous_supplier=None):
+        if supplier is None or supplier.is_active:
+            return
+        if previous_supplier is not None and previous_supplier.id == supplier.id:
+            return
+        raise serializers.ValidationError({
+            'supplier': 'This supplier is inactive and cannot be used for new purchases.'
+        })
+
     def create(self, validated_data):
         items_data = validated_data.pop('items', [])
         retailer = validated_data.get('retailer')
@@ -1051,6 +1060,7 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
         from products.models import ProductInventoryLog
 
         self._validate_invoice_products_for_retailer(items_data, retailer)
+        self._validate_supplier_active_for_purchase(supplier)
         
         with transaction.atomic():
             # Calculate total from items to ensure accuracy
@@ -1131,6 +1141,10 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
         # PATCH with only scalar fields (e.g. bill_image) must not reverse stock
         # or delete line items. Only rebuild lines when items is present.
         if 'items' not in validated_data:
+            new_supplier = validated_data.get('supplier', instance.supplier)
+            self._validate_supplier_active_for_purchase(
+                new_supplier, previous_supplier=instance.supplier
+            )
             for attr, value in validated_data.items():
                 setattr(instance, attr, value)
             instance.save()
@@ -1143,6 +1157,9 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
         from products.models import ProductInventoryLog
 
         self._validate_invoice_products_for_retailer(items_data, retailer)
+        self._validate_supplier_active_for_purchase(
+            new_supplier, previous_supplier=instance.supplier
+        )
         
         with transaction.atomic():
             # --- 1. REVERSE OLD IMPACTS ---

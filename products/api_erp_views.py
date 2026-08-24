@@ -26,11 +26,28 @@ class SupplierViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         retailer = RetailerProfile.objects.get(user=self.request.user)
-        return Supplier.objects.filter(retailer=retailer).order_by('-id')
+        qs = Supplier.objects.filter(retailer=retailer).order_by('-id')
+        is_active = self.request.query_params.get('is_active')
+        if is_active is not None:
+            qs = qs.filter(is_active=is_active.lower() == 'true')
+        return qs
 
     def perform_create(self, serializer):
         retailer = RetailerProfile.objects.get(user=self.request.user)
         serializer.save(retailer=retailer)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if (
+            instance.purchase_invoices.exists()
+            or instance.ledger_entries.exists()
+            or instance.purchase_returns.exists()
+        ):
+            raise ValidationError(
+                "Cannot delete a supplier linked to purchases, payments, ledger, or returns. "
+                "Deactivate instead."
+            )
+        return super().destroy(request, *args, **kwargs)
 
 
 class PurchaseInvoiceViewSet(viewsets.ModelViewSet):

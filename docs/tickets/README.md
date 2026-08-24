@@ -40,6 +40,7 @@ They are **not** automatically durable knowledge. Many pages are builder briefs,
 | [KAN-69.md](KAN-69.md) | durable | [customer-retailer-city-map](../requirements/customer-retailer-city-map.md) |
 | [KAN-70.md](KAN-70.md) | durable | [customer-profile-credit](../requirements/customer-profile-credit.md) |
 | [KAN-72.md](KAN-72.md) | durable | [product-search-barcodes](../requirements/product-search-barcodes.md) |
+| [KAN-78.md](KAN-78.md) | durable | [supplier-edit-and-deactivate](../requirements/supplier-edit-and-deactivate.md) |
 | [KAN-79.md](KAN-79.md) | temporary | — (Khata supplier search 500) |
 
 Skipped (no Confluence page at migration time): KAN-48, KAN-49, KAN-52, KAN-57.
