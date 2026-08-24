@@ -22,4 +22,6 @@ Ticket snapshots (acceptance context, ship notes) stay in [`../tickets/`](../tic
 | [customer-retailer-city-map.md](customer-retailer-city-map.md) | KAN-69 |
 | [product-search-barcodes.md](product-search-barcodes.md) | KAN-72 |
 | [customer-hide-oos.md](customer-hide-oos.md) | KAN-63 |
+| [parent-child-visibility.md](parent-child-visibility.md) | KAN-49 |
+| [returned-orders-filter.md](returned-orders-filter.md) | KAN-77 |
 | [supplier-edit-and-deactivate.md](supplier-edit-and-deactivate.md) | KAN-78 |
