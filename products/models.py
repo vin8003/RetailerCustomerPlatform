@@ -387,8 +387,9 @@ class Product(models.Model):
                 if child.conversion_factor and child.conversion_factor > 0:
                     child.quantity = self.quantity / child.conversion_factor
                     child.track_inventory = self.track_inventory
-                    child.is_available = self.is_available
-                    super(Product, child).save(update_fields=['quantity', 'track_inventory', 'is_available'])
+                    # KAN-49: do not copy parent is_available onto children.
+                    # Parent visibility is independent; children stay sellable.
+                    super(Product, child).save(update_fields=['quantity', 'track_inventory'])
 
     def sync_inventory_from_batches(self):
         """Update product quantity from sum of active batches (concurrency-safe)"""
