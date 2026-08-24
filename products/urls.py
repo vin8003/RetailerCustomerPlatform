@@ -1,6 +1,7 @@
 from django.urls import path
 from . import views, api_erp_views
 from .customer_stock import hide_oos_for_customer
+from .frequently_bought import get_frequently_bought_together
 from rest_framework.routers import DefaultRouter
 
 erp_router = DefaultRouter()
@@ -49,6 +50,11 @@ urlpatterns = [
     path('retailer/<int:retailer_id>/best-selling/', hide_oos_for_customer(views.get_best_selling_products), name='get_best_selling_products'),
     path('retailer/<int:retailer_id>/buy-again/', hide_oos_for_customer(views.get_buy_again_products), name='get_buy_again_products'),
     path('retailer/<int:retailer_id>/recommended/', hide_oos_for_customer(views.get_recommended_products), name='get_recommended_products'),
+    path(
+        'retailer/<int:retailer_id>/frequently-bought-together/',
+        get_frequently_bought_together,
+        name='get_frequently_bought_together',
+    ),
     
     # New Discovery Lanes
     path('retailer/<int:retailer_id>/deals-of-the-day/', hide_oos_for_customer(views.get_deals_of_the_day), name='get_deals_of_the_day'),
