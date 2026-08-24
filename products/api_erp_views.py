@@ -544,6 +544,38 @@ def search_pos_customers(request):
         })
         seen_mobiles.add(mobile)
 
+    # Online/app customers who previously shopped here but may not have a mapping yet.
+    if len(suggestions) < 8:
+        order_customer_filter = (
+            Q(customer__username__endswith=last_10) |
+            Q(customer__phone_number__endswith=last_10)
+        ) if len(query) >= 10 and last_10 else (
+            Q(customer__username__icontains=query) |
+            Q(customer__phone_number__icontains=query) |
+            Q(customer__first_name__icontains=query) |
+            Q(customer__last_name__icontains=query)
+        )
+        app_orders = (
+            Order.objects.filter(retailer=retailer, customer__isnull=False)
+            .filter(order_customer_filter)
+            .select_related('customer')
+            .order_by('-created_at')[:30]
+        )
+        for order in app_orders:
+            u = order.customer
+            mobile = normalize_phone_number(u.username) or normalize_phone_number(u.phone_number or '')
+            if not mobile or mobile in seen_mobiles:
+                continue
+            name = (u.get_full_name() or '').strip() or u.username
+            suggestions.append({
+                'mobile': mobile,
+                'name': name,
+                'status': 'verified' if u.registration_status == 'registered' else 'shadow'
+            })
+            seen_mobiles.add(mobile)
+            if len(suggestions) >= 8:
+                break
+
     # This retailer's walk-in guests (may not have a mapping yet)
     guest_orders = Order.objects.filter(
         retailer=retailer,
