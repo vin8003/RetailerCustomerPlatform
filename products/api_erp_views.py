@@ -9,6 +9,12 @@ from django.db import transaction
 from retailers.models import Supplier, RetailerProfile, RetailerCustomerMapping
 from retailers.serializers import SupplierSerializer
 from products.models import PurchaseInvoice, PurchaseItem, SupplierLedger, Product, ProductBatch, ProductInventoryLog
+from products.inventory_service import (
+    apply_stock_decrease,
+    apply_stock_increase,
+    log_inventory_change,
+    product_level_log_balances,
+)
 from orders.models import Order, OrderItem
 from django.db.models import Sum, Q, Count, F, Case, When, DecimalField
 from products.serializers import PurchaseInvoiceSerializer, SupplierLedgerSerializer
@@ -66,18 +72,21 @@ class PurchaseInvoiceViewSet(viewsets.ModelViewSet):
             for old_item in old_items:
                 product = old_item.product
                 if product:
-                    Product.objects.filter(id=product.id, retailer=retailer).update(
-                        quantity=F('quantity') - old_item.quantity
+                    product = Product.objects.select_for_update().get(id=product.id, retailer=retailer)
+                    prev_qty = product.quantity
+                    apply_stock_decrease(
+                        product,
+                        old_item.quantity,
+                        allow_negative=True,
                     )
-                    product.refresh_from_db()
-                    ProductInventoryLog.objects.create(
+                    log_inventory_change(
                         product=product,
-                        created_by=self.request.user,
-                        quantity_change=-old_item.quantity,
-                        previous_quantity=product.quantity + old_item.quantity,
-                        new_quantity=product.quantity,
                         log_type='removed',
-                        reason=f'Purchase Invoice Deleted: #{instance.invoice_number}'
+                        quantity_change=-old_item.quantity,
+                        previous_quantity=prev_qty,
+                        new_quantity=product.quantity,
+                        reason=f'Purchase Invoice Deleted: #{instance.invoice_number}',
+                        created_by=self.request.user,
                     )
             
             # 2. Delete invoice 
@@ -398,15 +407,32 @@ def create_pos_order(request):
                     unit_price = info['final_price']
                     qty = info.get('total_display_quantity', qty)
                 
-                # Calculate previous quantity for logging
-                prev_qty = batch.quantity if (batch and product.track_inventory) else product.quantity
-                
-                # Reduce inventory using the model method (handles FIFO if batch is None)
+                # Always log product-level balances (batch_id is audit-only)
+                prev_qty = product.quantity
+
+                # If POS scanned an empty/stale barcode batch but other batches
+                # still hold stock, deduct FIFO instead of driving that batch
+                # negative and snapping product.quantity to the bad sum.
+                stock_batch = batch
+                if (
+                    batch is not None
+                    and product.has_batches
+                    and product.track_inventory
+                    and batch.quantity < qty
+                ):
+                    available_elsewhere = (
+                        product.batches.filter(is_active=True)
+                        .exclude(pk=batch.pk)
+                        .aggregate(total=Sum('quantity'))['total']
+                        or Decimal('0')
+                    )
+                    if available_elsewhere >= qty:
+                        stock_batch = None
+
                 # POS allows negative stock (allow_negative=True)
-                if not product.reduce_quantity(qty, batch=batch, allow_negative=True):
-                    raise ValueError(f"Unexpected error reducing stock for {product.name}")
-                
-                new_qty = batch.quantity if (batch and product.track_inventory) else product.quantity
+                new_qty = apply_stock_decrease(
+                    product, qty, batch=stock_batch, allow_negative=True
+                )
 
                 OrderItem.objects.create(
                     order=order,
@@ -421,8 +447,7 @@ def create_pos_order(request):
                 )
 
                 if product.track_inventory:
-                    # Log inventory
-                    ProductInventoryLog.objects.create(
+                    log_inventory_change(
                         product=product,
                         batch=batch,
                         created_by=request.user,
@@ -430,7 +455,7 @@ def create_pos_order(request):
                         previous_quantity=prev_qty,
                         new_quantity=new_qty,
                         log_type='sold',
-                        reason=f'POS Sale: Order #{order.order_number}'
+                        reason=f'POS Sale: Order #{order.order_number}',
                     )
 
         response_data = {
@@ -582,16 +607,24 @@ def get_inventory_ledger(request):
     except Product.DoesNotExist:
         return Response({'error': 'Product not found'}, status=status.HTTP_404_NOT_FOUND)
         
-    logs = ProductInventoryLog.objects.filter(product=product).order_by('-created_at')[:100]
-    
+    logs = (
+        ProductInventoryLog.objects.filter(product=product)
+        .select_related('created_by')
+        .order_by('-created_at')[:100]
+    )
+    balances = product_level_log_balances(product)
+
     data = []
     for log in logs:
+        prev_qty, new_qty = balances.get(
+            log.pk, (log.previous_quantity, log.new_quantity)
+        )
         data.append({
             'id': log.id,
             'log_type': log.log_type,
             'quantity_change': log.quantity_change,
-            'previous_quantity': log.previous_quantity,
-            'new_quantity': log.new_quantity,
+            'previous_quantity': prev_qty,
+            'new_quantity': new_qty,
             'reason': log.reason,
             'created_at': log.created_at,
             'created_by': log.created_by.get_full_name() if log.created_by else 'System'
