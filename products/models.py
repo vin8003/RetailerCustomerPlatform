@@ -387,6 +387,47 @@ class Product(models.Model):
                     child.is_available = self.is_available
                     super(Product, child).save(update_fields=['quantity', 'track_inventory', 'is_available'])
 
+    def _sync_unbatched_row(self):
+        """
+        When multi-batch is off, keep the hidden INITIAL-STOCK row equal to SKU qty.
+
+        Purchase used to write Product.quantity via F() while POS sold against
+        ProductBatch.quantity. The audit trail then jumped (e.g. 98 → -1).
+        """
+        if self.has_batches:
+            return
+        batch = (
+            self.batches.filter(is_active=True).order_by('id').first()
+            or self.batches.filter(batch_number='INITIAL-STOCK').first()
+            or self.batches.order_by('id').first()
+        )
+        if batch is None:
+            return
+        if batch.quantity != self.quantity:
+            type(batch).objects.filter(pk=batch.pk).update(quantity=self.quantity)
+            batch.quantity = self.quantity
+
+    def apply_stock_delta(self, delta, batch=None, allow_negative=True):
+        """
+        Signed stock change used by purchases and POS so SKU qty and batch qty
+        never diverge. Returns (previous_quantity, new_quantity) at SKU level.
+        """
+        delta = Decimal(str(delta))
+        previous = self.quantity
+        if delta == 0:
+            return previous, previous
+        if not self.track_inventory:
+            return previous, previous
+        if delta > 0:
+            ok = self.increase_quantity(delta, batch=batch)
+            if not ok:
+                self.quantity = previous + delta
+                self.save(update_fields=['quantity'])
+                self._sync_unbatched_row()
+        else:
+            self.reduce_quantity(-delta, batch=batch, allow_negative=allow_negative)
+        return previous, self.quantity
+
     def sync_inventory_from_batches(self):
         """Update product quantity from sum of active batches (concurrency-safe)"""
         if self.has_batches:
@@ -532,6 +573,7 @@ class Product(models.Model):
             if allow_negative or self.quantity >= quantity:
                 self.quantity -= quantity
                 self.save()
+                self._sync_unbatched_row()
                 return True
         return False
     
@@ -560,12 +602,16 @@ class Product(models.Model):
                     b.quantity += quantity
                     b.save()
                 else:
-                    return False
+                    # Inward must still land even if no batch row exists yet.
+                    self.quantity += quantity
+                    self.save()
+                    return True
             self.sync_inventory_from_batches()
             return True
         else:
             self.quantity += quantity
             self.save()
+            self._sync_unbatched_row()
             return True
 
 

@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from decimal import Decimal
 from django.db import transaction
-from django.db.models import Avg, F, Sum
+from django.db.models import Avg, Sum
 from returns.models import PurchaseReturnItem
 from .models import (
     Product, ProductCategory, ProductBrand, ProductImage, 
@@ -1043,11 +1043,46 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
                 )
             })
 
+    def _apply_purchase_stock(self, product, quantity, *, reason, log_type,
+                              retailer=None, purchase_price=None,
+                              new_price=None, new_orig_price=None):
+        """Move stock through Product.apply_stock_delta so batch qty stays in lockstep."""
+        from products.models import ProductInventoryLog
+
+        qs = Product.objects.select_for_update()
+        if retailer is not None:
+            qs = qs.filter(retailer=retailer)
+        product = qs.get(pk=product.pk)
+        prev, new = product.apply_stock_delta(quantity)
+        dirty = False
+        if purchase_price is not None:
+            product.purchase_price = purchase_price
+            dirty = True
+        if new_price is not None:
+            product.price = new_price
+            dirty = True
+        if new_orig_price is not None:
+            product.original_price = new_orig_price
+            dirty = True
+        if dirty:
+            product.save()
+
+        ProductInventoryLog.objects.create(
+            product=product,
+            created_by=self.context['request'].user,
+            quantity_change=quantity,
+            previous_quantity=prev,
+            new_quantity=new,
+            log_type=log_type,
+            reason=reason,
+        )
+        return product
+
+
     def create(self, validated_data):
         items_data = validated_data.pop('items', [])
         retailer = validated_data.get('retailer')
         supplier = validated_data.get('supplier')
-        from products.models import ProductInventoryLog
 
         self._validate_invoice_products_for_retailer(items_data, retailer)
         
@@ -1074,33 +1109,19 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
                 
                 # 2. Create PurchaseItem
                 item = PurchaseItem.objects.create(invoice=invoice, **item_data)
-                
-                # 3. Update Product Stock & Prices (Atomically)
-                Product.objects.filter(id=item.product.id, retailer=retailer).update(
-                    quantity=F('quantity') + item.quantity,
-                    purchase_price=item.purchase_price
-                )
-                
-                # Refresh product for logs and price updates
-                product = item.product
-                product.refresh_from_db()
-                
-                if new_price:
-                    product.price = new_price
-                if new_orig_price:
-                    product.original_price = new_orig_price
-                product.save()
-                
-                # 4. Log Inventory Change
-                ProductInventoryLog.objects.create(
-                    product=product,
-                    created_by=self.context['request'].user,
-                    quantity_change=item.quantity,
-                    previous_quantity=product.quantity - item.quantity,
-                    new_quantity=product.quantity,
+
+                # 3. Update Product Stock & Prices via the same path POS uses
+                self._apply_purchase_stock(
+                    item.product,
+                    item.quantity,
+                    reason=f'Purchase Inward: Invoice #{invoice.invoice_number}',
                     log_type='added',
-                    reason=f'Purchase Inward: Invoice #{invoice.invoice_number}'
+                    retailer=retailer,
+                    purchase_price=item.purchase_price,
+                    new_price=new_price,
+                    new_orig_price=new_orig_price,
                 )
+
 
             # (Balance updates are now handled strictly by Django Signals mathematically on Ledger)
             
@@ -1138,8 +1159,6 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
         items_data = validated_data.pop('items')
         new_supplier = validated_data.get('supplier', instance.supplier)
         retailer = instance.retailer
-        
-        from products.models import ProductInventoryLog
 
         self._validate_invoice_products_for_retailer(items_data, retailer)
         
@@ -1149,22 +1168,16 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
             # Reverse Stock (Convert to list for safety)
             old_items = list(instance.items.all())
             for old_item in old_items:
-                product = old_item.product
-                Product.objects.filter(id=product.id).update(
-                    quantity=F('quantity') - old_item.quantity
-                )
-                
-                # Log stock reversal
-                product.refresh_from_db()
-                ProductInventoryLog.objects.create(
-                    product=product,
-                    created_by=self.context['request'].user,
-                    quantity_change=-old_item.quantity,
-                    previous_quantity=product.quantity + old_item.quantity,
-                    new_quantity=product.quantity,
+                if not old_item.product:
+                    continue
+                self._apply_purchase_stock(
+                    old_item.product,
+                    -old_item.quantity,
+                    reason=f'Purchase Edit (Reversal): Invoice #{instance.invoice_number}',
                     log_type='removed',
-                    reason=f'Purchase Edit (Reversal): Invoice #{instance.invoice_number}'
+                    retailer=retailer,
                 )
+
 
             # (Reversal balance updates are now handled strictly by Django Signals via cascade deletes)
             # Clean Up Related Data
@@ -1188,31 +1201,18 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
                 new_orig_price = item_data.pop('new_original_price', None)
                 
                 item = PurchaseItem.objects.create(invoice=instance, **item_data)
-                
-                # Atomic update
-                Product.objects.filter(id=item.product.id, retailer=retailer).update(
-                    quantity=F('quantity') + item.quantity,
-                    purchase_price=item.purchase_price
-                )
-                
-                product = item.product
-                product.refresh_from_db()
-                
-                if new_price:
-                    product.price = new_price
-                if new_orig_price:
-                    product.original_price = new_orig_price
-                product.save()
-                
-                ProductInventoryLog.objects.create(
-                    product=product,
-                    created_by=self.context['request'].user,
-                    quantity_change=item.quantity,
-                    previous_quantity=product.quantity - item.quantity,
-                    new_quantity=product.quantity,
+
+                self._apply_purchase_stock(
+                    item.product,
+                    item.quantity,
+                    reason=f'Purchase Updated: Invoice #{instance.invoice_number}',
                     log_type='added',
-                    reason=f'Purchase Updated: Invoice #{instance.invoice_number}'
+                    retailer=retailer,
+                    purchase_price=item.purchase_price,
+                    new_price=new_price,
+                    new_orig_price=new_orig_price,
                 )
+
 
             # (New balance updates are now handled strictly by Django Signals on Ledger creation)                
             # Re-create Ledger

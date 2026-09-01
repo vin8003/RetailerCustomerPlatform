@@ -66,19 +66,22 @@ class PurchaseInvoiceViewSet(viewsets.ModelViewSet):
             for old_item in old_items:
                 product = old_item.product
                 if product:
-                    Product.objects.filter(id=product.id, retailer=retailer).update(
-                        quantity=F('quantity') - old_item.quantity
+                    product = Product.objects.select_for_update().get(
+                        id=product.id, retailer=retailer
                     )
-                    product.refresh_from_db()
+                    prev_qty, new_qty = product.apply_stock_delta(
+                        -old_item.quantity, allow_negative=True
+                    )
                     ProductInventoryLog.objects.create(
                         product=product,
                         created_by=self.request.user,
                         quantity_change=-old_item.quantity,
-                        previous_quantity=product.quantity + old_item.quantity,
-                        new_quantity=product.quantity,
+                        previous_quantity=prev_qty,
+                        new_quantity=new_qty,
                         log_type='removed',
                         reason=f'Purchase Invoice Deleted: #{instance.invoice_number}'
                     )
+
             
             # 2. Delete invoice 
             # (Ledger entries cascade implicitly, and Signal updates balance_due automatically!)
@@ -398,15 +401,20 @@ def create_pos_order(request):
                     unit_price = info['final_price']
                     qty = info.get('total_display_quantity', qty)
                 
-                # Calculate previous quantity for logging
-                prev_qty = batch.quantity if (batch and product.track_inventory) else product.quantity
-                
+                # SKU-level qty for the audit trail (Current Stock on the ledger page).
+                # Batch qty used to be logged here; purchase inward did not update
+                # batches, so a sale after "Purchase Updated +96 / balance 98"
+                # was recorded as new_balance -1.
+                prev_qty = product.quantity
+
                 # Reduce inventory using the model method (handles FIFO if batch is None)
                 # POS allows negative stock (allow_negative=True)
                 if not product.reduce_quantity(qty, batch=batch, allow_negative=True):
                     raise ValueError(f"Unexpected error reducing stock for {product.name}")
-                
-                new_qty = batch.quantity if (batch and product.track_inventory) else product.quantity
+
+                product.refresh_from_db()
+                new_qty = product.quantity
+
 
                 OrderItem.objects.create(
                     order=order,
