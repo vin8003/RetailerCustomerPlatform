@@ -98,6 +98,44 @@ def replay_inventory_state(product: Product) -> dict:
     }
 
 
+def product_level_log_balances(product: Product) -> dict:
+    """
+    Map log.pk -> (previous_quantity, new_quantity) using product-level
+    movement replay. Legacy batch-level new_quantity values are ignored.
+
+    Logs before the first product-level row are omitted so callers keep the
+    stored (possibly batch-level) figures for those rows.
+    """
+    logs = list(
+        ProductInventoryLog.objects.filter(product=product).order_by('created_at', 'id')
+    )
+    movement_logs = [log for log in logs if log.log_type != RECONCILED_LOG_TYPE]
+    balances = {}
+    if not movement_logs:
+        return balances
+
+    product_level = [log for log in movement_logs if log.batch_id is None]
+    if product_level:
+        anchor = product_level[0]
+        running = Decimal(str(anchor.previous_quantity))
+        applying = False
+        for log in movement_logs:
+            if log.pk == anchor.pk:
+                applying = True
+            if applying:
+                prev = running
+                running += _signed_delta(log.log_type, log.quantity_change)
+                balances[log.pk] = (prev, running)
+        return balances
+
+    running = Decimal(str(movement_logs[0].previous_quantity))
+    for log in movement_logs:
+        prev = running
+        running += _signed_delta(log.log_type, log.quantity_change)
+        balances[log.pk] = (prev, running)
+    return balances
+
+
 def replay_quantity_from_logs(product: Product) -> Decimal:
     """Reconstruct product quantity by replaying inventory log movements."""
     return replay_inventory_state(product)['quantity']

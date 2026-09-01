@@ -17,6 +17,7 @@ from rest_framework import status
 from products.inventory_service import (
     apply_stock_decrease,
     apply_stock_increase,
+    product_level_log_balances,
     reconcile_product_from_logs,
     replay_inventory_state,
     replay_quantity_from_logs,
@@ -1045,3 +1046,182 @@ class TestBulkUpdateFractionalAndProductUpdateLog:
         assert log.previous_quantity == Decimal('10')
         assert log.new_quantity == Decimal('7')
         assert log.quantity_change == Decimal('3')
+
+
+@pytest.mark.django_db
+class TestToothbrushScreenshotLedgerJump:
+    """
+    ENSHINE ULTRA SOFT TOOTHBRUSH 1N (shop screenshot):
+
+    Purchase Updated +96 → New Balance 98, then POS sold 1 and the
+    audit trail jumped to -1 (then -2, -3). Purchase had written the
+    header only; POS deducted an empty barcode batch and
+    sync_inventory_from_batches snapped current stock to the batch sum.
+    """
+
+    def _seed(self, retailer, category, brand):
+        product, initial = _batched_product(
+            retailer,
+            category,
+            brand,
+            name='ENSHINE ULRA SOFT TOOTHBRUSH 1N',
+            quantity=Decimal('2'),
+        )
+        phantom = ProductBatch.objects.create(
+            product=product,
+            retailer=retailer,
+            batch_number='',
+            price=Decimal('5.00'),
+            quantity=Decimal('0'),
+            is_active=True,
+        )
+        product.sync_inventory_from_batches()
+        return product, initial, phantom
+
+    def test_purchase_then_pos_from_empty_batch_stays_at_97(
+        self, api_client, retailer_user, retailer, category, brand
+    ):
+        api_client.force_authenticate(user=retailer_user)
+        product, initial, phantom = self._seed(retailer, category, brand)
+        supplier = Supplier.objects.create(retailer=retailer, company_name='L-2464 Supplier')
+        request = MagicMock()
+        request.user = retailer_user
+
+        serializer = PurchaseInvoiceSerializer(
+            data={
+                'supplier': supplier.id,
+                'invoice_number': 'L-2464',
+                'invoice_date': '2026-08-31',
+                'total_amount': '96.00',
+                'paid_amount': '0.00',
+                'payment_status': 'UNPAID',
+                'items': [
+                    {
+                        'product': product.id,
+                        'quantity': 96,
+                        'purchase_price': '1.00',
+                        'total': '96.00',
+                    }
+                ],
+            },
+            context={'request': request, 'retailer': retailer},
+        )
+        assert serializer.is_valid(), serializer.errors
+        serializer.save(retailer=retailer)
+
+        product.refresh_from_db()
+        batch_sum = sum(b.quantity for b in product.batches.filter(is_active=True))
+        assert product.quantity == Decimal('98')
+        assert batch_sum == Decimal('98')
+
+        added = ProductInventoryLog.objects.filter(product=product, log_type='added').last()
+        assert added.new_quantity == Decimal('98')
+        assert added.quantity_change == Decimal('96')
+
+        response = api_client.post(
+            reverse('create_pos_order'),
+            {
+                'subtotal': 5.0,
+                'total_amount': 5.0,
+                'items': [
+                    {
+                        'product_id': product.id,
+                        'batch_id': phantom.id,
+                        'quantity': 1,
+                        'unit_price': 5.0,
+                    }
+                ],
+            },
+            format='json',
+        )
+        assert response.status_code == status.HTTP_201_CREATED
+
+        product.refresh_from_db()
+        sold = ProductInventoryLog.objects.filter(product=product, log_type='sold').last()
+        assert sold.previous_quantity == Decimal('98')
+        assert sold.new_quantity == Decimal('97')
+        assert sold.quantity_change == Decimal('-1')
+        assert product.quantity == Decimal('97')
+        assert product.quantity != Decimal('-1')
+
+        for _ in range(2):
+            response = api_client.post(
+                reverse('create_pos_order'),
+                {
+                    'subtotal': 5.0,
+                    'total_amount': 5.0,
+                    'items': [
+                        {
+                            'product_id': product.id,
+                            'batch_id': phantom.id,
+                            'quantity': 1,
+                            'unit_price': 5.0,
+                        }
+                    ],
+                },
+                format='json',
+            )
+            assert response.status_code == status.HTTP_201_CREATED
+
+        product.refresh_from_db()
+        assert product.quantity == Decimal('95')
+        sold_balances = list(
+            ProductInventoryLog.objects.filter(product=product, log_type='sold')
+            .order_by('id')
+            .values_list('new_quantity', flat=True)
+        )
+        assert sold_balances == [Decimal('97'), Decimal('96'), Decimal('95')]
+
+    def test_ledger_api_replays_product_balances_for_legacy_batch_logs(
+        self, api_client, retailer_user, retailer, category, brand
+    ):
+        api_client.force_authenticate(user=retailer_user)
+        product, _initial, phantom = self._seed(retailer, category, brand)
+        product.quantity = Decimal('-3')
+        product.save(update_fields=['quantity'])
+
+        ProductInventoryLog.objects.create(
+            product=product,
+            log_type='added',
+            quantity_change=Decimal('96'),
+            previous_quantity=Decimal('2'),
+            new_quantity=Decimal('98'),
+            reason='Purchase Updated: Invoice #L-2464',
+        )
+        for prev, new in [
+            (Decimal('0'), Decimal('-1')),
+            (Decimal('-1'), Decimal('-2')),
+            (Decimal('-2'), Decimal('-3')),
+        ]:
+            ProductInventoryLog.objects.create(
+                product=product,
+                batch=phantom,
+                log_type='sold',
+                quantity_change=Decimal('-1'),
+                previous_quantity=prev,
+                new_quantity=new,
+                reason='POS Sale: Order #ORD-legacy',
+            )
+
+        overlay = product_level_log_balances(product)
+        sold_ids = list(
+            ProductInventoryLog.objects.filter(product=product, log_type='sold')
+            .order_by('id')
+            .values_list('id', flat=True)
+        )
+        assert overlay[sold_ids[0]] == (Decimal('98'), Decimal('97'))
+        assert overlay[sold_ids[1]] == (Decimal('97'), Decimal('96'))
+        assert overlay[sold_ids[2]] == (Decimal('96'), Decimal('95'))
+
+        response = api_client.get(
+            reverse('get_inventory_ledger'), {'product_id': product.id}
+        )
+        assert response.status_code == status.HTTP_200_OK
+        sold_rows = [row for row in response.data if row['log_type'] == 'sold']
+        sold_rows = sorted(sold_rows, key=lambda row: row['id'])
+        assert [Decimal(str(row['new_quantity'])) for row in sold_rows] == [
+            Decimal('97'),
+            Decimal('96'),
+            Decimal('95'),
+        ]
+        assert Decimal('-1') not in [Decimal(str(row['new_quantity'])) for row in sold_rows]

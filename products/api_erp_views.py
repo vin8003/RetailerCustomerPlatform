@@ -13,6 +13,7 @@ from products.inventory_service import (
     apply_stock_decrease,
     apply_stock_increase,
     log_inventory_change,
+    product_level_log_balances,
 )
 from orders.models import Order, OrderItem
 from django.db.models import Sum, Q, Count, F, Case, When, DecimalField
@@ -409,13 +410,29 @@ def create_pos_order(request):
                 # Always log product-level balances (batch_id is audit-only)
                 prev_qty = product.quantity
 
-                # Reduce inventory using the model method (handles FIFO if batch is None)
-                # POS allows negative stock (allow_negative=True)
-                if not product.reduce_quantity(qty, batch=batch, allow_negative=True):
-                    raise ValueError(f"Unexpected error reducing stock for {product.name}")
+                # If POS scanned an empty/stale barcode batch but other batches
+                # still hold stock, deduct FIFO instead of driving that batch
+                # negative and snapping product.quantity to the bad sum.
+                stock_batch = batch
+                if (
+                    batch is not None
+                    and product.has_batches
+                    and product.track_inventory
+                    and batch.quantity < qty
+                ):
+                    available_elsewhere = (
+                        product.batches.filter(is_active=True)
+                        .exclude(pk=batch.pk)
+                        .aggregate(total=Sum('quantity'))['total']
+                        or Decimal('0')
+                    )
+                    if available_elsewhere >= qty:
+                        stock_batch = None
 
-                product.refresh_from_db()
-                new_qty = product.quantity
+                # POS allows negative stock (allow_negative=True)
+                new_qty = apply_stock_decrease(
+                    product, qty, batch=stock_batch, allow_negative=True
+                )
 
                 OrderItem.objects.create(
                     order=order,
@@ -590,16 +607,24 @@ def get_inventory_ledger(request):
     except Product.DoesNotExist:
         return Response({'error': 'Product not found'}, status=status.HTTP_404_NOT_FOUND)
         
-    logs = ProductInventoryLog.objects.filter(product=product).order_by('-created_at')[:100]
-    
+    logs = (
+        ProductInventoryLog.objects.filter(product=product)
+        .select_related('created_by')
+        .order_by('-created_at')[:100]
+    )
+    balances = product_level_log_balances(product)
+
     data = []
     for log in logs:
+        prev_qty, new_qty = balances.get(
+            log.pk, (log.previous_quantity, log.new_quantity)
+        )
         data.append({
             'id': log.id,
             'log_type': log.log_type,
             'quantity_change': log.quantity_change,
-            'previous_quantity': log.previous_quantity,
-            'new_quantity': log.new_quantity,
+            'previous_quantity': prev_qty,
+            'new_quantity': new_qty,
             'reason': log.reason,
             'created_at': log.created_at,
             'created_by': log.created_by.get_full_name() if log.created_by else 'System'
