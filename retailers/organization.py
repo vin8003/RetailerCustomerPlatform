@@ -41,15 +41,19 @@ def ensure_organization_for_profile(profile, *, name=None):
     )
 
     with transaction.atomic():
+        # Do not select_related('organization') here: Postgres rejects
+        # FOR UPDATE on the nullable side of an OUTER JOIN (OE-97 / #71).
         locked = (
             RetailerProfile.objects.select_for_update()
-            .select_related('organization', 'user')
+            .select_related('user')
             .get(pk=profile.pk)
         )
         if locked.organization_id:
-            profile.organization = locked.organization
-            ensure_org_rbac_bootstrap(locked.organization)
-            return locked.organization
+            # Fresh fetch of the related org (not locked via OUTER JOIN).
+            org = Organization.objects.get(pk=locked.organization_id)
+            profile.organization = org
+            ensure_org_rbac_bootstrap(org)
+            return org
 
         org = Organization.objects.create(
             name=org_name,

@@ -120,6 +120,84 @@ class TestOrganizationAPIs:
         assert retailer.organization_id == org_id
         assert retailer.organization.name == name
 
+    def test_get_org_with_null_organization_id_attaches_location_one(
+        self, api_client
+    ):
+        """
+        Regression (#71 / #72): GET /api/retailer/org/ when organization_id
+        is NULL must be 200 and attach location 1 — never 500 from
+        FOR UPDATE + select_related('organization') on a nullable FK.
+        """
+        user, profile = _make_retailer("null_org_get", "Null Org Shop", with_org=False)
+        assert profile.organization_id is None
+        before = Organization.objects.count()
+
+        api_client.force_authenticate(user=user)
+        url = reverse("organization_me")
+        first = api_client.get(url)
+        assert first.status_code == status.HTTP_200_OK, first.data
+        profile.refresh_from_db()
+        assert profile.organization_id == first.data["id"]
+        assert first.data["location_ids"] == [profile.id]
+        assert Organization.objects.count() == before + 1
+
+        second = api_client.get(url)
+        assert second.status_code == status.HTTP_200_OK
+        assert second.data["id"] == first.data["id"]
+        assert Organization.objects.count() == before + 1
+
+
+@pytest.mark.django_db
+class TestEnsureOrgLockQueryShape:
+    def test_lock_path_does_not_select_related_nullable_organization(self):
+        """
+        Postgres rejects FOR UPDATE on the nullable side of an OUTER JOIN.
+        The lock queryset must select_related('user') only — never
+        select_related('organization') together with select_for_update.
+        """
+        user, profile = _make_retailer("lock_shape", "Lock Shape Shop", with_org=False)
+        assert profile.organization_id is None
+
+        captured = []
+        real_manager = RetailerProfile.objects
+
+        class _CapturingQuerySet:
+            def __init__(self, qs):
+                self._qs = qs
+
+            def select_related(self, *fields):
+                captured.append(fields)
+                return _CapturingQuerySet(self._qs.select_related(*fields))
+
+            def get(self, **kwargs):
+                return self._qs.get(**kwargs)
+
+        class _ManagerProxy:
+            def select_for_update(self, *args, **kwargs):
+                return _CapturingQuerySet(
+                    real_manager.select_for_update(*args, **kwargs)
+                )
+
+            def __getattr__(self, name):
+                return getattr(real_manager, name)
+
+        import retailers.organization as org_mod
+
+        original = org_mod.RetailerProfile.objects
+        org_mod.RetailerProfile.objects = _ManagerProxy()
+        try:
+            org = ensure_organization_for_profile(profile)
+        finally:
+            org_mod.RetailerProfile.objects = original
+
+        assert org.id is not None
+        assert captured, "expected select_related on the lock queryset"
+        for fields in captured:
+            assert "organization" not in fields, (
+                f"select_for_update must not select_related organization; got {fields}"
+            )
+            assert "user" in fields
+
 
 @pytest.mark.django_db
 class TestCrossTenantIsolation:
