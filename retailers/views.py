@@ -14,7 +14,8 @@ from common.error_utils import format_exception
 
 from .models import (
     Organization, RetailerProfile, RetailerOperatingHours, RetailerCategory,
-    RetailerCategoryMapping, RetailerReview, RetailerRewardConfig
+    RetailerCategoryMapping, RetailerReview, RetailerRewardConfig,
+    OrgRole, OrgStaffMembership, OrgStaffRoleAudit,
 )
 from .serializers import (
     RetailerProfileSerializer, RetailerProfileUpdateSerializer,
@@ -23,13 +24,28 @@ from .serializers import (
     RetailerOperatingHoursSerializer,
     RetailerCategorySerializer, RetailerRewardConfigSerializer,
     OrganizationSerializer, OrganizationCreateSerializer, OrganizationUpdateSerializer,
+    OrgRoleSerializer, OrgRoleCreateSerializer, OrgRoleUpdateSerializer,
+    OrgStaffMembershipSerializer, OrgStaffAssignSerializer, OrgStaffUpdateSerializer,
 )
 from .organization import (
     ensure_organization_for_profile,
+    ensure_org_rbac_bootstrap,
     user_is_org_staff_admin,
+    user_has_org_permission,
+    user_belongs_to_organization,
+    would_remove_last_owner,
+    record_staff_role_audit,
 )
+from .permissions_catalog import (
+    ALL_PERMISSION_CODES,
+    ROLE_SLUG_ADMIN,
+    catalog_payload,
+)
+from django.contrib.auth import get_user_model
+from django.db import transaction
 from common.permissions import IsRetailerOwner, IsCustomerUser
 
+User = get_user_model()
 logger = logging.getLogger(__name__)
 
 
@@ -776,6 +792,37 @@ def _caller_profile_or_error(request):
     return profile, None
 
 
+def _resolve_org_for_caller(request, org_id):
+    """
+    Same-tenant org resolution for profile owners and staff members.
+
+    Cross-tenant / missing → 403 without leaking existence.
+    Does not create orgs on the deny path.
+    """
+    if request.user.user_type != 'retailer':
+        return None, Response(
+            {'error': 'Only retailers can access organization endpoints'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    try:
+        org = Organization.objects.get(pk=org_id)
+    except Organization.DoesNotExist:
+        return None, Response(
+            {'error': 'Organization not found or access denied'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    if not user_belongs_to_organization(request.user, org):
+        return None, Response(
+            {'error': 'Organization not found or access denied'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    ensure_org_rbac_bootstrap(org)
+    return org, None
+
+
 @api_view(['GET', 'POST'])
 @permission_classes([permissions.IsAuthenticated])
 def organization_me(request):
@@ -792,6 +839,8 @@ def organization_me(request):
             org = profile.organization
             if org is None:
                 org = ensure_organization_for_profile(profile)
+            else:
+                ensure_org_rbac_bootstrap(org)
             return Response(
                 OrganizationSerializer(org).data,
                 status=status.HTTP_200_OK,
@@ -836,12 +885,15 @@ def organization_detail(request, org_id):
     GET/PATCH a specific organization.
 
     Cross-tenant: callers may only access their own org; others get 403
-    and the resource is unchanged.
+    and the resource is unchanged. PATCH requires ``org.update``.
     """
     try:
-        profile, err = _caller_profile_or_error(request)
-        if err is not None:
-            return err
+        # Isolation only — do not ensure/create org on a deny path
+        if request.user.user_type != 'retailer':
+            return Response(
+                {'error': 'Only retailers can access organization endpoints'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         try:
             org = Organization.objects.get(pk=org_id)
@@ -851,12 +903,13 @@ def organization_detail(request, org_id):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        # Isolation only — do not ensure/create org on a deny path
-        if profile.organization_id != org.pk:
+        if not user_belongs_to_organization(request.user, org):
             return Response(
                 {'error': 'Organization not found or access denied'},
                 status=status.HTTP_403_FORBIDDEN,
             )
+
+        ensure_org_rbac_bootstrap(org)
 
         if request.method == 'GET':
             return Response(
@@ -864,10 +917,10 @@ def organization_detail(request, org_id):
                 status=status.HTTP_200_OK,
             )
 
-        # PATCH — staff-admin only; refuse without mutating
-        if not user_is_org_staff_admin(request.user, org):
+        # PATCH — requires org.update; refuse without mutating
+        if not user_has_org_permission(request.user, org, 'org.update'):
             return Response(
-                {'error': 'Organization staff-admin permission required'},
+                {'error': 'Organization update permission required'},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
@@ -886,6 +939,419 @@ def organization_detail(request, org_id):
 
     except Exception as e:
         logger.error(f"Error in organization_detail: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_permission_catalog(request, org_id):
+    """Versioned permission catalog for this org (same-tenant read)."""
+    try:
+        org, err = _resolve_org_for_caller(request, org_id)
+        if err is not None:
+            return err
+        return Response(catalog_payload(), status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error in organization_permission_catalog: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_roles(request, org_id):
+    """
+    List or create named roles for an organization.
+
+    POST requires ``roles.manage``. Unknown permission codes → 400.
+    """
+    try:
+        org, err = _resolve_org_for_caller(request, org_id)
+        if err is not None:
+            return err
+
+        if request.method == 'GET':
+            roles = OrgRole.objects.filter(organization=org).order_by('slug')
+            return Response(
+                OrgRoleSerializer(roles, many=True).data,
+                status=status.HTTP_200_OK,
+            )
+
+        if not user_has_org_permission(request.user, org, 'roles.manage'):
+            return Response(
+                {'error': 'Role manage permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        ser = OrgRoleCreateSerializer(data=request.data)
+        if not ser.is_valid():
+            return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        slug = ser.validated_data['slug']
+        if OrgRole.objects.filter(organization=org, slug=slug).exists():
+            return Response(
+                {'error': 'Role slug already exists'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        role = OrgRole.objects.create(
+            organization=org,
+            name=ser.validated_data['name'],
+            slug=slug,
+            permissions=ser.validated_data.get('permissions') or [],
+            is_system=False,
+        )
+        return Response(
+            OrgRoleSerializer(role).data,
+            status=status.HTTP_201_CREATED,
+        )
+    except Exception as e:
+        logger.error(f"Error in organization_roles: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET', 'PATCH'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_role_detail(request, org_id, role_id):
+    """Get or update a named role. PATCH requires ``roles.manage``."""
+    try:
+        org, err = _resolve_org_for_caller(request, org_id)
+        if err is not None:
+            return err
+
+        try:
+            role = OrgRole.objects.get(pk=role_id, organization=org)
+        except OrgRole.DoesNotExist:
+            return Response(
+                {'error': 'Role not found or access denied'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if request.method == 'GET':
+            return Response(OrgRoleSerializer(role).data, status=status.HTTP_200_OK)
+
+        if not user_has_org_permission(request.user, org, 'roles.manage'):
+            return Response(
+                {'error': 'Role manage permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        ser = OrgRoleUpdateSerializer(data=request.data, partial=True)
+        if not ser.is_valid():
+            return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        # System admin role must retain full catalog (owner bootstrap)
+        if role.slug == ROLE_SLUG_ADMIN and 'permissions' in ser.validated_data:
+            new_perms = set(ser.validated_data['permissions'])
+            if not ALL_PERMISSION_CODES.issubset(new_perms):
+                return Response(
+                    {'error': 'Admin role must retain all catalog permissions'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        if 'name' in ser.validated_data:
+            role.name = ser.validated_data['name']
+        if 'permissions' in ser.validated_data:
+            role.permissions = ser.validated_data['permissions']
+        role.save()
+        return Response(OrgRoleSerializer(role).data, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error in organization_role_detail: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_staff(request, org_id):
+    """
+    List staff memberships or assign a user to a named role.
+
+    POST requires ``staff.manage``. Creates AUTH_USER_MODEL retailer users
+    for new cashiers (password auth — not customer OTP).
+    """
+    try:
+        org, err = _resolve_org_for_caller(request, org_id)
+        if err is not None:
+            return err
+
+        if request.method == 'GET':
+            if not (
+                user_has_org_permission(request.user, org, 'staff.manage')
+                or user_belongs_to_organization(request.user, org)
+            ):
+                return Response(
+                    {'error': 'Organization not found or access denied'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            # Same-tenant members can list; deny-by-default already applied
+            memberships = (
+                OrgStaffMembership.objects.select_related('user', 'role')
+                .filter(organization=org)
+                .order_by('id')
+            )
+            return Response(
+                OrgStaffMembershipSerializer(memberships, many=True).data,
+                status=status.HTTP_200_OK,
+            )
+
+        if not user_has_org_permission(request.user, org, 'staff.manage'):
+            return Response(
+                {'error': 'Staff manage permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        ser = OrgStaffAssignSerializer(data=request.data)
+        if not ser.is_valid():
+            return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            role = OrgRole.objects.get(
+                pk=ser.validated_data['role_id'],
+                organization=org,
+            )
+        except OrgRole.DoesNotExist:
+            return Response(
+                {'error': 'Role not found in this organization'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            user_id = ser.validated_data.get('user_id')
+            if user_id:
+                try:
+                    staff_user = User.objects.get(pk=user_id)
+                except User.DoesNotExist:
+                    return Response(
+                        {'error': 'User not found'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if staff_user.user_type != 'retailer':
+                    return Response(
+                        {'error': 'Staff users must be retailer-type AUTH_USER_MODEL rows'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            else:
+                username = ser.validated_data['username']
+                if User.objects.filter(username=username).exists():
+                    return Response(
+                        {'error': 'Username already taken'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                staff_user = User.objects.create_user(
+                    username=username,
+                    email=ser.validated_data.get('email') or '',
+                    password=ser.validated_data['password'],
+                    user_type='retailer',
+                    is_active=True,
+                )
+
+            existing = OrgStaffMembership.objects.filter(
+                organization=org, user=staff_user
+            ).select_related('role').first()
+
+            if existing:
+                if would_remove_last_owner(
+                    org, target_user=staff_user, new_role=role
+                ):
+                    return Response(
+                        {'error': 'Cannot remove the last owner'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                from_role = existing.role
+                action = (
+                    OrgStaffRoleAudit.ACTION_CHANGE
+                    if from_role.id != role.id
+                    else OrgStaffRoleAudit.ACTION_GRANT
+                )
+                existing.role = role
+                existing.is_active = True
+                existing.save(update_fields=['role', 'is_active', 'updated_at'])
+                membership = existing
+                record_staff_role_audit(
+                    organization=org,
+                    actor=request.user,
+                    target_user=staff_user,
+                    action=action,
+                    from_role=from_role,
+                    to_role=role,
+                )
+            else:
+                membership = OrgStaffMembership.objects.create(
+                    organization=org,
+                    user=staff_user,
+                    role=role,
+                    is_active=True,
+                )
+                record_staff_role_audit(
+                    organization=org,
+                    actor=request.user,
+                    target_user=staff_user,
+                    action=OrgStaffRoleAudit.ACTION_GRANT,
+                    from_role=None,
+                    to_role=role,
+                )
+
+        membership = (
+            OrgStaffMembership.objects.select_related('user', 'role')
+            .get(pk=membership.pk)
+        )
+        return Response(
+            OrgStaffMembershipSerializer(membership).data,
+            status=status.HTTP_201_CREATED,
+        )
+    except Exception as e:
+        logger.error(f"Error in organization_staff: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET', 'PATCH', 'DELETE'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_staff_detail(request, org_id, membership_id):
+    """
+    Get / change / revoke a staff membership.
+
+    Mutations require ``staff.manage``. 403 leaves the membership unchanged.
+    Unauthorized users cannot change another user's role.
+    """
+    try:
+        org, err = _resolve_org_for_caller(request, org_id)
+        if err is not None:
+            return err
+
+        try:
+            membership = (
+                OrgStaffMembership.objects.select_related('user', 'role')
+                .get(pk=membership_id, organization=org)
+            )
+        except OrgStaffMembership.DoesNotExist:
+            return Response(
+                {'error': 'Staff membership not found or access denied'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if request.method == 'GET':
+            return Response(
+                OrgStaffMembershipSerializer(membership).data,
+                status=status.HTTP_200_OK,
+            )
+
+        if not user_has_org_permission(request.user, org, 'staff.manage'):
+            return Response(
+                {'error': 'Staff manage permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if request.method == 'DELETE':
+            if would_remove_last_owner(
+                org, target_user=membership.user, deactivate=True
+            ):
+                return Response(
+                    {'error': 'Cannot remove the last owner'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            from_role = membership.role
+            target = membership.user
+            membership.is_active = False
+            membership.save(update_fields=['is_active', 'updated_at'])
+            record_staff_role_audit(
+                organization=org,
+                actor=request.user,
+                target_user=target,
+                action=OrgStaffRoleAudit.ACTION_REVOKE,
+                from_role=from_role,
+                to_role=None,
+            )
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+        # PATCH
+        ser = OrgStaffUpdateSerializer(data=request.data, partial=True)
+        if not ser.is_valid():
+            return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        new_role = membership.role
+        if 'role_id' in ser.validated_data:
+            try:
+                new_role = OrgRole.objects.get(
+                    pk=ser.validated_data['role_id'],
+                    organization=org,
+                )
+            except OrgRole.DoesNotExist:
+                return Response(
+                    {'error': 'Role not found in this organization'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        deactivate = (
+            'is_active' in ser.validated_data
+            and ser.validated_data['is_active'] is False
+        )
+        if would_remove_last_owner(
+            org,
+            target_user=membership.user,
+            new_role=new_role if 'role_id' in ser.validated_data else None,
+            deactivate=deactivate,
+        ):
+            return Response(
+                {'error': 'Cannot remove the last owner'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        from_role = membership.role
+        updates = []
+        action = None
+        if 'role_id' in ser.validated_data and new_role.id != membership.role_id:
+            membership.role = new_role
+            updates.append('role')
+            action = OrgStaffRoleAudit.ACTION_CHANGE
+        if 'is_active' in ser.validated_data:
+            membership.is_active = ser.validated_data['is_active']
+            updates.append('is_active')
+            if deactivate:
+                action = OrgStaffRoleAudit.ACTION_REVOKE
+            elif ser.validated_data['is_active'] and action is None:
+                action = OrgStaffRoleAudit.ACTION_GRANT
+
+        if updates:
+            updates.append('updated_at')
+            membership.save(update_fields=updates)
+            if action:
+                record_staff_role_audit(
+                    organization=org,
+                    actor=request.user,
+                    target_user=membership.user,
+                    action=action,
+                    from_role=from_role,
+                    to_role=(
+                        membership.role
+                        if action != OrgStaffRoleAudit.ACTION_REVOKE
+                        else None
+                    ),
+                )
+
+        membership = (
+            OrgStaffMembership.objects.select_related('user', 'role')
+            .get(pk=membership.pk)
+        )
+        return Response(
+            OrgStaffMembershipSerializer(membership).data,
+            status=status.HTTP_200_OK,
+        )
+    except Exception as e:
+        logger.error(f"Error in organization_staff_detail: {str(e)}")
         return Response(
             {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,

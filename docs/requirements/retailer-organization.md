@@ -12,7 +12,7 @@
 | Shop / location | `RetailerProfile` | Operational shop; GSTIN, UPI, receipt footer stay here |
 | Mapping (v1) | 1:1 | Existing kirana shops get an implicit org via migration backfill + signup/create |
 
-Location stays **implicit** for existing single-shop tenants: APIs keep resolving the shop via `user → RetailerProfile`. Multi-location (OE-185) and staff RBAC (OE-98) are out of scope for this ticket.
+Location stays **implicit** for existing single-shop tenants: APIs keep resolving the shop via `user → RetailerProfile`. Multi-location (OE-185) is out of scope for this ticket. Staff RBAC is delivered in [OE-98](shop-staff-roles.md).
 
 ## API
 
@@ -24,7 +24,7 @@ Location stays **implicit** for existing single-shop tenants: APIs keep resolvin
 | PATCH | `/api/retailer/org/<id>/` | Org owner (staff-admin) | Update `name` / `is_active`; non-admin → **403**, resource unchanged |
 | GET | `/api/retailer/profile/` | Retailer | Includes `organization_id`, `organization_name`, `organization_is_active` |
 
-Existing retailer profile APIs continue to work with the implicit org. Until OE-98, **staff-admin = organization owner**.
+Existing retailer profile APIs continue to work with the implicit org. Staff-admin for org writes is defined by OE-98 RBAC (`staff.manage` / `org.update`); the org owner always qualifies.
 
 ## Security
 
@@ -34,4 +34,5 @@ Existing retailer profile APIs continue to work with the implicit org. Until OE-
 
 ## Not in this change
 
-- OE-98 shop staff roles, OE-182 API versioning, POS / catalog / stock / khata rewrites, second shop table, competitor branding.
+- OE-182 API versioning, POS / catalog / stock / khata rewrites, second shop table, competitor branding.
+  Staff roles: see [shop-staff-roles.md](shop-staff-roles.md).

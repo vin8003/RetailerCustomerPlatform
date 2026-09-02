@@ -37,6 +37,147 @@ class Organization(models.Model):
         return self.name
 
 
+class OrgRole(models.Model):
+    """
+    Named staff role within an Organization (OE-98 / F-0002).
+
+    Permissions are a list of catalog codes (see permissions_catalog).
+    Unknown codes are rejected on save by the API/serializers.
+    """
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='roles',
+    )
+    name = models.CharField(max_length=100)
+    slug = models.SlugField(max_length=50)
+    permissions = models.JSONField(
+        default=list,
+        help_text='List of permission catalog codes granted by this role.',
+    )
+    is_system = models.BooleanField(
+        default=False,
+        help_text='Bootstrap roles (admin/cashier) that cannot be deleted.',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'org_role'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['organization', 'slug'],
+                name='uniq_org_role_slug',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['organization']),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.organization_id})"
+
+
+class OrgStaffMembership(models.Model):
+    """
+    Binds an AUTH_USER_MODEL user to an Organization with a named role.
+
+    Staff identity is org-scoped. Cashiers are retailer-type users authenticated
+    with password/JWT — not customer OTP. See docs/requirements/shop-staff-roles.md.
+    """
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='staff_memberships',
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='org_staff_memberships',
+    )
+    role = models.ForeignKey(
+        OrgRole,
+        on_delete=models.PROTECT,
+        related_name='memberships',
+    )
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'org_staff_membership'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['organization', 'user'],
+                name='uniq_org_staff_user',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['organization', 'is_active']),
+            models.Index(fields=['user']),
+        ]
+
+    def __str__(self):
+        return f"{self.user_id}@{self.organization_id}:{self.role.slug}"
+
+
+class OrgStaffRoleAudit(models.Model):
+    """
+    Audit row for every staff role grant / revoke / change (OE-98 security).
+    """
+    ACTION_GRANT = 'grant'
+    ACTION_REVOKE = 'revoke'
+    ACTION_CHANGE = 'change'
+    ACTION_CHOICES = [
+        (ACTION_GRANT, 'Grant'),
+        (ACTION_REVOKE, 'Revoke'),
+        (ACTION_CHANGE, 'Change'),
+    ]
+
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='staff_role_audits',
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='staff_role_audits_made',
+    )
+    target_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='staff_role_audits_received',
+    )
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    from_role = models.ForeignKey(
+        OrgRole,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='+',
+    )
+    to_role = models.ForeignKey(
+        OrgRole,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='+',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'org_staff_role_audit'
+        indexes = [
+            models.Index(fields=['organization', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.action} {self.target_user_id} @ {self.organization_id}"
+
+
 class RetailerProfile(models.Model):
     """
     Extended profile for retailer users (operational shop / location record).

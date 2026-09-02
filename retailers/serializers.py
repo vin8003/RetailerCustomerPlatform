@@ -3,7 +3,10 @@ from django.contrib.auth import get_user_model
 from .models import (
     Organization, RetailerProfile, RetailerOperatingHours, RetailerCategory,
     RetailerCategoryMapping, RetailerReview, RetailerRewardConfig,
-    Supplier
+    Supplier, OrgRole, OrgStaffMembership,
+)
+from .permissions_catalog import (
+    validate_permission_codes,
 )
 
 User = get_user_model()
@@ -44,6 +47,133 @@ class OrganizationUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Organization
         fields = ['name', 'is_active']
+
+
+class OrgRoleSerializer(serializers.ModelSerializer):
+    """Named org role with versioned permission codes."""
+
+    class Meta:
+        model = OrgRole
+        fields = [
+            'id', 'organization', 'name', 'slug', 'permissions',
+            'is_system', 'created_at', 'updated_at',
+        ]
+        read_only_fields = [
+            'id', 'organization', 'is_system', 'created_at', 'updated_at',
+        ]
+
+    def validate_permissions(self, value):
+        try:
+            known, unknown = validate_permission_codes(value)
+        except TypeError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+        if unknown:
+            raise serializers.ValidationError(
+                f'Unknown permission codes: {unknown}'
+            )
+        return known
+
+    def validate_slug(self, value):
+        if not value:
+            raise serializers.ValidationError('slug is required')
+        return value
+
+
+class OrgRoleCreateSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=100)
+    slug = serializers.SlugField(max_length=50)
+    permissions = serializers.ListField(
+        child=serializers.CharField(max_length=64),
+        required=False,
+        default=list,
+    )
+
+    def validate_permissions(self, value):
+        try:
+            known, unknown = validate_permission_codes(value)
+        except TypeError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+        if unknown:
+            raise serializers.ValidationError(
+                f'Unknown permission codes: {unknown}'
+            )
+        return known
+
+
+class OrgRoleUpdateSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=100, required=False)
+    permissions = serializers.ListField(
+        child=serializers.CharField(max_length=64),
+        required=False,
+    )
+
+    def validate_permissions(self, value):
+        try:
+            known, unknown = validate_permission_codes(value)
+        except TypeError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+        if unknown:
+            raise serializers.ValidationError(
+                f'Unknown permission codes: {unknown}'
+            )
+        return known
+
+
+class OrgStaffMembershipSerializer(serializers.ModelSerializer):
+    """Staff seat bound to AUTH_USER_MODEL + named role."""
+    username = serializers.CharField(source='user.username', read_only=True)
+    email = serializers.EmailField(source='user.email', read_only=True)
+    role_slug = serializers.CharField(source='role.slug', read_only=True)
+    role_name = serializers.CharField(source='role.name', read_only=True)
+    permissions = serializers.SerializerMethodField()
+
+    class Meta:
+        model = OrgStaffMembership
+        fields = [
+            'id', 'organization', 'user', 'username', 'email',
+            'role', 'role_slug', 'role_name', 'permissions',
+            'is_active', 'created_at', 'updated_at',
+        ]
+        read_only_fields = fields
+
+    def get_permissions(self, obj):
+        return list(obj.role.permissions or [])
+
+
+class OrgStaffAssignSerializer(serializers.Serializer):
+    """
+    Assign a staff user to a named role.
+
+    Either ``user_id`` (existing AUTH_USER_MODEL retailer) or create credentials
+    (``username`` + ``password``) for a new retailer-type staff user.
+    Staff login uses password/JWT — not customer OTP.
+    """
+    role_id = serializers.IntegerField()
+    user_id = serializers.IntegerField(required=False)
+    username = serializers.CharField(max_length=150, required=False)
+    email = serializers.EmailField(required=False, allow_blank=True)
+    password = serializers.CharField(max_length=128, required=False, write_only=True)
+
+    def validate(self, attrs):
+        if not attrs.get('user_id') and not attrs.get('username'):
+            raise serializers.ValidationError(
+                'Provide user_id or username (+ password) to assign staff.'
+            )
+        if attrs.get('username') and not attrs.get('user_id') and not attrs.get('password'):
+            raise serializers.ValidationError(
+                'password is required when creating a new staff user.'
+            )
+        return attrs
+
+
+class OrgStaffUpdateSerializer(serializers.Serializer):
+    role_id = serializers.IntegerField(required=False)
+    is_active = serializers.BooleanField(required=False)
+
+    def validate(self, attrs):
+        if not attrs:
+            raise serializers.ValidationError('No fields to update.')
+        return attrs
 
 
 class RetailerCategorySerializer(serializers.ModelSerializer):
