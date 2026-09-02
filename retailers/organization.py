@@ -42,7 +42,7 @@ def ensure_organization_for_profile(profile, *, name=None):
 
     with transaction.atomic():
         # Do not select_related('organization') here: Postgres rejects
-        # FOR UPDATE on the nullable side of an OUTER JOIN.
+        # FOR UPDATE on the nullable side of an OUTER JOIN (OE-97 / #71).
         locked = (
             RetailerProfile.objects.select_for_update()
             .select_related('user')
