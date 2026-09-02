@@ -37,6 +37,7 @@ They are **not** automatically durable knowledge. Many pages are builder briefs,
 | [KAN-61.md](KAN-61.md) | durable | [credit-remaining-balance](../requirements/credit-remaining-balance.md) |
 | [KAN-62.md](KAN-62.md) | durable | [inactive-product-edit](../requirements/inactive-product-edit.md) |
 | [KAN-69.md](KAN-69.md) | durable | [customer-retailer-city-map](../requirements/customer-retailer-city-map.md) |
+| [OE-97.md](OE-97.md) | durable | [retailer-organization](../requirements/retailer-organization.md) |
 
 Skipped (no Confluence page at migration time): KAN-48, KAN-49, KAN-52, KAN-57, KAN-63.
 

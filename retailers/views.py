@@ -13,7 +13,7 @@ import requests
 from common.error_utils import format_exception
 
 from .models import (
-    RetailerProfile, RetailerOperatingHours, RetailerCategory,
+    Organization, RetailerProfile, RetailerOperatingHours, RetailerCategory,
     RetailerCategoryMapping, RetailerReview, RetailerRewardConfig
 )
 from .serializers import (
@@ -21,7 +21,13 @@ from .serializers import (
     RetailerListSerializer, RetailerReviewSerializer,
     RetailerCreateReviewSerializer, RetailerOperatingHoursUpdateSerializer,
     RetailerOperatingHoursSerializer,
-    RetailerCategorySerializer, RetailerRewardConfigSerializer
+    RetailerCategorySerializer, RetailerRewardConfigSerializer,
+    OrganizationSerializer, OrganizationCreateSerializer, OrganizationUpdateSerializer,
+)
+from .organization import (
+    ensure_organization_for_profile,
+    get_organization_for_user,
+    user_is_org_staff_admin,
 )
 from common.permissions import IsRetailerOwner, IsCustomerUser
 
@@ -191,7 +197,8 @@ def create_retailer_profile(request):
         serializer = RetailerProfileUpdateSerializer(data=request.data)
         if serializer.is_valid():
             profile = serializer.save(user=request.user)
-            
+            ensure_organization_for_profile(profile)
+
             # Create default operating hours (Monday to Sunday, 9 AM to 9 PM)
             days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
             for day in days:
@@ -748,4 +755,142 @@ def manage_reward_configuration(request):
         return Response(
             {'error': format_exception(e)}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+def _caller_profile_or_error(request):
+    """Return (profile, error_response). error_response is set on authz failure."""
+    if request.user.user_type != 'retailer':
+        return None, Response(
+            {'error': 'Only retailers can access organization endpoints'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    try:
+        profile = RetailerProfile.objects.select_related('organization').get(
+            user=request.user
+        )
+    except RetailerProfile.DoesNotExist:
+        return None, Response(
+            {'error': 'Retailer profile not found'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    return profile, None
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_me(request):
+    """
+    GET  — caller's organization (implicit 1:1 for single-shop tenants).
+    POST — create an org and attach the existing shop as location 1 (staff-admin).
+    """
+    try:
+        profile, err = _caller_profile_or_error(request)
+        if err is not None:
+            return err
+
+        if request.method == 'GET':
+            org = profile.organization
+            if org is None:
+                org = ensure_organization_for_profile(profile)
+            return Response(
+                OrganizationSerializer(org).data,
+                status=status.HTTP_200_OK,
+            )
+
+        # POST — create org + attach shop as location 1
+        create_ser = OrganizationCreateSerializer(data=request.data)
+        if not create_ser.is_valid():
+            return Response(create_ser.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        if profile.organization_id:
+            if not user_is_org_staff_admin(request.user, profile.organization):
+                return Response(
+                    {'error': 'Organization staff-admin permission required'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            return Response(
+                {'error': 'Organization already exists for this shop'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        name = create_ser.validated_data.get('name') or None
+        org = ensure_organization_for_profile(profile, name=name)
+        logger.info("Organization created: %s (location=%s)", org.name, profile.pk)
+        return Response(
+            OrganizationSerializer(org).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    except Exception as e:
+        logger.error(f"Error in organization_me: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET', 'PATCH'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_detail(request, org_id):
+    """
+    GET/PATCH a specific organization.
+
+    Cross-tenant: callers may only access their own org; others get 403
+    and the resource is unchanged.
+    """
+    try:
+        profile, err = _caller_profile_or_error(request)
+        if err is not None:
+            return err
+
+        try:
+            org = Organization.objects.get(pk=org_id)
+        except Organization.DoesNotExist:
+            return Response(
+                {'error': 'Organization not found or access denied'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        caller_org = profile.organization
+        if caller_org is None:
+            caller_org = get_organization_for_user(request.user)
+
+        if caller_org is None or caller_org.pk != org.pk:
+            return Response(
+                {'error': 'Organization not found or access denied'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if request.method == 'GET':
+            return Response(
+                OrganizationSerializer(org).data,
+                status=status.HTTP_200_OK,
+            )
+
+        # Capture pre-patch state so 403 paths leave the resource unchanged
+        if not user_is_org_staff_admin(request.user, org):
+            return Response(
+                {'error': 'Organization staff-admin permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        update_ser = OrganizationUpdateSerializer(
+            org, data=request.data, partial=True
+        )
+        if not update_ser.is_valid():
+            return Response(update_ser.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        org = update_ser.save()
+        logger.info("Organization updated: %s (active=%s)", org.pk, org.is_active)
+        return Response(
+            OrganizationSerializer(org).data,
+            status=status.HTTP_200_OK,
+        )
+
+    except Exception as e:
+        logger.error(f"Error in organization_detail: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )

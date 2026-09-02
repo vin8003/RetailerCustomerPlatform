@@ -71,6 +71,9 @@ def retailer_signup(request):
                 contact_phone=user.phone_number or '',
                 is_active=False,  # Inactive until profile is completed
             )
+            # Implicit 1:1 org↔location for new single-shop tenants (OE-97)
+            from retailers.organization import ensure_organization_for_profile
+            ensure_organization_for_profile(profile)
 
             # (Removed manual hours creation to test for duplicates)
 
@@ -116,6 +119,14 @@ def retailer_login(request):
                 return Response(
                     {'error': 'Invalid user type for retailer login'},
                     status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Disabled tenant blocks new sessions; history is retained (OE-97)
+            from retailers.organization import organization_is_session_blocked
+            if organization_is_session_blocked(user):
+                return Response(
+                    {'error': 'Organization is disabled'},
+                    status=status.HTTP_403_FORBIDDEN
                 )
 
             # Generate JWT tokens
