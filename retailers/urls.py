@@ -10,9 +10,35 @@ urlpatterns = [
     path('reward-config/', views.manage_reward_configuration, name='manage_reward_configuration'),
 
     # Organization (tenant parent) — staff-admin writes (OE-97 / F-0001)
+    # Staff roles / RBAC (OE-98 / F-0002)
     # Registered before <int:retailer_id>/ so "org" is not captured as an id.
     path('org/', views.organization_me, name='organization_me'),
     path('org/<int:org_id>/', views.organization_detail, name='organization_detail'),
+    path(
+        'org/<int:org_id>/permissions/',
+        views.organization_permission_catalog,
+        name='organization_permission_catalog',
+    ),
+    path(
+        'org/<int:org_id>/roles/',
+        views.organization_roles,
+        name='organization_roles',
+    ),
+    path(
+        'org/<int:org_id>/roles/<int:role_id>/',
+        views.organization_role_detail,
+        name='organization_role_detail',
+    ),
+    path(
+        'org/<int:org_id>/staff/',
+        views.organization_staff,
+        name='organization_staff',
+    ),
+    path(
+        'org/<int:org_id>/staff/<int:membership_id>/',
+        views.organization_staff_detail,
+        name='organization_staff_detail',
+    ),
 
     # Public retailer endpoints
     path('', views.list_retailers, name='list_retailers'),
