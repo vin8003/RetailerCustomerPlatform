@@ -98,6 +98,27 @@ class TestOrganizationAPIs:
         assert response.data["id"] == retailer.organization_id
         assert response.data["location_ids"] == [retailer.id]
 
+    def test_get_with_null_org_attaches_location_one_not_500(self, api_client):
+        """
+        Shop with organization_id NULL must not 500 on GET /org/.
+
+        Postgres rejects FOR UPDATE on a nullable OUTER JOIN; ensure must
+        lock the profile row without select_related('organization').
+        """
+        user, profile = _make_retailer("null_org_get", "Null Org Shop", with_org=False)
+        assert profile.organization_id is None
+
+        api_client.force_authenticate(user=user)
+        response = api_client.get(reverse("organization_me"))
+
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["name"] == "Null Org Shop"
+        assert response.data["location_ids"] == [profile.id]
+        assert response.data["location_count"] == 1
+        profile.refresh_from_db()
+        assert profile.organization_id == response.data["id"]
+        assert profile.organization.owner_id == user.id
+
     def test_profile_api_includes_implicit_org(self, api_client, retailer_user, retailer):
         api_client.force_authenticate(user=retailer_user)
         response = api_client.get(reverse("get_retailer_profile"))
