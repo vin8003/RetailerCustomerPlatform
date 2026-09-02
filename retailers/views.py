@@ -15,7 +15,7 @@ from common.error_utils import format_exception
 from .models import (
     Organization, RetailerProfile, RetailerOperatingHours, RetailerCategory,
     RetailerCategoryMapping, RetailerReview, RetailerRewardConfig,
-    OrgRole, OrgStaffMembership, OrgStaffRoleAudit,
+    OrgRole, OrgStaffMembership, OrgStaffRoleAudit, OrgApiKey,
 )
 from .serializers import (
     RetailerProfileSerializer, RetailerProfileUpdateSerializer,
@@ -26,6 +26,7 @@ from .serializers import (
     OrganizationSerializer, OrganizationCreateSerializer, OrganizationUpdateSerializer,
     OrgRoleSerializer, OrgRoleCreateSerializer, OrgRoleUpdateSerializer,
     OrgStaffMembershipSerializer, OrgStaffAssignSerializer, OrgStaffUpdateSerializer,
+    OrgApiKeySerializer, OrgApiKeyCreateSerializer, OrgApiKeyUpdateSerializer,
 )
 from .organization import (
     ensure_organization_for_profile,
@@ -36,6 +37,12 @@ from .organization import (
     would_remove_last_owner,
     record_staff_role_audit,
 )
+from .api_keys import (
+    create_org_api_key,
+    revoke_org_api_key,
+    update_org_api_key_scopes,
+)
+from .api_scopes import scope_catalog_payload
 from .permissions_catalog import (
     ALL_PERMISSION_CODES,
     ROLE_SLUG_ADMIN,
@@ -1352,6 +1359,146 @@ def organization_staff_detail(request, org_id, membership_id):
         )
     except Exception as e:
         logger.error(f"Error in organization_staff_detail: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_api_scope_catalog(request, org_id):
+    """Versioned partner API scope catalog (same-tenant JWT read)."""
+    try:
+        org, err = _resolve_org_for_caller(request, org_id)
+        if err is not None:
+            return err
+        return Response(scope_catalog_payload(), status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error in organization_api_scope_catalog: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_api_keys(request, org_id):
+    """
+    List or create org-scoped partner API keys (JWT / staff).
+
+    POST requires ``api_keys.manage``. Raw secret is returned once on create.
+    """
+    try:
+        org, err = _resolve_org_for_caller(request, org_id)
+        if err is not None:
+            return err
+
+        if request.method == 'GET':
+            if not user_has_org_permission(request.user, org, 'api_keys.manage'):
+                return Response(
+                    {'error': 'API key management permission required'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            keys = OrgApiKey.objects.filter(organization=org).order_by('-created_at')
+            return Response(
+                OrgApiKeySerializer(keys, many=True).data,
+                status=status.HTTP_200_OK,
+            )
+
+        if not user_has_org_permission(request.user, org, 'api_keys.manage'):
+            return Response(
+                {'error': 'API key management permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        create_ser = OrgApiKeyCreateSerializer(data=request.data)
+        if not create_ser.is_valid():
+            return Response(create_ser.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        api_key, raw = create_org_api_key(
+            organization=org,
+            name=create_ser.validated_data['name'],
+            scopes=create_ser.validated_data.get('scopes') or [],
+            created_by=request.user,
+        )
+        payload = OrgApiKeySerializer(api_key).data
+        payload['api_key'] = raw  # shown once
+        return Response(payload, status=status.HTTP_201_CREATED)
+    except Exception as e:
+        logger.error(f"Error in organization_api_keys: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET', 'PATCH', 'DELETE'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_api_key_detail(request, org_id, key_id):
+    """
+    Read / update scopes / revoke an org API key.
+
+    Mutations require ``api_keys.manage``. DELETE soft-revokes (next request 401).
+    Cross-tenant key ids return 403 without mutating.
+    """
+    try:
+        org, err = _resolve_org_for_caller(request, org_id)
+        if err is not None:
+            return err
+
+        if not user_has_org_permission(request.user, org, 'api_keys.manage'):
+            return Response(
+                {'error': 'API key management permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        try:
+            api_key = OrgApiKey.objects.get(pk=key_id, organization=org)
+        except OrgApiKey.DoesNotExist:
+            return Response(
+                {'error': 'API key not found or access denied'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if request.method == 'GET':
+            return Response(
+                OrgApiKeySerializer(api_key).data,
+                status=status.HTTP_200_OK,
+            )
+
+        if request.method == 'DELETE':
+            revoke_org_api_key(api_key=api_key, actor=request.user)
+            api_key.refresh_from_db()
+            return Response(
+                OrgApiKeySerializer(api_key).data,
+                status=status.HTTP_200_OK,
+            )
+
+        # PATCH — name and/or scopes
+        update_ser = OrgApiKeyUpdateSerializer(data=request.data, partial=True)
+        if not update_ser.is_valid():
+            return Response(update_ser.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        data = update_ser.validated_data
+        if 'name' in data:
+            api_key.name = data['name']
+            api_key.save(update_fields=['name', 'updated_at'])
+        if 'scopes' in data:
+            update_org_api_key_scopes(
+                api_key=api_key,
+                scopes=data['scopes'],
+                actor=request.user,
+            )
+            api_key.refresh_from_db()
+
+        return Response(
+            OrgApiKeySerializer(api_key).data,
+            status=status.HTTP_200_OK,
+        )
+    except Exception as e:
+        logger.error(f"Error in organization_api_key_detail: {str(e)}")
         return Response(
             {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,

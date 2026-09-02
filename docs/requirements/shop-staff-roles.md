@@ -28,6 +28,7 @@ See `retailers/permissions_catalog.py` (`PERMISSION_CATALOG_VERSION`).
 | `org.update` | Rename / enable / disable organization |
 | `roles.manage` | Create / edit named roles |
 | `staff.manage` | Assign / change / revoke staff seats |
+| `api_keys.manage` | Create / list / revoke org partner API keys (OE-182) |
 
 Deny-by-default: unknown codes are rejected on role save. Org **owner** always has the full catalog (implicit admin). Bootstrap creates system **Admin** (all codes) and **Cashier** (empty) roles and an Admin membership for the owner.
 
@@ -53,4 +54,5 @@ Role checks read membership **on every request** (no JWT-embedded role cache), s
 
 ## Not in this change
 
-- OE-182 API versioning, OE-99 audit productization beyond grant/revoke rows, POS / catalog / stock / khata rewrites, multi-shop staff move (OE-203), customer-app staff UI.
+- OE-99 audit productization beyond grant/revoke rows, POS / catalog / stock / khata rewrites, multi-shop staff move (OE-203), customer-app staff UI.
+- Partner open API keys/versioning: see [OE-182](OE-182.md) / [api-versioning.md](../requirements/api-versioning.md) (stacked on this work).

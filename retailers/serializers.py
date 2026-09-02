@@ -3,11 +3,12 @@ from django.contrib.auth import get_user_model
 from .models import (
     Organization, RetailerProfile, RetailerOperatingHours, RetailerCategory,
     RetailerCategoryMapping, RetailerReview, RetailerRewardConfig,
-    Supplier, OrgRole, OrgStaffMembership,
+    Supplier, OrgRole, OrgStaffMembership, OrgApiKey,
 )
 from .permissions_catalog import (
     validate_permission_codes,
 )
+from .api_scopes import validate_scope_codes
 
 User = get_user_model()
 
@@ -138,6 +139,105 @@ class OrgStaffMembershipSerializer(serializers.ModelSerializer):
 
     def get_permissions(self, obj):
         return list(obj.role.permissions or [])
+
+
+class OrgApiKeySerializer(serializers.ModelSerializer):
+    """Public representation of an org API key (never includes the secret)."""
+    created_by_username = serializers.CharField(
+        source='created_by.username', read_only=True, allow_null=True,
+    )
+
+    class Meta:
+        model = OrgApiKey
+        fields = [
+            'id', 'organization', 'name', 'prefix', 'scopes',
+            'is_active', 'created_by', 'created_by_username',
+            'created_at', 'updated_at', 'last_used_at', 'revoked_at',
+        ]
+        read_only_fields = fields
+
+
+class OrgApiKeyCreateSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=100)
+    scopes = serializers.ListField(
+        child=serializers.CharField(max_length=64),
+        required=False,
+        default=list,
+    )
+
+    def validate_name(self, value):
+        name = (value or '').strip()
+        if not name:
+            raise serializers.ValidationError('name is required')
+        return name
+
+    def validate_scopes(self, value):
+        try:
+            known, unknown = validate_scope_codes(value)
+        except TypeError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+        if unknown:
+            raise serializers.ValidationError(
+                f'Unknown API scope codes: {unknown}'
+            )
+        return known
+
+
+class OrgApiKeyUpdateSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=100, required=False)
+    scopes = serializers.ListField(
+        child=serializers.CharField(max_length=64),
+        required=False,
+    )
+
+    def validate_name(self, value):
+        name = (value or '').strip()
+        if not name:
+            raise serializers.ValidationError('name is required')
+        return name
+
+    def validate_scopes(self, value):
+        try:
+            known, unknown = validate_scope_codes(value)
+        except TypeError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+        if unknown:
+            raise serializers.ValidationError(
+                f'Unknown API scope codes: {unknown}'
+            )
+        return known
+
+
+class PartnerOrganizationSerializer(serializers.ModelSerializer):
+    """Partner-facing org payload (no owner PII beyond id)."""
+    location_ids = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Organization
+        fields = [
+            'id', 'name', 'is_active', 'location_ids',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = fields
+
+    def get_location_ids(self, obj):
+        return list(obj.locations.values_list('id', flat=True))
+
+
+class PartnerLocationSerializer(serializers.ModelSerializer):
+    """Partner-facing shop location under the key's organization."""
+
+    class Meta:
+        model = RetailerProfile
+        fields = [
+            'id', 'shop_name', 'city', 'state', 'pincode',
+            'is_active', 'organization_id',
+        ]
+        read_only_fields = fields
+
+
+class PartnerOrgUpdateSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=255)
 
 
 class OrgStaffAssignSerializer(serializers.Serializer):
