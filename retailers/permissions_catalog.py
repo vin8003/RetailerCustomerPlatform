@@ -12,6 +12,7 @@ PERMISSION_DEFINITIONS = {
     'org.update': 'Update organization name and active flag',
     'roles.manage': 'Create and edit named roles and their permission lists',
     'staff.manage': 'Assign, change, and revoke staff memberships and roles',
+    'api_keys.manage': 'Create, list, and revoke org-scoped partner API keys',
 }
 
 ALL_PERMISSION_CODES = frozenset(PERMISSION_DEFINITIONS.keys())
