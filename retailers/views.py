@@ -26,7 +26,6 @@ from .serializers import (
 )
 from .organization import (
     ensure_organization_for_profile,
-    get_organization_for_user,
     user_is_org_staff_admin,
 )
 from common.permissions import IsRetailerOwner, IsCustomerUser
@@ -852,11 +851,8 @@ def organization_detail(request, org_id):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        caller_org = profile.organization
-        if caller_org is None:
-            caller_org = get_organization_for_user(request.user)
-
-        if caller_org is None or caller_org.pk != org.pk:
+        # Isolation only — do not ensure/create org on a deny path
+        if profile.organization_id != org.pk:
             return Response(
                 {'error': 'Organization not found or access denied'},
                 status=status.HTTP_403_FORBIDDEN,
@@ -868,7 +864,7 @@ def organization_detail(request, org_id):
                 status=status.HTTP_200_OK,
             )
 
-        # Capture pre-patch state so 403 paths leave the resource unchanged
+        # PATCH — staff-admin only; refuse without mutating
         if not user_is_org_staff_admin(request.user, org):
             return Response(
                 {'error': 'Organization staff-admin permission required'},

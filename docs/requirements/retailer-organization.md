@@ -29,7 +29,7 @@ Existing retailer profile APIs continue to work with the implicit org. Until OE-
 ## Security
 
 - Deny-by-default across tenants: org A data is never returned on org B's authenticated org APIs.
-- `Organization.is_active=False` blocks **new** retailer login sessions (`403`); rows and history are retained.
+- `Organization.is_active=False` blocks **new** retailer login sessions and token refresh (`403`); rows and history are retained.
 - Unauthenticated org calls → `401`. Wrong role / non-admin mutate → `403` without changing the resource.
 
 ## Not in this change

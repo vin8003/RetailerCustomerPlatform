@@ -163,6 +163,22 @@ class TestCrossTenantIsolation:
         assert org_a.name == original_name
         assert org_a.is_active is original_active
 
+    def test_cross_tenant_probe_does_not_create_org(self, api_client):
+        """Deny path must not ensure/create an org for the caller."""
+        user_a, profile_a = _make_retailer("probe_a", "Shop A")
+        user_b, profile_b = _make_retailer("probe_b", "Shop B", with_org=False)
+        assert profile_b.organization_id is None
+        before = Organization.objects.count()
+
+        api_client.force_authenticate(user=user_b)
+        response = api_client.get(
+            reverse("organization_detail", kwargs={"org_id": profile_a.organization_id})
+        )
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        profile_b.refresh_from_db()
+        assert profile_b.organization_id is None
+        assert Organization.objects.count() == before
+
 
 @pytest.mark.django_db
 class TestDisableTenantBlocksSessions:
@@ -204,6 +220,26 @@ class TestDisableTenantBlocksSessions:
         )
         assert login_ok.status_code == status.HTTP_200_OK
         assert "access" in login_ok.data["tokens"]
+
+    def test_disable_blocks_token_refresh(self, api_client):
+        user, profile = _make_retailer("refresh_block", "Refresh Shop")
+        login = api_client.post(
+            reverse("retailer_login"),
+            {"username": "refresh_block", "password": "TestPass123!"},
+        )
+        assert login.status_code == status.HTTP_200_OK
+        refresh = login.data["tokens"]["refresh"]
+
+        profile.organization.is_active = False
+        profile.organization.save(update_fields=["is_active"])
+
+        blocked = api_client.post(
+            reverse("token_refresh"),
+            {"refresh": refresh},
+            format="json",
+        )
+        assert blocked.status_code == status.HTTP_403_FORBIDDEN
+        assert "access" not in blocked.data
 
 
 @pytest.mark.django_db
