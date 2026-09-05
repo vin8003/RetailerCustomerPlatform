@@ -262,7 +262,12 @@ class ProductSearchSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Product
-        fields = ['id', 'name', 'price', 'unit', 'image', 'track_inventory', 'quantity', 'has_batches', 'batches']
+        # barcode + original_price are required by Print Labels (and POS search rows)
+        # so callers do not have to re-fetch product detail after picking a hit.
+        fields = [
+            'id', 'name', 'price', 'original_price', 'unit', 'image', 'barcode',
+            'track_inventory', 'quantity', 'has_batches', 'batches',
+        ]
         
     def get_batches(self, obj):
         if obj.has_batches:
