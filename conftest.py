@@ -54,7 +54,7 @@ def retailer_user():
 
 @pytest.fixture
 def retailer(retailer_user):
-    return RetailerProfile.objects.create(
+    profile = RetailerProfile.objects.create(
         user=retailer_user,
         shop_name="Products Test Shop",
         address_line1="123 Main St",
@@ -63,6 +63,9 @@ def retailer(retailer_user):
         pincode="123456",
         is_active=True,
     )
+    from retailers.organization import ensure_organization_for_profile
+    ensure_organization_for_profile(profile)
+    return profile
 
 
 @pytest.fixture

@@ -1,12 +1,49 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from .models import (
-    RetailerProfile, RetailerOperatingHours, RetailerCategory,
+    Organization, RetailerProfile, RetailerOperatingHours, RetailerCategory,
     RetailerCategoryMapping, RetailerReview, RetailerRewardConfig,
     Supplier
 )
 
 User = get_user_model()
+
+
+class OrganizationSerializer(serializers.ModelSerializer):
+    """Serializer for Organization (tenant parent)."""
+    location_ids = serializers.SerializerMethodField()
+    location_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Organization
+        fields = [
+            'id', 'name', 'owner', 'is_active',
+            'location_ids', 'location_count',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = [
+            'id', 'owner', 'location_ids', 'location_count',
+            'created_at', 'updated_at',
+        ]
+
+    def get_location_ids(self, obj):
+        return list(obj.locations.values_list('id', flat=True))
+
+    def get_location_count(self, obj):
+        return obj.locations.count()
+
+
+class OrganizationCreateSerializer(serializers.Serializer):
+    """Create an org and attach the caller's existing shop as location 1."""
+    name = serializers.CharField(max_length=255, required=False, allow_blank=True)
+
+
+class OrganizationUpdateSerializer(serializers.ModelSerializer):
+    """Staff-admin update: rename or disable/enable tenant."""
+
+    class Meta:
+        model = Organization
+        fields = ['name', 'is_active']
 
 
 class RetailerCategorySerializer(serializers.ModelSerializer):
@@ -49,6 +86,9 @@ class RetailerProfileSerializer(serializers.ModelSerializer):
     loyalty_earning_value = serializers.DecimalField(source='reward_config.loyalty_earning_value', max_digits=10, decimal_places=2, read_only=True)
     loyalty_min_order_value = serializers.DecimalField(source='reward_config.loyalty_min_order_value', max_digits=10, decimal_places=2, read_only=True)
     is_reward_active = serializers.BooleanField(source='reward_config.is_active', read_only=True)
+    organization_id = serializers.IntegerField(read_only=True, allow_null=True)
+    organization_name = serializers.SerializerMethodField()
+    organization_is_active = serializers.SerializerMethodField()
     
     class Meta:
         model = RetailerProfile
@@ -65,9 +105,16 @@ class RetailerProfileSerializer(serializers.ModelSerializer):
             'is_reward_active', 'is_referral_enabled', 'referral_reward_points', 'min_referral_order_amount', 
             'cashback_percentage', 'loyalty_earning_type', 'loyalty_earning_value', 'loyalty_min_order_value',
             'operating_hours', 'is_currently_open', 'next_open_time', 'categories', 'created_at', 'updated_at',
-            'receipt_footer', 'show_gst_on_receipt', 'printer_size'
+            'receipt_footer', 'show_gst_on_receipt', 'printer_size',
+            'organization_id', 'organization_name', 'organization_is_active',
         ]
         read_only_fields = ['id', 'is_verified', 'average_rating', 'total_ratings', 'created_at', 'updated_at']
+
+    def get_organization_name(self, obj):
+        return obj.organization.name if obj.organization_id else None
+
+    def get_organization_is_active(self, obj):
+        return obj.organization.is_active if obj.organization_id else None
 
     def get_is_currently_open(self, obj):
         from common.utils import get_retailer_status
