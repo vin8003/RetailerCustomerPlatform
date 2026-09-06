@@ -26,6 +26,7 @@ from retailers.models import (
     OrgNotificationDelivery,
     OrgRole,
     OrgStaffMembership,
+    RetailerCustomerMapping,
     RetailerProfile,
 )
 from retailers.organization import ensure_organization_for_profile
@@ -323,6 +324,11 @@ class TestNotificationBlastPermission:
         owner, profile = _make_retailer("notif_blast_ok", "Notif Blast OK")
         org = profile.organization
         customer = _make_customer("notif_blast_ok_customer")
+        RetailerCustomerMapping.objects.create(
+            retailer=profile,
+            customer=customer,
+            customer_type="online",
+        )
         api_client.force_authenticate(user=owner)
         resp = api_client.post(
             _blast_url(org.id),
@@ -335,6 +341,78 @@ class TestNotificationBlastPermission:
         )
         assert resp.status_code == status.HTTP_200_OK
         assert len(resp.data["deliveries"]) == 1
+
+    @patch("common.notification_dispatcher._deliver_via_channel", return_value=(True, None))
+    def test_blast_excludes_customers_not_mapped_to_org(self, mock_deliver, api_client):
+        owner, profile = _make_retailer("notif_blast_nomap", "Notif Blast NoMap")
+        org = profile.organization
+        unmapped = _make_customer("notif_blast_unmapped")
+        api_client.force_authenticate(user=owner)
+        resp = api_client.post(
+            _blast_url(org.id),
+            {
+                "notification_type": "order.status.processing",
+                "recipient_user_ids": [unmapped.id],
+            },
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        mock_deliver.assert_not_called()
+
+    @patch("common.notification_dispatcher._deliver_via_channel", return_value=(True, None))
+    def test_blast_for_org_a_does_not_include_org_b_customers(self, mock_deliver, api_client):
+        owner_a, profile_a = _make_retailer("notif_blast_a", "Notif Blast A")
+        owner_b, profile_b = _make_retailer("notif_blast_b", "Notif Blast B")
+        customer_b = _make_customer("notif_blast_only_b")
+        RetailerCustomerMapping.objects.create(
+            retailer=profile_b,
+            customer=customer_b,
+            customer_type="online",
+        )
+        api_client.force_authenticate(user=owner_a)
+        resp = api_client.post(
+            _blast_url(profile_a.organization.id),
+            {
+                "notification_type": "order.status.processing",
+                "recipient_user_ids": [customer_b.id],
+            },
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        assert not OrgNotificationDelivery.objects.filter(
+            organization=profile_a.organization,
+            recipient_user=customer_b,
+        ).exists()
+        mock_deliver.assert_not_called()
+
+    @patch("common.notification_dispatcher._deliver_via_channel", return_value=(True, None))
+    def test_blast_mixed_ids_only_delivers_to_org_mapped(self, mock_deliver, api_client):
+        owner_a, profile_a = _make_retailer("notif_blast_mix_a", "Notif Blast Mix A")
+        owner_b, profile_b = _make_retailer("notif_blast_mix_b", "Notif Blast Mix B")
+        customer_a = _make_customer("notif_blast_mix_a_cust")
+        customer_b = _make_customer("notif_blast_mix_b_cust")
+        RetailerCustomerMapping.objects.create(
+            retailer=profile_a,
+            customer=customer_a,
+            customer_type="online",
+        )
+        RetailerCustomerMapping.objects.create(
+            retailer=profile_b,
+            customer=customer_b,
+            customer_type="online",
+        )
+        api_client.force_authenticate(user=owner_a)
+        resp = api_client.post(
+            _blast_url(profile_a.organization.id),
+            {
+                "notification_type": "order.status.processing",
+                "recipient_user_ids": [customer_a.id, customer_b.id],
+            },
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        assert len(resp.data["deliveries"]) == 1
+        assert resp.data["deliveries"][0]["recipient_user_id"] == customer_a.id
 
 
 @pytest.mark.django_db

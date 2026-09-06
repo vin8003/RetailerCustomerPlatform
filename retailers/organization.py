@@ -242,6 +242,37 @@ def is_org_owner(user, organization):
     )
 
 
+def resolve_org_blast_recipients(organization, recipient_user_ids):
+    """
+    Return customer users mapped to this org via RetailerCustomerMapping.
+
+    Blast recipients must belong to the org through at least one shop location
+    (RetailerProfile). Unknown or cross-tenant ids are excluded — not leaked.
+    """
+    if organization is None or not recipient_user_ids:
+        return []
+
+    from django.contrib.auth import get_user_model
+    from .models import RetailerCustomerMapping
+
+    User = get_user_model()
+    mapped_ids = set(
+        RetailerCustomerMapping.objects.filter(
+            retailer__organization=organization,
+            customer_id__in=recipient_user_ids,
+        ).values_list('customer_id', flat=True)
+    )
+    if not mapped_ids:
+        return []
+
+    return list(
+        User.objects.filter(
+            id__in=mapped_ids,
+            user_type='customer',
+        )
+    )
+
+
 def would_remove_last_owner(organization, *, target_user, new_role=None, deactivate=False):
     """
     True when the mutation would strip the org owner's admin seat.

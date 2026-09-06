@@ -44,6 +44,7 @@ from .organization import (
     user_belongs_to_organization,
     would_remove_last_owner,
     record_staff_role_audit,
+    resolve_org_blast_recipients,
 )
 from .api_keys import (
     create_org_api_key,
@@ -2001,15 +2002,10 @@ def organization_notification_blast(request, org_id):
 
         data = blast_ser.validated_data
         recipient_ids = data['recipient_user_ids']
-        recipients = list(
-            User.objects.filter(
-                id__in=recipient_ids,
-                user_type='customer',
-            )
-        )
+        recipients = resolve_org_blast_recipients(org, recipient_ids)
         if not recipients:
             return Response(
-                {'error': 'No valid customer recipients found'},
+                {'error': 'No valid customer recipients found for this organization'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
