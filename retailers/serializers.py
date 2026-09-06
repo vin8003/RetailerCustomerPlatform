@@ -4,11 +4,13 @@ from .models import (
     Organization, RetailerProfile, RetailerOperatingHours, RetailerCategory,
     RetailerCategoryMapping, RetailerReview, RetailerRewardConfig,
     Supplier, OrgRole, OrgStaffMembership, OrgApiKey, OrgAuditLog,
+    OrgModuleFlags,
 )
 from .permissions_catalog import (
     validate_permission_codes,
 )
 from .api_scopes import validate_scope_codes
+from .module_flags_catalog import validate_module_flags
 
 User = get_user_model()
 
@@ -58,6 +60,42 @@ class OrganizationUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Organization
         fields = ['name', 'is_active']
+
+
+class OrgModuleFlagsSerializer(serializers.ModelSerializer):
+    """Read representation of org module flags for client nav hiding."""
+
+    organization_id = serializers.IntegerField(source='organization.id', read_only=True)
+    flags = serializers.SerializerMethodField()
+
+    class Meta:
+        model = OrgModuleFlags
+        fields = ['organization_id', 'flags', 'updated_at']
+        read_only_fields = fields
+
+    def get_flags(self, obj):
+        from .module_flags import get_module_flags_dict
+        return get_module_flags_dict(obj.organization)
+
+
+class OrgModuleFlagsUpdateSerializer(serializers.Serializer):
+    """Partial update of module enablement flags."""
+
+    flags = serializers.DictField(
+        child=serializers.BooleanField(),
+        required=True,
+    )
+
+    def validate_flags(self, value):
+        try:
+            normalized, unknown = validate_module_flags(value)
+        except TypeError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+        if unknown:
+            raise serializers.ValidationError(
+                f'Unknown module codes: {unknown}'
+            )
+        return normalized
 
 
 class OrgRoleSerializer(serializers.ModelSerializer):

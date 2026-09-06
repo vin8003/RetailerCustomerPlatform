@@ -299,6 +299,7 @@ class OrgAuditLog(models.Model):
     OBJECT_ORG_ROLE = 'org_role'
     OBJECT_STAFF_MEMBERSHIP = 'staff_membership'
     OBJECT_API_KEY = 'api_key'
+    OBJECT_MODULE_FLAGS = 'module_flags'
 
     organization = models.ForeignKey(
         Organization,
@@ -341,6 +342,32 @@ class OrgAuditLog(models.Model):
             f"{self.action} {self.object_type}:{self.object_id} "
             f"@ org {self.organization_id}"
         )
+
+
+class OrgModuleFlags(models.Model):
+    """
+    Per-organization module enablement (OE-101 / F-0004).
+
+    One row per org. ``flags`` maps catalog module codes to booleans.
+    All modules default to enabled on bootstrap.
+    """
+    organization = models.OneToOneField(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='module_flags',
+    )
+    flags = models.JSONField(
+        default=dict,
+        help_text='Map of module catalog code -> enabled (bool).',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'org_module_flags'
+
+    def __str__(self):
+        return f"module_flags org={self.organization_id}"
 
 
 class RetailerProfile(models.Model):

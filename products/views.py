@@ -251,6 +251,12 @@ def get_retailer_products(request):
                 status=status.HTTP_403_FORBIDDEN
             )
 
+        from retailers.module_flags import require_module_enabled
+
+        _org, module_err = require_module_enabled(request.user, 'catalog')
+        if module_err is not None:
+            return module_err
+
         try:
             retailer = RetailerProfile.objects.get(user=request.user)
         except RetailerProfile.DoesNotExist:

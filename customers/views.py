@@ -888,6 +888,12 @@ def get_retailer_customers(request):
                 {'error': 'Only retailers can access this endpoint'}, 
                 status=status.HTTP_403_FORBIDDEN
             )
+
+        from retailers.module_flags import require_module_enabled
+
+        _org, module_err = require_module_enabled(request.user, 'customers')
+        if module_err is not None:
+            return module_err
             
         retailer = get_object_or_404(RetailerProfile, user=request.user)
         
