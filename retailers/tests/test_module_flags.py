@@ -162,6 +162,34 @@ class TestModuleFlagsReadWrite:
         assert row.summary_before["catalog"] is True
         assert row.summary_after["catalog"] is False
 
+    def test_partial_patch_preserves_other_disabled_flags(self, api_client):
+        owner, profile = _make_retailer("mod_partial", "Mod Partial Shop")
+        org = profile.organization
+        api_client.force_authenticate(user=owner)
+
+        first = api_client.patch(
+            _module_flags_url(org.id),
+            {"flags": {"catalog": False}},
+            format="json",
+        )
+        assert first.status_code == status.HTTP_200_OK
+        assert first.data["flags"]["catalog"] is False
+
+        second = api_client.patch(
+            _module_flags_url(org.id),
+            {"flags": {"orders": False}},
+            format="json",
+        )
+        assert second.status_code == status.HTTP_200_OK
+        assert second.data["flags"]["catalog"] is False
+        assert second.data["flags"]["orders"] is False
+        assert second.data["flags"]["customers"] is True
+        assert second.data["flags"]["rewards"] is True
+
+        stored = OrgModuleFlags.objects.get(organization=org).flags
+        assert stored["catalog"] is False
+        assert stored["orders"] is False
+
 
 @pytest.mark.django_db
 class TestModuleEnforcement:
@@ -294,3 +322,17 @@ class TestModuleFlagsAuthMatrix:
             format="json",
         )
         assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_empty_flags_patch_returns_400_unchanged(self, api_client):
+        owner, profile = _make_retailer("mod_empty", "Mod Empty")
+        org = profile.organization
+        before = OrgModuleFlags.objects.get(organization=org).flags.copy()
+        api_client.force_authenticate(user=owner)
+        resp = api_client.patch(
+            _module_flags_url(org.id),
+            {"flags": {}},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        after = OrgModuleFlags.objects.get(organization=org).flags
+        assert after == before

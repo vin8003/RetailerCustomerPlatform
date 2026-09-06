@@ -33,16 +33,18 @@ def is_known_module(code: str) -> bool:
 
 def validate_module_flags(raw):
     """
-    Return (normalized_dict, unknown_list).
+    Validate a partial PATCH payload. Return only the keys provided in ``raw``.
 
-    Only known module codes are accepted. Values must be booleans.
+    Does not fill in defaults — callers merge onto stored flags.
     """
     if raw is None:
-        return default_module_flags(), []
+        raise TypeError('flags must be a dict of module_code -> bool')
     if not isinstance(raw, dict):
         raise TypeError('flags must be a dict of module_code -> bool')
+    if not raw:
+        raise ValueError('flags must include at least one module code')
     unknown = []
-    normalized = default_module_flags()
+    normalized = {}
     for key, value in raw.items():
         if not isinstance(key, str) or not key:
             unknown.append(key)

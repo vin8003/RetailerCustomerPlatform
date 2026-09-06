@@ -87,9 +87,15 @@ class OrgModuleFlagsUpdateSerializer(serializers.Serializer):
     )
 
     def validate_flags(self, value):
+        if not value:
+            raise serializers.ValidationError(
+                'flags must include at least one module code'
+            )
         try:
             normalized, unknown = validate_module_flags(value)
         except TypeError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+        except ValueError as exc:
             raise serializers.ValidationError(str(exc)) from exc
         if unknown:
             raise serializers.ValidationError(
