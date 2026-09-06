@@ -17,6 +17,8 @@ from .models import (
     RetailerCategoryMapping, RetailerReview, RetailerRewardConfig,
     OrgRole, OrgStaffMembership, OrgStaffRoleAudit, OrgApiKey, OrgAuditLog,
     OrgModuleFlags,
+    OrgNotificationConfig,
+    OrgNotificationDelivery,
 )
 from .serializers import (
     RetailerProfileSerializer, RetailerProfileUpdateSerializer,
@@ -30,6 +32,8 @@ from .serializers import (
     OrgApiKeySerializer, OrgApiKeyCreateSerializer, OrgApiKeyUpdateSerializer,
     OrgAuditLogSerializer,
     OrgModuleFlagsSerializer, OrgModuleFlagsUpdateSerializer,
+    OrgNotificationConfigSerializer, OrgNotificationConfigUpdateSerializer,
+    OrgNotificationDeliverySerializer, OrgNotificationBlastSerializer,
 )
 from .audit_log import record_org_audit_event
 from .organization import (
@@ -57,6 +61,13 @@ from .module_flags import (
     module_flags_dict_from_row,
 )
 from .module_flags_catalog import catalog_payload as module_flags_catalog_payload
+from common.notification_catalog import catalog_payload as notification_catalog_payload
+from common.notification_dispatcher import (
+    ensure_org_notification_config,
+    dispatch_bulk_notifications,
+    retry_notification_delivery,
+)
+from .module_flags import require_module_enabled
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from common.permissions import IsRetailerOwner, IsCustomerUser
@@ -1785,6 +1796,240 @@ def organization_module_flags(request, org_id):
         )
     except Exception as e:
         logger.error(f"Error in organization_module_flags: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_notification_catalog(request, org_id):
+    """Versioned notification type catalog for this org (same-tenant read)."""
+    try:
+        org, err = _resolve_org_for_caller(request, org_id)
+        if err is not None:
+            return err
+        return Response(notification_catalog_payload(), status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error in organization_notification_catalog: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET', 'PATCH'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_notification_config(request, org_id):
+    """
+    Read or update org notification preferences (OE-183 / F-0005).
+
+    GET — any same-tenant retailer.
+    PATCH — requires ``notifications.manage``; writes OrgAuditLog row.
+    """
+    try:
+        org, err = _resolve_org_for_caller(request, org_id)
+        if err is not None:
+            return err
+
+        org, module_err = require_module_enabled(request.user, 'notifications')
+        if module_err is not None:
+            return module_err
+
+        row = ensure_org_notification_config(org)
+
+        if request.method == 'GET':
+            return Response(
+                OrgNotificationConfigSerializer(row).data,
+                status=status.HTTP_200_OK,
+            )
+
+        if not user_has_org_permission(request.user, org, 'notifications.manage'):
+            return Response(
+                {'error': 'Notification manage permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        update_ser = OrgNotificationConfigUpdateSerializer(data=request.data, partial=True)
+        if not update_ser.is_valid():
+            return Response(update_ser.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        summary_before = OrgNotificationConfigSerializer(row).data
+        data = update_ser.validated_data
+        updates = []
+        if 'default_channel' in data:
+            row.default_channel = data['default_channel']
+            updates.append('default_channel')
+        if 'disabled_types' in data:
+            row.disabled_types = data['disabled_types']
+            updates.append('disabled_types')
+        if 'channel_overrides' in data:
+            merged = dict(row.channel_overrides or {})
+            merged.update(data['channel_overrides'])
+            row.channel_overrides = merged
+            updates.append('channel_overrides')
+        if updates:
+            updates.append('updated_at')
+            row.save(update_fields=updates)
+
+        record_org_audit_event(
+            organization=org,
+            actor=request.user,
+            action=OrgAuditLog.ACTION_UPDATE,
+            object_type=OrgAuditLog.OBJECT_NOTIFICATION_CONFIG,
+            object_id=org.id,
+            summary_before=summary_before,
+            summary_after=OrgNotificationConfigSerializer(row).data,
+        )
+        return Response(
+            OrgNotificationConfigSerializer(row).data,
+            status=status.HTTP_200_OK,
+        )
+    except Exception as e:
+        logger.error(f"Error in organization_notification_config: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_notification_deliveries(request, org_id):
+    """List notification delivery rows for this org (same-tenant read)."""
+    try:
+        org, err = _resolve_org_for_caller(request, org_id)
+        if err is not None:
+            return err
+
+        org, module_err = require_module_enabled(request.user, 'notifications')
+        if module_err is not None:
+            return module_err
+
+        qs = OrgNotificationDelivery.objects.filter(organization=org).order_by('-created_at')
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+
+        paginator = PageNumberPagination()
+        paginator.page_size = 50
+        page = paginator.paginate_queryset(qs, request)
+        if page is not None:
+            serializer = OrgNotificationDeliverySerializer(page, many=True)
+            return paginator.get_paginated_response(serializer.data)
+
+        serializer = OrgNotificationDeliverySerializer(qs, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error in organization_notification_deliveries: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_notification_delivery_retry(request, org_id, delivery_id):
+    """Retry a failed notification delivery when retries remain."""
+    try:
+        org, err = _resolve_org_for_caller(request, org_id)
+        if err is not None:
+            return err
+
+        org, module_err = require_module_enabled(request.user, 'notifications')
+        if module_err is not None:
+            return module_err
+
+        if not user_has_org_permission(request.user, org, 'notifications.manage'):
+            return Response(
+                {'error': 'Notification manage permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        try:
+            delivery = OrgNotificationDelivery.objects.get(
+                pk=delivery_id,
+                organization=org,
+            )
+        except OrgNotificationDelivery.DoesNotExist:
+            return Response(
+                {'error': 'Delivery not found or access denied'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        delivery, retry_error = retry_notification_delivery(delivery)
+        payload = OrgNotificationDeliverySerializer(delivery).data
+        if retry_error and delivery.status != delivery.STATUS_SENT:
+            payload['retry_error'] = retry_error
+        return Response(payload, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error in organization_notification_delivery_retry: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_notification_blast(request, org_id):
+    """
+    Staff bulk notification blast (OE-183 / F-0005).
+
+    Requires ``notifications.blast``. Cross-tenant recipient ids are ignored.
+    """
+    try:
+        org, err = _resolve_org_for_caller(request, org_id)
+        if err is not None:
+            return err
+
+        org, module_err = require_module_enabled(request.user, 'notifications')
+        if module_err is not None:
+            return module_err
+
+        if not user_has_org_permission(request.user, org, 'notifications.blast'):
+            return Response(
+                {'error': 'Notification blast permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        blast_ser = OrgNotificationBlastSerializer(data=request.data)
+        if not blast_ser.is_valid():
+            return Response(blast_ser.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        data = blast_ser.validated_data
+        recipient_ids = data['recipient_user_ids']
+        recipients = list(
+            User.objects.filter(
+                id__in=recipient_ids,
+                user_type='customer',
+            )
+        )
+        if not recipients:
+            return Response(
+                {'error': 'No valid customer recipients found'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        results = dispatch_bulk_notifications(
+            organization=org,
+            actor=request.user,
+            notification_type=data['notification_type'],
+            recipient_users=recipients,
+            context=data.get('context') or {},
+            channel=data.get('channel'),
+        )
+        deliveries = []
+        for delivery, skip in results:
+            if delivery is not None:
+                deliveries.append(OrgNotificationDeliverySerializer(delivery).data)
+            elif skip:
+                deliveries.append({'skipped': skip})
+        return Response({'deliveries': deliveries}, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error in organization_notification_blast: {str(e)}")
         return Response(
             {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,

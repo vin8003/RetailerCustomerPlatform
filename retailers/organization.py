@@ -149,6 +149,10 @@ def ensure_org_rbac_bootstrap(organization):
 
         ensure_org_module_flags(org)
 
+        from common.notification_dispatcher import ensure_org_notification_config
+
+        ensure_org_notification_config(org)
+
 
 def get_organization_for_user(user):
     """

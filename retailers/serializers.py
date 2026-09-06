@@ -5,12 +5,19 @@ from .models import (
     RetailerCategoryMapping, RetailerReview, RetailerRewardConfig,
     Supplier, OrgRole, OrgStaffMembership, OrgApiKey, OrgAuditLog,
     OrgModuleFlags,
+    OrgNotificationConfig,
+    OrgNotificationDelivery,
 )
 from .permissions_catalog import (
     validate_permission_codes,
 )
 from .api_scopes import validate_scope_codes
 from .module_flags_catalog import validate_module_flags
+from common.notification_catalog import (
+    ALL_CHANNELS,
+    validate_disabled_types,
+    validate_channel,
+)
 
 User = get_user_model()
 
@@ -101,6 +108,107 @@ class OrgModuleFlagsUpdateSerializer(serializers.Serializer):
                 f'Unknown module codes: {unknown}'
             )
         return normalized
+
+
+class OrgNotificationConfigSerializer(serializers.ModelSerializer):
+    """Read representation of org notification preferences."""
+
+    organization_id = serializers.IntegerField(source='organization.id', read_only=True)
+
+    class Meta:
+        model = OrgNotificationConfig
+        fields = [
+            'organization_id',
+            'default_channel',
+            'disabled_types',
+            'channel_overrides',
+            'updated_at',
+        ]
+        read_only_fields = fields
+
+
+class OrgNotificationConfigUpdateSerializer(serializers.Serializer):
+    default_channel = serializers.CharField(max_length=16, required=False)
+    disabled_types = serializers.ListField(
+        child=serializers.CharField(max_length=64),
+        required=False,
+    )
+    channel_overrides = serializers.DictField(
+        child=serializers.CharField(max_length=16),
+        required=False,
+    )
+
+    def validate_default_channel(self, value):
+        try:
+            return validate_channel(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+
+    def validate_disabled_types(self, value):
+        try:
+            normalized, errors = validate_disabled_types(value)
+        except TypeError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+        if errors:
+            raise serializers.ValidationError(errors)
+        return normalized
+
+    def validate_channel_overrides(self, value):
+        if value is None:
+            return {}
+        normalized = {}
+        for key, channel in value.items():
+            try:
+                normalized[key] = validate_channel(channel)
+            except ValueError as exc:
+                raise serializers.ValidationError({key: str(exc)}) from exc
+        return normalized
+
+
+class OrgNotificationDeliverySerializer(serializers.ModelSerializer):
+    organization_id = serializers.IntegerField(source='organization.id', read_only=True)
+    recipient_user_id = serializers.IntegerField(
+        source='recipient_user.id',
+        read_only=True,
+        allow_null=True,
+    )
+    order_id = serializers.IntegerField(source='order.id', read_only=True, allow_null=True)
+
+    class Meta:
+        model = OrgNotificationDelivery
+        fields = [
+            'id',
+            'organization_id',
+            'order_id',
+            'recipient_user_id',
+            'notification_type',
+            'event_name',
+            'channel',
+            'status',
+            'retry_count',
+            'last_error',
+            'sent_at',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = fields
+
+
+class OrgNotificationBlastSerializer(serializers.Serializer):
+    notification_type = serializers.CharField(max_length=64)
+    recipient_user_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        allow_empty=False,
+    )
+    context = serializers.DictField(required=False, default=dict)
+    channel = serializers.ChoiceField(choices=sorted(ALL_CHANNELS), required=False)
+
+    def validate_notification_type(self, value):
+        from common.notification_catalog import is_known_notification_type
+
+        if not is_known_notification_type(value):
+            raise serializers.ValidationError(f'Unknown notification type: {value}')
+        return value
 
 
 class OrgRoleSerializer(serializers.ModelSerializer):
