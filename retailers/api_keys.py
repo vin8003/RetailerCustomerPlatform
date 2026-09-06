@@ -12,6 +12,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from .api_scopes import ALL_API_SCOPE_CODES, validate_scope_codes
+from .audit_log import api_key_audit_summaries, record_org_audit_event
 from .models import OrgApiKey, OrgApiKeyAudit
 
 
@@ -132,7 +133,7 @@ def record_api_key_audit(
     scopes_before=None,
     scopes_after=None,
 ):
-    return OrgApiKeyAudit.objects.create(
+    row = OrgApiKeyAudit.objects.create(
         organization=organization,
         api_key=api_key,
         actor=actor if getattr(actor, 'is_authenticated', False) else None,
@@ -141,6 +142,21 @@ def record_api_key_audit(
         scopes_before=list(scopes_before or []),
         scopes_after=list(scopes_after or []),
     )
+    summary_before, summary_after = api_key_audit_summaries(
+        api_key=api_key,
+        scopes_before=scopes_before,
+        scopes_after=scopes_after,
+    )
+    record_org_audit_event(
+        organization=organization,
+        actor=actor,
+        action=action,
+        object_type='api_key',
+        object_id=api_key.id,
+        summary_before=summary_before,
+        summary_after=summary_after,
+    )
+    return row
 
 
 def authenticate_api_key(raw_key: str):

@@ -276,6 +276,73 @@ class OrgApiKeyAudit(models.Model):
         return f"{self.action} {self.key_prefix} @ {self.organization_id}"
 
 
+class OrgAuditLog(models.Model):
+    """
+    Immutable org-scoped audit row for sensitive shop mutations (OE-99 / F-0003).
+
+    Append-only: product APIs expose GET list only; no update/delete endpoints.
+    """
+    ACTION_CREATE = 'create'
+    ACTION_UPDATE = 'update'
+    ACTION_GRANT = 'grant'
+    ACTION_REVOKE = 'revoke'
+    ACTION_CHANGE = 'change'
+    ACTION_CHOICES = [
+        (ACTION_CREATE, 'Create'),
+        (ACTION_UPDATE, 'Update'),
+        (ACTION_GRANT, 'Grant'),
+        (ACTION_REVOKE, 'Revoke'),
+        (ACTION_CHANGE, 'Change'),
+    ]
+
+    OBJECT_ORGANIZATION = 'organization'
+    OBJECT_ORG_ROLE = 'org_role'
+    OBJECT_STAFF_MEMBERSHIP = 'staff_membership'
+    OBJECT_API_KEY = 'api_key'
+
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='audit_logs',
+    )
+    location = models.ForeignKey(
+        'RetailerProfile',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='audit_logs',
+        help_text='Shop location when the mutation is location-scoped; null for org-wide.',
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='org_audit_logs_made',
+    )
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    object_type = models.CharField(max_length=64)
+    object_id = models.CharField(max_length=64)
+    summary_before = models.JSONField(default=dict, blank=True)
+    summary_after = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'org_audit_log'
+        indexes = [
+            models.Index(fields=['organization', 'created_at']),
+            models.Index(fields=['organization', 'location', 'created_at']),
+            models.Index(fields=['organization', 'object_type', 'object_id']),
+        ]
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return (
+            f"{self.action} {self.object_type}:{self.object_id} "
+            f"@ org {self.organization_id}"
+        )
+
+
 class RetailerProfile(models.Model):
     """
     Extended profile for retailer users (operational shop / location record).

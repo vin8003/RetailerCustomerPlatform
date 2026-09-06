@@ -5,7 +5,7 @@ Deny-by-default: only codes listed here may be stored on a role.
 Org owner always has every permission (implicit admin) until they delegate.
 """
 
-PERMISSION_CATALOG_VERSION = 1
+PERMISSION_CATALOG_VERSION = 2
 
 # code -> human description
 PERMISSION_DEFINITIONS = {
@@ -13,6 +13,7 @@ PERMISSION_DEFINITIONS = {
     'roles.manage': 'Create and edit named roles and their permission lists',
     'staff.manage': 'Assign, change, and revoke staff memberships and roles',
     'api_keys.manage': 'Create, list, and revoke org-scoped partner API keys',
+    'audit.read': 'Read immutable shop audit log entries for this organization',
 }
 
 ALL_PERMISSION_CODES = frozenset(PERMISSION_DEFINITIONS.keys())
