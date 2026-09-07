@@ -6,6 +6,7 @@ version prefix, 401/403 matrix, cross-tenant isolation, audit on grant/revoke,
 existing JWT owner paths still work.
 """
 import pytest
+from django.db.models import prefetch_related_objects
 from django.urls import reverse
 from rest_framework import status
 
@@ -16,7 +17,8 @@ from retailers.api_scopes import (
     API_SCOPE_CATALOG_VERSION,
     validate_scope_codes,
 )
-from retailers.models import OrgApiKey, OrgApiKeyAudit, OrgRole, RetailerProfile
+from retailers.models import OrgApiKey, OrgApiKeyAudit, OrgRole, Organization, RetailerProfile
+from retailers.serializers import PartnerOrganizationSerializer
 from retailers.organization import ensure_organization_for_profile
 from retailers.permissions_catalog import ALL_PERMISSION_CODES, ROLE_SLUG_CASHIER
 
@@ -471,11 +473,21 @@ class TestPartnerQueryBudget:
             created_by=owner,
         )
         _auth_api_key(api_client, raw)
-        with django_assert_num_queries(6):
+        with django_assert_num_queries(5):
             response = api_client.get(reverse("partner_v1_org"))
         assert response.status_code == status.HTTP_200_OK
         assert response.data["id"] == org.id
         assert profile.id in response.data["location_ids"]
+
+    def test_partner_org_serializer_uses_prefetched_locations(
+        self, django_assert_num_queries
+    ):
+        _owner, profile = _make_retailer("partner_prefetch", "Partner Prefetch Shop")
+        org = Organization.objects.get(pk=profile.organization_id)
+        prefetch_related_objects([org], 'locations')
+        with django_assert_num_queries(0):
+            data = PartnerOrganizationSerializer(org).data
+        assert profile.id in data["location_ids"]
 
     def test_partner_locations_list_query_count(
         self, api_client, django_assert_num_queries
