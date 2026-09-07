@@ -158,9 +158,9 @@ class IsActiveRetailer(permissions.BasePermission):
 
 class IsOrgStaffAdmin(permissions.BasePermission):
     """
-    Org staff-admin for OE-97 org APIs.
+    Org staff-admin for org APIs (OE-98).
 
-    Until OE-98 RBAC, only the organization owner qualifies.
+    Qualifies when the user holds ``staff.manage`` (org owner always does).
     """
     message = 'Organization staff-admin permission required.'
 

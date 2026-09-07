@@ -2,7 +2,8 @@ from django.contrib import admin
 from .models import (
     Organization, RetailerProfile, RetailerOperatingHours, RetailerCategory,
     RetailerCategoryMapping, RetailerReview, RetailerRewardConfig,
-    RetailerBlacklist, Supplier, RetailerCustomerMapping, CustomerLedger
+    RetailerBlacklist, Supplier, RetailerCustomerMapping, CustomerLedger,
+    OrgRole, OrgStaffMembership, OrgStaffRoleAudit,
 )
 
 
@@ -14,6 +15,38 @@ class OrganizationAdmin(admin.ModelAdmin):
     search_fields = ['name', 'owner__username', 'owner__email']
     ordering = ['-created_at']
     readonly_fields = ['created_at', 'updated_at']
+
+
+@admin.register(OrgRole)
+class OrgRoleAdmin(admin.ModelAdmin):
+    list_display = ['name', 'slug', 'organization', 'is_system', 'updated_at']
+    list_filter = ['is_system']
+    search_fields = ['name', 'slug', 'organization__name']
+    readonly_fields = ['created_at', 'updated_at']
+
+
+@admin.register(OrgStaffMembership)
+class OrgStaffMembershipAdmin(admin.ModelAdmin):
+    list_display = ['user', 'organization', 'role', 'is_active', 'updated_at']
+    list_filter = ['is_active']
+    search_fields = ['user__username', 'organization__name', 'role__slug']
+    readonly_fields = ['created_at', 'updated_at']
+
+
+@admin.register(OrgStaffRoleAudit)
+class OrgStaffRoleAuditAdmin(admin.ModelAdmin):
+    list_display = [
+        'organization', 'action', 'actor', 'target_user',
+        'from_role', 'to_role', 'created_at',
+    ]
+    list_filter = ['action']
+    search_fields = [
+        'organization__name', 'actor__username', 'target_user__username',
+    ]
+    readonly_fields = [
+        'organization', 'actor', 'target_user', 'action',
+        'from_role', 'to_role', 'created_at',
+    ]
 
 
 @admin.register(RetailerProfile)
