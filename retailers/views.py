@@ -16,6 +16,7 @@ from .models import (
     Organization, RetailerProfile, RetailerOperatingHours, RetailerCategory,
     RetailerCategoryMapping, RetailerReview, RetailerRewardConfig,
     OrgRole, OrgStaffMembership, OrgStaffRoleAudit, OrgApiKey, OrgAuditLog,
+    OrgModuleFlags,
 )
 from .serializers import (
     RetailerProfileSerializer, RetailerProfileUpdateSerializer,
@@ -28,6 +29,7 @@ from .serializers import (
     OrgStaffMembershipSerializer, OrgStaffAssignSerializer, OrgStaffUpdateSerializer,
     OrgApiKeySerializer, OrgApiKeyCreateSerializer, OrgApiKeyUpdateSerializer,
     OrgAuditLogSerializer,
+    OrgModuleFlagsSerializer, OrgModuleFlagsUpdateSerializer,
 )
 from .audit_log import record_org_audit_event
 from .organization import (
@@ -50,6 +52,11 @@ from .permissions_catalog import (
     ROLE_SLUG_ADMIN,
     catalog_payload,
 )
+from .module_flags import (
+    ensure_org_module_flags,
+    module_flags_dict_from_row,
+)
+from .module_flags_catalog import catalog_payload as module_flags_catalog_payload
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from common.permissions import IsRetailerOwner, IsCustomerUser
@@ -781,6 +788,12 @@ def manage_reward_configuration(request):
                 {'error': 'Only retailers can access this endpoint'}, 
                 status=status.HTTP_403_FORBIDDEN
             )
+
+        from .module_flags import require_module_enabled
+
+        _org, module_err = require_module_enabled(request.user, 'rewards')
+        if module_err is not None:
+            return module_err
             
         profile = get_object_or_404(RetailerProfile, user=request.user)
         
@@ -1695,6 +1708,83 @@ def organization_audit_log(request, org_id):
         return paginator.get_paginated_response(serializer.data)
     except Exception as e:
         logger.error(f"Error in organization_audit_log: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_module_flags_catalog(request, org_id):
+    """Versioned module flag catalog for this org (same-tenant read)."""
+    try:
+        org, err = _resolve_org_for_caller(request, org_id)
+        if err is not None:
+            return err
+        return Response(module_flags_catalog_payload(), status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error in organization_module_flags_catalog: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET', 'PATCH'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_module_flags(request, org_id):
+    """
+    Read or update org module flags (OE-101 / F-0004).
+
+    GET — any same-tenant retailer (for client nav hiding).
+    PATCH — requires ``modules.manage``; writes OrgAuditLog row.
+    """
+    try:
+        org, err = _resolve_org_for_caller(request, org_id)
+        if err is not None:
+            return err
+
+        row = ensure_org_module_flags(org)
+
+        if request.method == 'GET':
+            return Response(
+                OrgModuleFlagsSerializer(row).data,
+                status=status.HTTP_200_OK,
+            )
+
+        if not user_has_org_permission(request.user, org, 'modules.manage'):
+            return Response(
+                {'error': 'Module manage permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        update_ser = OrgModuleFlagsUpdateSerializer(data=request.data)
+        if not update_ser.is_valid():
+            return Response(update_ser.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        summary_before = module_flags_dict_from_row(row)
+        incoming = update_ser.validated_data['flags']
+        merged = dict(summary_before)
+        merged.update(incoming)
+        row.flags = merged
+        row.save(update_fields=['flags', 'updated_at'])
+
+        record_org_audit_event(
+            organization=org,
+            actor=request.user,
+            action=OrgAuditLog.ACTION_UPDATE,
+            object_type=OrgAuditLog.OBJECT_MODULE_FLAGS,
+            object_id=org.id,
+            summary_before=summary_before,
+            summary_after=merged,
+        )
+        return Response(
+            OrgModuleFlagsSerializer(row).data,
+            status=status.HTTP_200_OK,
+        )
+    except Exception as e:
+        logger.error(f"Error in organization_module_flags: {str(e)}")
         return Response(
             {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,

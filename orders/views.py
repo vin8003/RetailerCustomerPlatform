@@ -545,6 +545,12 @@ def get_order_stats(request):
                 {'error': 'Only retailers can access order stats'}, 
                 status=status.HTTP_403_FORBIDDEN
             )
+
+        from retailers.module_flags import require_module_enabled
+
+        _org, module_err = require_module_enabled(request.user, 'orders')
+        if module_err is not None:
+            return module_err
         
         try:
             retailer = RetailerProfile.objects.get(user=request.user)
