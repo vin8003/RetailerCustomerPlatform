@@ -1201,6 +1201,54 @@ class OrderModificationSerializer(serializers.Serializer):
             return instance
 
 
+class OrderInboxActionSerializer(serializers.Serializer):
+    """
+    Retailer inbox action — maps semantic actions to status transitions (OE-135).
+    """
+
+    action = serializers.ChoiceField(choices=[])
+    notes = serializers.CharField(required=False, allow_blank=True)
+    preparation_time_minutes = serializers.IntegerField(
+        required=False, min_value=0, allow_null=True
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        from .inbox import INBOX_ACTION_CHOICES
+
+        self.fields['action'].choices = INBOX_ACTION_CHOICES
+
+    def validate(self, attrs):
+        order = self.context['order']
+        from .inbox import validate_inbox_action
+
+        action = attrs['action']
+        try:
+            attrs['target_status'] = validate_inbox_action(order.status, action)
+        except ValueError as exc:
+            raise serializers.ValidationError({'action': [str(exc)]}) from exc
+        return attrs
+
+    def save(self, **kwargs):
+        order = self.context['order']
+        user = self.context['user']
+        target_status = self.validated_data['target_status']
+        notes = self.validated_data.get('notes', '')
+        preparation_time_minutes = self.validated_data.get('preparation_time_minutes')
+
+        status_serializer = OrderStatusUpdateSerializer(
+            order,
+            data={
+                'status': target_status,
+                'notes': notes,
+                'preparation_time_minutes': preparation_time_minutes,
+            },
+            context={'order': order, 'user': user},
+        )
+        status_serializer.is_valid(raise_exception=True)
+        return status_serializer.save()
+
+
 class OrderChatMessageSerializer(serializers.ModelSerializer):
     """
     Serializer for order chat messages
