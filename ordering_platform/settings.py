@@ -155,7 +155,9 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # REST Framework settings
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
+        # JWT first for retailer/customer apps; API-key for partner /api/v1/partner/*
         'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'common.authentication.OrgApiKeyAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
@@ -177,7 +179,25 @@ REST_FRAMEWORK = {
         'login': '5/minute',
         'otp': '3/minute',
         'geo_estimate': '20/hour',
+        # Partner org API keys (OE-182 / F-0006)
+        'api_key': '600/hour',
     }
+}
+
+# Partner / public versioned API policy (OE-182). Breaking changes → new prefix.
+API_VERSIONING = {
+    'current': 'v1',
+    'supported': ['v1'],
+    'sunset': {
+        # v1 remains until an explicit sunset date is published here.
+        'v1': None,
+    },
+    'notes': (
+        'Breaking changes ship under a new version prefix (e.g. /api/v2/). '
+        'Unversioned /api/retailer/ and /api/customer/ JWT routes remain for '
+        'retailer_ordereasy_njs and customer_ordereasy_njs; partners use '
+        '/api/v1/partner/ with org-scoped API keys.'
+    ),
 }
 
 # JWT Settings
@@ -404,6 +424,7 @@ if 'test' in sys.argv or 'pytest' in sys.modules:
     REST_FRAMEWORK = {
         'DEFAULT_AUTHENTICATION_CLASSES': [
             'rest_framework_simplejwt.authentication.JWTAuthentication',
+            'common.authentication.OrgApiKeyAuthentication',
         ],
         'DEFAULT_PERMISSION_CLASSES': [
             'rest_framework.permissions.IsAuthenticated',
@@ -415,6 +436,7 @@ if 'test' in sys.argv or 'pytest' in sys.modules:
             'anon': '10000/minute',
             'user': '10000/minute',
             'geo_estimate': '10000/minute',
+            'api_key': '10000/minute',
         },
         'DEFAULT_PAGINATION_CLASS': 'common.pagination.StandardResultsSetPagination',
         'PAGE_SIZE': 20,
