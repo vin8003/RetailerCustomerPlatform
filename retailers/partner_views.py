@@ -7,7 +7,9 @@ Key-authenticated only. JWT retailer/customer apps keep /api/retailer/ and
 import logging
 
 from django.conf import settings
+from django.db.models import prefetch_related_objects
 from rest_framework import status
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.decorators import (
     api_view,
     authentication_classes,
@@ -23,7 +25,6 @@ from common.error_utils import format_exception
 from common.throttling import OrgApiKeyRateThrottle
 
 from .api_scopes import scope_catalog_payload
-from .models import RetailerProfile
 from .serializers import (
     PartnerLocationSerializer,
     PartnerOrganizationSerializer,
@@ -34,6 +35,19 @@ logger = logging.getLogger(__name__)
 
 _PARTNER_AUTH = [OrgApiKeyAuthentication]
 _PARTNER_THROTTLE = [OrgApiKeyRateThrottle]
+
+
+class PartnerLocationPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
+def _serialize_partner_organization(org):
+    """Partner org payload with locations prefetched (avoids N+1 on location_ids)."""
+    if org is not None:
+        prefetch_related_objects([org], 'locations')
+    return PartnerOrganizationSerializer(org).data
 
 
 class _IsAuthenticatedApiKey(BasePermission):
@@ -141,7 +155,7 @@ def partner_organization(request):
 
         if request.method == 'GET':
             return Response(
-                PartnerOrganizationSerializer(org).data,
+                _serialize_partner_organization(org),
                 status=status.HTTP_200_OK,
             )
 
@@ -163,7 +177,7 @@ def partner_organization(request):
             org.pk, original_name, org.name,
         )
         return Response(
-            PartnerOrganizationSerializer(org).data,
+            _serialize_partner_organization(org),
             status=status.HTTP_200_OK,
         )
     except Exception as e:
@@ -186,6 +200,12 @@ def partner_locations(request):
             return err
 
         locations = org.locations.filter(is_active=True).order_by('id')
+        paginator = PartnerLocationPagination()
+        page = paginator.paginate_queryset(locations, request)
+        if page is not None:
+            return paginator.get_paginated_response(
+                PartnerLocationSerializer(page, many=True).data
+            )
         return Response(
             PartnerLocationSerializer(locations, many=True).data,
             status=status.HTTP_200_OK,
@@ -213,15 +233,8 @@ def partner_location_detail(request, location_id):
         if err is not None:
             return err
 
-        try:
-            location = RetailerProfile.objects.get(pk=location_id)
-        except RetailerProfile.DoesNotExist:
-            return Response(
-                {'error': 'Location not found or access denied'},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-        if location.organization_id != org.id:
+        location = org.locations.filter(pk=location_id).first()
+        if location is None:
             return Response(
                 {'error': 'Location not found or access denied'},
                 status=status.HTTP_403_FORBIDDEN,

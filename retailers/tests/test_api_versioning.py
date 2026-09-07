@@ -100,12 +100,13 @@ class TestApiKeyManagement:
             key_prefix=resp.data["prefix"],
         ).exists()
 
-        # List never re-exposes the secret
+        # List never re-exposes the secret (paginated)
         listed = api_client.get(
             reverse("organization_api_keys", kwargs={"org_id": org.id})
         )
         assert listed.status_code == status.HTTP_200_OK
-        assert all("api_key" not in row for row in listed.data)
+        assert listed.data["count"] == 1
+        assert all("api_key" not in row for row in listed.data["results"])
 
     def test_unknown_scope_on_create_rejected(self, api_client):
         owner, profile = _make_retailer("bad_scope_owner", "Bad Scope Shop")
@@ -317,7 +318,7 @@ class TestPartnerApiKeyAuthAndScopes:
 
         locs = api_client.get(reverse("partner_v1_locations"))
         assert locs.status_code == status.HTTP_200_OK
-        loc_ids = {row["id"] for row in locs.data}
+        loc_ids = {row["id"] for row in locs.data["results"]}
         assert profile_a.id in loc_ids
         assert profile_b.id not in loc_ids
 
@@ -380,3 +381,157 @@ class TestVersioningAndJwtCompatibility:
 
     def test_owner_still_has_api_keys_manage_in_catalog(self):
         assert "api_keys.manage" in ALL_PERMISSION_CODES
+
+
+@pytest.mark.django_db
+class TestApiKeyQueryBudget:
+    """Hot API key management endpoints must stay bounded (no N+1, tenant-scoped)."""
+
+    def test_api_key_list_query_count(self, api_client, django_assert_num_queries):
+        owner, profile = _make_retailer("key_q_owner", "Key Query Shop")
+        org = profile.organization
+        create_org_api_key(
+            organization=org,
+            name="List Key",
+            scopes=["partner.org.read"],
+            created_by=owner,
+        )
+        api_client.force_authenticate(user=owner)
+        url = reverse("organization_api_keys", kwargs={"org_id": org.id})
+        with django_assert_num_queries(3):
+            response = api_client.get(url)
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["count"] == 1
+        assert len(response.data["results"]) == 1
+
+    def test_api_key_list_scales_with_keys(
+        self, api_client, django_assert_num_queries
+    ):
+        owner, profile = _make_retailer("key_q_scale", "Key Scale Shop")
+        org = profile.organization
+        for i in range(3):
+            create_org_api_key(
+                organization=org,
+                name=f"Key {i}",
+                scopes=["partner.org.read"],
+                created_by=owner,
+            )
+        api_client.force_authenticate(user=owner)
+        url = reverse("organization_api_keys", kwargs={"org_id": org.id})
+        with django_assert_num_queries(3):
+            response = api_client.get(url)
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["count"] == 3
+
+    def test_api_key_detail_query_count(self, api_client, django_assert_num_queries):
+        owner, profile = _make_retailer("key_q_detail", "Key Detail Shop")
+        org = profile.organization
+        api_key, _raw = create_org_api_key(
+            organization=org,
+            name="Detail Key",
+            scopes=["partner.org.read"],
+            created_by=owner,
+        )
+        api_client.force_authenticate(user=owner)
+        url = reverse(
+            "organization_api_key_detail",
+            kwargs={"org_id": org.id, "key_id": api_key.id},
+        )
+        with django_assert_num_queries(2):
+            response = api_client.get(url)
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["name"] == "Detail Key"
+
+    def test_cross_tenant_api_key_list_denied_one_query(
+        self, api_client, django_assert_num_queries
+    ):
+        owner_a, profile_a = _make_retailer("key_iso_a", "Key Iso A")
+        owner_b, _profile_b = _make_retailer("key_iso_b", "Key Iso B")
+        api_client.force_authenticate(user=owner_b)
+        url = reverse(
+            "organization_api_keys",
+            kwargs={"org_id": profile_a.organization_id},
+        )
+        with django_assert_num_queries(1):
+            response = api_client.get(url)
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.django_db
+class TestPartnerQueryBudget:
+    """Hot partner v1 endpoints must stay bounded (no N+1, tenant-scoped)."""
+
+    def test_partner_org_query_count(self, api_client, django_assert_num_queries):
+        owner, profile = _make_retailer("partner_q_org", "Partner Org Shop")
+        org = profile.organization
+        _key, raw = create_org_api_key(
+            organization=org,
+            name="Partner Org Key",
+            scopes=["partner.org.read"],
+            created_by=owner,
+        )
+        _auth_api_key(api_client, raw)
+        with django_assert_num_queries(6):
+            response = api_client.get(reverse("partner_v1_org"))
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["id"] == org.id
+        assert profile.id in response.data["location_ids"]
+
+    def test_partner_locations_list_query_count(
+        self, api_client, django_assert_num_queries
+    ):
+        owner, profile = _make_retailer("partner_q_locs", "Partner Locs Shop")
+        org = profile.organization
+        _key, raw = create_org_api_key(
+            organization=org,
+            name="Partner Locs Key",
+            scopes=["partner.locations.read"],
+            created_by=owner,
+        )
+        _auth_api_key(api_client, raw)
+        with django_assert_num_queries(6):
+            response = api_client.get(reverse("partner_v1_locations"))
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["count"] == 1
+        assert response.data["results"][0]["id"] == profile.id
+
+    def test_partner_location_detail_query_count(
+        self, api_client, django_assert_num_queries
+    ):
+        owner, profile = _make_retailer("partner_q_loc", "Partner Loc Shop")
+        org = profile.organization
+        _key, raw = create_org_api_key(
+            organization=org,
+            name="Partner Loc Key",
+            scopes=["partner.locations.read"],
+            created_by=owner,
+        )
+        _auth_api_key(api_client, raw)
+        url = reverse(
+            "partner_v1_location_detail",
+            kwargs={"location_id": profile.id},
+        )
+        with django_assert_num_queries(5):
+            response = api_client.get(url)
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["id"] == profile.id
+
+    def test_cross_tenant_partner_location_detail_one_org_scope(
+        self, api_client, django_assert_num_queries
+    ):
+        owner_a, profile_a = _make_retailer("partner_iso_a", "Partner Iso A")
+        _owner_b, profile_b = _make_retailer("partner_iso_b", "Partner Iso B")
+        _key, raw = create_org_api_key(
+            organization=profile_a.organization,
+            name="Iso Key",
+            scopes=["partner.locations.read"],
+            created_by=owner_a,
+        )
+        _auth_api_key(api_client, raw)
+        url = reverse(
+            "partner_v1_location_detail",
+            kwargs={"location_id": profile_b.id},
+        )
+        with django_assert_num_queries(5):
+            response = api_client.get(url)
+        assert response.status_code == status.HTTP_403_FORBIDDEN

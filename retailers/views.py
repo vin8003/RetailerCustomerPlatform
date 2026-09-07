@@ -171,6 +171,12 @@ class OrgStaffPagination(PageNumberPagination):
     max_page_size = 100
 
 
+class OrgApiKeyPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
 def get_retailer_profile(request):
@@ -1449,7 +1455,17 @@ def organization_api_keys(request, org_id):
                     {'error': 'API key management permission required'},
                     status=status.HTTP_403_FORBIDDEN,
                 )
-            keys = OrgApiKey.objects.filter(organization=org).order_by('-created_at')
+            keys = (
+                OrgApiKey.objects.filter(organization=org)
+                .select_related('created_by')
+                .order_by('-created_at')
+            )
+            paginator = OrgApiKeyPagination()
+            page = paginator.paginate_queryset(keys, request)
+            if page is not None:
+                return paginator.get_paginated_response(
+                    OrgApiKeySerializer(page, many=True).data
+                )
             return Response(
                 OrgApiKeySerializer(keys, many=True).data,
                 status=status.HTTP_200_OK,
@@ -1503,7 +1519,9 @@ def organization_api_key_detail(request, org_id, key_id):
             )
 
         try:
-            api_key = OrgApiKey.objects.get(pk=key_id, organization=org)
+            api_key = OrgApiKey.objects.select_related('created_by').get(
+                pk=key_id, organization=org,
+            )
         except OrgApiKey.DoesNotExist:
             return Response(
                 {'error': 'API key not found or access denied'},
