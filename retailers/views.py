@@ -3,7 +3,7 @@ from rest_framework.decorators import api_view, permission_classes, throttle_cla
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.throttling import AnonRateThrottle
-from django.db.models import Q, Avg
+from django.db.models import Q, Avg, prefetch_related_objects
 from django.shortcuts import get_object_or_404
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
@@ -156,7 +156,13 @@ def get_retailer_profile(request):
             )
         
         try:
-            profile = RetailerProfile.objects.get(user=request.user)
+            profile = (
+                RetailerProfile.objects.select_related(
+                    'user', 'organization', 'reward_config'
+                )
+                .prefetch_related('operating_hours', 'categories__category')
+                .get(user=request.user)
+            )
             serializer = RetailerProfileSerializer(profile)
             return Response(serializer.data, status=status.HTTP_200_OK)
         except RetailerProfile.DoesNotExist:
@@ -776,6 +782,13 @@ def _caller_profile_or_error(request):
     return profile, None
 
 
+def _serialize_organization(org):
+    """Serialize org with locations prefetched (avoids N+1 on location_ids/count)."""
+    if org is not None:
+        prefetch_related_objects([org], 'locations')
+    return OrganizationSerializer(org).data
+
+
 @api_view(['GET', 'POST'])
 @permission_classes([permissions.IsAuthenticated])
 def organization_me(request):
@@ -793,7 +806,7 @@ def organization_me(request):
             if org is None:
                 org = ensure_organization_for_profile(profile)
             return Response(
-                OrganizationSerializer(org).data,
+                _serialize_organization(org),
                 status=status.HTTP_200_OK,
             )
 
@@ -817,7 +830,7 @@ def organization_me(request):
         org = ensure_organization_for_profile(profile, name=name)
         logger.info("Organization created: %s (location=%s)", org.name, profile.pk)
         return Response(
-            OrganizationSerializer(org).data,
+            _serialize_organization(org),
             status=status.HTTP_201_CREATED,
         )
 
@@ -843,16 +856,15 @@ def organization_detail(request, org_id):
         if err is not None:
             return err
 
-        try:
-            org = Organization.objects.get(pk=org_id)
-        except Organization.DoesNotExist:
+        # Tenancy first — never fetch another tenant's org row on a deny path.
+        if profile.organization_id != org_id:
             return Response(
                 {'error': 'Organization not found or access denied'},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        # Isolation only — do not ensure/create org on a deny path
-        if profile.organization_id != org.pk:
+        org = profile.organization
+        if org is None:
             return Response(
                 {'error': 'Organization not found or access denied'},
                 status=status.HTTP_403_FORBIDDEN,
@@ -860,7 +872,7 @@ def organization_detail(request, org_id):
 
         if request.method == 'GET':
             return Response(
-                OrganizationSerializer(org).data,
+                _serialize_organization(org),
                 status=status.HTTP_200_OK,
             )
 
@@ -880,7 +892,7 @@ def organization_detail(request, org_id):
         org = update_ser.save()
         logger.info("Organization updated: %s (active=%s)", org.pk, org.is_active)
         return Response(
-            OrganizationSerializer(org).data,
+            _serialize_organization(org),
             status=status.HTTP_200_OK,
         )
 

@@ -349,3 +349,40 @@ class TestOrgAuthzMatrix:
         org.refresh_from_db()
         assert org.name == original_name
         assert org.is_active is True
+
+
+@pytest.mark.django_db
+class TestOrganizationQueryBudget:
+    """Hot org endpoints must stay bounded (no N+1 on locations)."""
+
+    def test_get_org_me_query_count(
+        self, api_client, retailer_user, retailer, django_assert_num_queries
+    ):
+        api_client.force_authenticate(user=retailer_user)
+        url = reverse("organization_me")
+        with django_assert_num_queries(2):
+            response = api_client.get(url)
+        assert response.status_code == status.HTTP_200_OK
+
+    def test_get_org_detail_query_count(
+        self, api_client, retailer_user, retailer, django_assert_num_queries
+    ):
+        api_client.force_authenticate(user=retailer_user)
+        url = reverse(
+            "organization_detail",
+            kwargs={"org_id": retailer.organization_id},
+        )
+        with django_assert_num_queries(2):
+            response = api_client.get(url)
+        assert response.status_code == status.HTTP_200_OK
+
+    def test_cross_tenant_detail_no_org_fetch(self, api_client, django_assert_num_queries):
+        user_a, profile_a = _make_retailer("query_a", "Shop A")
+        user_b, _profile_b = _make_retailer("query_b", "Shop B")
+        org_a_id = profile_a.organization_id
+
+        api_client.force_authenticate(user=user_b)
+        url = reverse("organization_detail", kwargs={"org_id": org_a_id})
+        with django_assert_num_queries(1):
+            response = api_client.get(url)
+        assert response.status_code == status.HTTP_403_FORBIDDEN

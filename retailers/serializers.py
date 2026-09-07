@@ -26,11 +26,21 @@ class OrganizationSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at',
         ]
 
+    def _locations(self, obj):
+        # values_list/count() ignore prefetch cache; all() uses it when present.
+        cache = getattr(self, '_locations_cache', None)
+        if cache is None:
+            cache = {}
+            self._locations_cache = cache
+        if obj.pk not in cache:
+            cache[obj.pk] = list(obj.locations.all())
+        return cache[obj.pk]
+
     def get_location_ids(self, obj):
-        return list(obj.locations.values_list('id', flat=True))
+        return [loc.id for loc in self._locations(obj)]
 
     def get_location_count(self, obj):
-        return obj.locations.count()
+        return len(self._locations(obj))
 
 
 class OrganizationCreateSerializer(serializers.Serializer):
