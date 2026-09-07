@@ -1333,7 +1333,8 @@ def list_retailer_inbox(request):
     """
     List org-scoped incoming orders for retailer staff (OE-135 / F-0050).
 
-    Customer JWT is rejected — use customer order endpoints instead.
+    Queries the unified Order model for app/POS sources only (OE-131).
+    F-0117 marketplace ingest is out of scope. Customer JWT is rejected.
     """
     try:
         if request.user.user_type != 'retailer':
@@ -1377,7 +1378,8 @@ def retailer_inbox_action(request, order_id):
     """
     Take an inbox action on an order (accept/confirm/etc.) via the status machine.
 
-    Reuses Order.update_status and OE-183 notification dispatch.
+    Operates on unified Order rows (app/POS). Reuses Order.update_status and
+    OE-183 notification dispatch. F-0117 marketplace ingest is out of scope.
     """
     try:
         if request.user.user_type != 'retailer':

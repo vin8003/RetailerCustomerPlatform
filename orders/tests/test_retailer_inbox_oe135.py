@@ -215,6 +215,21 @@ class TestRetailerInboxList:
         assert resp.status_code == status.HTTP_200_OK
         assert resp.data["count"] == 0
 
+    def test_inbox_rejects_unknown_source_filter(self, api_client):
+        """F-0117 marketplace sources are out of scope — filter returns empty."""
+        owner, profile = _make_retailer("oe135_src", "OE135 Source Shop")
+        customer = _make_customer("oe135_src_cust")
+        product = _product(profile)
+        _order(customer, profile, product, source="app")
+
+        api_client.force_authenticate(user=owner)
+        resp = api_client.get(
+            reverse("list_retailer_inbox"),
+            {"source": "marketplace"},
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.data["count"] == 0
+
 
 @pytest.mark.django_db
 class TestRetailerInboxActions:

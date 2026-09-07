@@ -4,12 +4,18 @@ Retailer order inbox (OE-135 / F-0050).
 Inbox is a query over the unified Order model (OE-131 / F-0049) — not a
 separate engine. Staff list incoming orders for their org and take actions
 allowed by the status state machine.
+
+Scope: existing app/POS order sources only. F-0117 marketplace ingest,
+MarketplaceOrder, and channel adapters are out of scope for this stack.
 """
-from django.db.models import Count, Exists, OuterRef, Q
+from django.db.models import Count, Exists, OuterRef
 from django.utils import timezone
 
 from orders.domain.status_policy import ALLOWED_STATUS_TRANSITIONS, ensure_transition_allowed
 from orders.models import Order, OrderFeedback, RetailerRating
+
+# OE-131 unified Order sources in scope for the retailer inbox (not F-0117).
+INBOX_ORDER_SOURCES = frozenset({'app', 'pos'})
 
 # Active pipeline orders visible in the retailer inbox by default.
 DEFAULT_INBOX_STATUSES = frozenset(
@@ -79,7 +85,10 @@ def build_inbox_queryset(location_ids):
     has_rating_subquery = Exists(RetailerRating.objects.filter(order=OuterRef('pk')))
 
     return (
-        Order.objects.filter(retailer_id__in=location_ids)
+        Order.objects.filter(
+            retailer_id__in=location_ids,
+            source__in=INBOX_ORDER_SOURCES,
+        )
         .select_related('retailer', 'customer')
         .annotate(
             items_count_annotated=Count('items'),
@@ -106,6 +115,8 @@ def apply_inbox_filters(queryset, query_params):
 
     source = query_params.get('source')
     if source:
+        if source not in INBOX_ORDER_SOURCES:
+            return queryset.none()
         queryset = queryset.filter(source=source)
 
     location_id = query_params.get('location_id')
