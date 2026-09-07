@@ -45,7 +45,7 @@ def _make_retailer(username, shop_name):
     return user, profile
 
 
-def _make_staff(org, username, permissions):
+def _make_staff(org, username, permissions, *, served_location_ids=None):
     user = User.objects.create_user(
         username=username,
         email=f"{username}@test.com",
@@ -65,8 +65,32 @@ def _make_staff(org, username, permissions):
         user=user,
         role=role,
         is_active=True,
+        served_location_ids=list(served_location_ids or []),
     )
     return user
+
+
+def _add_location(org, shop_name, *, pincode="110002"):
+    loc_user = User.objects.create_user(
+        username=f"loc_{shop_name.replace(' ', '_').lower()}",
+        email=f"loc_{shop_name.replace(' ', '_').lower()}@test.com",
+        password="TestPass123!",
+        user_type="retailer",
+        is_active=True,
+    )
+    return RetailerProfile.objects.create(
+        user=loc_user,
+        organization=org,
+        shop_name=shop_name,
+        address_line1="2 Main",
+        city="City",
+        state="State",
+        pincode=pincode,
+        is_active=True,
+        offers_delivery=True,
+        offers_pickup=True,
+        minimum_order_amount=Decimal("0"),
+    )
 
 
 def _make_customer(username):
@@ -299,6 +323,100 @@ class TestRetailerInboxActions:
             format="json",
         )
         assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.django_db
+class TestRetailerInboxInventoryRestore:
+    def test_inbox_cancel_restores_product_quantity(self, api_client):
+        owner, profile = _make_retailer("oe135_cancel_atp", "Cancel ATP Shop")
+        customer = _make_customer("oe135_cancel_atp_cust")
+        product = _product(profile)
+        product.reduce_quantity(1)
+        product.refresh_from_db()
+        reserved_qty = product.quantity
+        order = _order(customer, profile, product)
+
+        api_client.force_authenticate(user=owner)
+        resp = api_client.post(
+            reverse("retailer_inbox_action", args=[order.id]),
+            {"action": "cancel", "notes": "Out of stock"},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        order.refresh_from_db()
+        assert order.status == "cancelled"
+        assert order.cancellation_reason == "Out of stock"
+        product.refresh_from_db()
+        assert product.quantity == reserved_qty + 1
+
+    def test_inbox_reject_restores_product_quantity(self, api_client):
+        owner, profile = _make_retailer("oe135_reject_atp", "Reject ATP Shop")
+        customer = _make_customer("oe135_reject_atp_cust")
+        product = _product(profile)
+        product.reduce_quantity(1)
+        product.refresh_from_db()
+        reserved_qty = product.quantity
+        order = _order(customer, profile, product)
+
+        api_client.force_authenticate(user=owner)
+        resp = api_client.post(
+            reverse("retailer_inbox_action", args=[order.id]),
+            {"action": "reject"},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        order.refresh_from_db()
+        assert order.status == "cancelled"
+        product.refresh_from_db()
+        assert product.quantity == reserved_qty + 1
+
+
+@pytest.mark.django_db
+class TestRetailerInboxLocationScope:
+    def test_staff_cannot_accept_order_at_unserved_location(self, api_client):
+        owner, l1 = _make_retailer("oe135_unserved_owner", "L1 Shop")
+        org = l1.organization
+        l2 = _add_location(org, "L2 Shop")
+        customer = _make_customer("oe135_unserved_cust")
+        product = _product(l1)
+        order = _order(customer, l1, product)
+
+        staff = _make_staff(
+            org,
+            "oe135_l2_only",
+            ["orders.read", "orders.update"],
+            served_location_ids=[l2.id],
+        )
+        api_client.force_authenticate(user=staff)
+        resp = api_client.post(
+            reverse("retailer_inbox_action", args=[order.id]),
+            {"action": "accept"},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_403_FORBIDDEN
+        order.refresh_from_db()
+        assert order.status == "pending"
+        product.refresh_from_db()
+        assert product.quantity == Decimal("50")
+
+    def test_inbox_list_excludes_unserved_location_orders(self, api_client):
+        owner, l1 = _make_retailer("oe135_list_loc", "List L1 Shop")
+        org = l1.organization
+        l2 = _add_location(org, "List L2 Shop", pincode="110003")
+        customer = _make_customer("oe135_list_loc_cust")
+        product = _product(l1)
+        _order(customer, l1, product)
+
+        staff = _make_staff(
+            org,
+            "oe135_list_l2",
+            ["orders.read"],
+            served_location_ids=[l2.id],
+        )
+        api_client.force_authenticate(user=staff)
+        resp = api_client.get(reverse("list_retailer_inbox"))
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.data["count"] == 0
 
 
 @pytest.mark.django_db

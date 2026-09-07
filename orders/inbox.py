@@ -36,6 +36,7 @@ NEEDS_ACTION_STATUSES = frozenset({'pending', 'waiting_for_customer_approval'})
 INBOX_ACTION_TO_STATUS = {
     'accept': 'confirmed',
     'confirm': 'confirmed',
+    'reject': 'cancelled',
     'cancel': 'cancelled',
     'start_processing': 'processing',
     'mark_packed': 'packed',

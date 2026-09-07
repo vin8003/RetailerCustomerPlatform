@@ -1232,6 +1232,7 @@ class OrderInboxActionSerializer(serializers.Serializer):
     def save(self, **kwargs):
         order = self.context['order']
         user = self.context['user']
+        action = self.validated_data['action']
         target_status = self.validated_data['target_status']
         notes = self.validated_data.get('notes', '')
         preparation_time_minutes = self.validated_data.get('preparation_time_minutes')
@@ -1246,7 +1247,26 @@ class OrderInboxActionSerializer(serializers.Serializer):
             context={'order': order, 'user': user},
         )
         status_serializer.is_valid(raise_exception=True)
-        return status_serializer.save()
+        order = status_serializer.save()
+
+        if target_status == 'cancelled':
+            order.cancellation_reason = notes
+            order.cancelled_by = 'retailer'
+            order.save(update_fields=['cancellation_reason', 'cancelled_by'])
+            from .inventory import restore_order_inventory
+
+            reason_prefix = (
+                'Order Rejected'
+                if action == 'reject'
+                else 'Order Cancelled'
+            )
+            restore_order_inventory(
+                order,
+                user,
+                reason=f"{reason_prefix}: #{order.order_number}",
+            )
+
+        return order
 
 
 class OrderChatMessageSerializer(serializers.ModelSerializer):

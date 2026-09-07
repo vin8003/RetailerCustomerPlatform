@@ -29,9 +29,11 @@ from orders.access import (
     PERM_ORDERS_UPDATE,
     check_retailer_accepts_customer_orders,
     get_order_for_retailer,
+    get_order_for_retailer_served,
     order_detail_queryset,
     order_list_queryset,
     retailer_location_ids,
+    retailer_served_location_ids,
 )
 
 logger = logging.getLogger(__name__)
@@ -390,27 +392,9 @@ def cancel_order(request, order_id):
         order.save()
         
         # Restore product quantities
-        logs_to_create = []
-        items = order.items.select_related('product').all()
-        for item in items:
-            prev_qty = item.product.quantity
-            item.product.increase_quantity(item.quantity)
-            new_qty = prev_qty + item.quantity
-            
-            from products.models import ProductInventoryLog
-            logs_to_create.append(ProductInventoryLog(
-                product=item.product,
-                log_type='returned',
-                quantity_change=item.quantity,
-                previous_quantity=prev_qty,
-                new_quantity=new_qty,
-                reason=f"Order Cancelled: #{order.order_number}",
-                created_by=user
-            ))
-            
-        if logs_to_create:
-            from products.models import ProductInventoryLog
-            ProductInventoryLog.objects.bulk_create(logs_to_create)
+        from .inventory import restore_order_inventory
+
+        restore_order_inventory(order, user)
             
         # Refund loyalty points if used (Handled in update_status but ensured here logic is consistent)
         # Actually update_status('cancelled') already calls refund logic in models.py.
@@ -1343,7 +1327,7 @@ def list_retailer_inbox(request):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        location_ids, access_err = retailer_location_ids(request.user, PERM_ORDERS_READ)
+        location_ids, access_err = retailer_served_location_ids(request.user, PERM_ORDERS_READ)
         if access_err is not None:
             return access_err
 
@@ -1388,7 +1372,7 @@ def retailer_inbox_action(request, order_id):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        order, access_err = get_order_for_retailer(
+        order, access_err = get_order_for_retailer_served(
             request.user, order_id, PERM_ORDERS_UPDATE
         )
         if access_err is not None:
