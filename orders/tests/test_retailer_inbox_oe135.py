@@ -158,7 +158,7 @@ def _order(customer, retailer, product, *, order_status="pending", source="app")
 
 @pytest.mark.django_db
 class TestRetailerInboxList:
-    def test_staff_with_orders_read_can_list_inbox(self, api_client):
+    def test_staff_with_orders_read_can_list_inbox(self, api_client, django_assert_num_queries):
         owner, profile = _make_retailer("oe135_list_owner", "OE135 List Shop")
         org = profile.organization
         customer = _make_customer("oe135_list_cust")
@@ -167,7 +167,8 @@ class TestRetailerInboxList:
 
         staff = _make_staff(org, "oe135_list_staff", ["orders.read"])
         api_client.force_authenticate(user=staff)
-        resp = api_client.get(reverse("list_retailer_inbox"))
+        with django_assert_num_queries(22):
+            resp = api_client.get(reverse("list_retailer_inbox"))
         assert resp.status_code == status.HTTP_200_OK
         assert resp.data["count"] == 1
         assert resp.data["results"][0]["id"] == order.id
@@ -240,7 +241,7 @@ class TestRetailerInboxList:
         assert resp.data["count"] == 0
 
     def test_inbox_rejects_unknown_source_filter(self, api_client):
-        """F-0117 marketplace sources are out of scope — filter returns empty."""
+        """F-0117 marketplace sources are out of scope — unknown source returns 400."""
         owner, profile = _make_retailer("oe135_src", "OE135 Source Shop")
         customer = _make_customer("oe135_src_cust")
         product = _product(profile)
@@ -251,8 +252,8 @@ class TestRetailerInboxList:
             reverse("list_retailer_inbox"),
             {"source": "marketplace"},
         )
-        assert resp.status_code == status.HTTP_200_OK
-        assert resp.data["count"] == 0
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        assert "source" in resp.data["error"].lower()
 
 
 @pytest.mark.django_db
@@ -362,6 +363,30 @@ class TestRetailerInboxInventoryRestore:
         resp = api_client.post(
             reverse("retailer_inbox_action", args=[order.id]),
             {"action": "reject"},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        order.refresh_from_db()
+        assert order.status == "cancelled"
+        product.refresh_from_db()
+        assert product.quantity == reserved_qty + 1
+
+
+@pytest.mark.django_db
+class TestRetailerInboxPatchCancelAtp:
+    def test_patch_cancel_restores_product_quantity(self, api_client):
+        owner, profile = _make_retailer("oe135_patch_atp", "Patch Cancel ATP Shop")
+        customer = _make_customer("oe135_patch_atp_cust")
+        product = _product(profile)
+        product.reduce_quantity(1)
+        product.refresh_from_db()
+        reserved_qty = product.quantity
+        order = _order(customer, profile, product)
+
+        api_client.force_authenticate(user=owner)
+        resp = api_client.patch(
+            reverse("update_order_status", args=[order.id]),
+            {"status": "cancelled", "notes": "Cannot fulfil"},
             format="json",
         )
         assert resp.status_code == status.HTTP_200_OK

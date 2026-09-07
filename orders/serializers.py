@@ -867,13 +867,18 @@ class OrderStatusUpdateSerializer(serializers.Serializer):
 
         # Update order status
         instance.update_status(new_status, user)
-        
+
+        if new_status == 'cancelled':
+            from .inventory import restore_order_inventory
+
+            restore_order_inventory(instance, user)
+
         # Update status log with notes
         if notes:
             status_log = instance.status_logs.latest('created_at')
             status_log.notes = notes
             status_log.save()
-        
+
         return instance
 
 
@@ -1253,18 +1258,6 @@ class OrderInboxActionSerializer(serializers.Serializer):
             order.cancellation_reason = notes
             order.cancelled_by = 'retailer'
             order.save(update_fields=['cancellation_reason', 'cancelled_by'])
-            from .inventory import restore_order_inventory
-
-            reason_prefix = (
-                'Order Rejected'
-                if action == 'reject'
-                else 'Order Cancelled'
-            )
-            restore_order_inventory(
-                order,
-                user,
-                reason=f"{reason_prefix}: #{order.order_number}",
-            )
 
         return order
 

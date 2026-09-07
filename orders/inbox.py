@@ -117,7 +117,10 @@ def apply_inbox_filters(queryset, query_params):
     source = query_params.get('source')
     if source:
         if source not in INBOX_ORDER_SOURCES:
-            return queryset.none()
+            allowed = ', '.join(sorted(INBOX_ORDER_SOURCES))
+            raise ValueError(
+                f"Unknown source filter '{source}'; allowed values: {allowed}"
+            )
         queryset = queryset.filter(source=source)
 
     location_id = query_params.get('location_id')
@@ -125,6 +128,7 @@ def apply_inbox_filters(queryset, query_params):
         try:
             queryset = queryset.filter(retailer_id=int(location_id))
         except (TypeError, ValueError):
+            # Ignore non-numeric location_id rather than 400 — staff may paste bad IDs.
             pass
 
     search = query_params.get('search')
@@ -137,6 +141,7 @@ def apply_inbox_filters(queryset, query_params):
             start = timezone.datetime.strptime(start_date, '%Y-%m-%d').date()
             queryset = queryset.filter(created_at__date__gte=start)
         except ValueError:
+            # Ignore unparseable start_date — treat as no date bound.
             pass
 
     end_date = query_params.get('end_date')
@@ -145,6 +150,7 @@ def apply_inbox_filters(queryset, query_params):
             end = timezone.datetime.strptime(end_date, '%Y-%m-%d').date()
             queryset = queryset.filter(created_at__date__lte=end)
         except ValueError:
+            # Ignore unparseable end_date — treat as no date bound.
             pass
 
     return queryset

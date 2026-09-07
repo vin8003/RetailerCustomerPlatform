@@ -1333,10 +1333,13 @@ def list_retailer_inbox(request):
 
         from .inbox import apply_inbox_filters, build_inbox_queryset
 
-        orders = apply_inbox_filters(
-            build_inbox_queryset(location_ids),
-            request.query_params,
-        )
+        try:
+            orders = apply_inbox_filters(
+                build_inbox_queryset(location_ids),
+                request.query_params,
+            )
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         paginator = OrderPagination()
         page = paginator.paginate_queryset(orders, request)
