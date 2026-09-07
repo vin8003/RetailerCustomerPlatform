@@ -54,7 +54,7 @@ from .permissions_catalog import (
 )
 from .module_flags import (
     ensure_org_module_flags,
-    get_module_flags_dict,
+    module_flags_dict_from_row,
 )
 from .module_flags_catalog import catalog_payload as module_flags_catalog_payload
 from django.contrib.auth import get_user_model
@@ -1763,7 +1763,7 @@ def organization_module_flags(request, org_id):
         if not update_ser.is_valid():
             return Response(update_ser.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        summary_before = get_module_flags_dict(org)
+        summary_before = module_flags_dict_from_row(row)
         incoming = update_ser.validated_data['flags']
         merged = dict(summary_before)
         merged.update(incoming)
@@ -1777,7 +1777,7 @@ def organization_module_flags(request, org_id):
             object_type=OrgAuditLog.OBJECT_MODULE_FLAGS,
             object_id=org.id,
             summary_before=summary_before,
-            summary_after=get_module_flags_dict(org),
+            summary_after=merged,
         )
         return Response(
             OrgModuleFlagsSerializer(row).data,

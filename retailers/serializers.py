@@ -65,7 +65,6 @@ class OrganizationUpdateSerializer(serializers.ModelSerializer):
 class OrgModuleFlagsSerializer(serializers.ModelSerializer):
     """Read representation of org module flags for client nav hiding."""
 
-    organization_id = serializers.IntegerField(source='organization.id', read_only=True)
     flags = serializers.SerializerMethodField()
 
     class Meta:
@@ -74,8 +73,8 @@ class OrgModuleFlagsSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_flags(self, obj):
-        from .module_flags import get_module_flags_dict
-        return get_module_flags_dict(obj.organization)
+        from .module_flags import module_flags_dict_from_row
+        return module_flags_dict_from_row(obj)
 
 
 class OrgModuleFlagsUpdateSerializer(serializers.Serializer):

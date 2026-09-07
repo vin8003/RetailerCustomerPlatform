@@ -16,6 +16,16 @@ from .module_flags_catalog import (
 )
 
 
+def normalize_module_flags(stored=None):
+    """Merge stored flag map onto catalog defaults (no DB)."""
+    base = default_module_flags()
+    stored = stored or {}
+    for code in ALL_MODULE_CODES:
+        if code in stored and isinstance(stored[code], bool):
+            base[code] = stored[code]
+    return base
+
+
 def ensure_org_module_flags(organization):
     """
     Ensure an OrgModuleFlags row exists with all modules enabled.
@@ -24,22 +34,24 @@ def ensure_org_module_flags(organization):
     """
     if organization is None:
         return None
-    row, _created = OrgModuleFlags.objects.get_or_create(
+    row, _created = OrgModuleFlags.objects.select_related('organization').get_or_create(
         organization=organization,
         defaults={'flags': default_module_flags()},
     )
     return row
 
 
+def module_flags_dict_from_row(row):
+    """Normalized flags from an OrgModuleFlags row (no extra DB)."""
+    if row is None:
+        return default_module_flags()
+    return normalize_module_flags(row.flags)
+
+
 def get_module_flags_dict(organization):
     """Return normalized module flags for an org (creates row if missing)."""
     row = ensure_org_module_flags(organization)
-    base = default_module_flags()
-    stored = row.flags or {}
-    for code in ALL_MODULE_CODES:
-        if code in stored and isinstance(stored[code], bool):
-            base[code] = stored[code]
-    return base
+    return module_flags_dict_from_row(row)
 
 
 def is_module_enabled(organization, module_code):

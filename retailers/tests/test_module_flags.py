@@ -305,6 +305,66 @@ class TestModuleFlagsCrossTenant:
 
 
 @pytest.mark.django_db
+class TestModuleFlagsQueryBudget:
+    """Hot module-flags endpoints must stay bounded (no N+1, tenant-scoped)."""
+
+    def test_module_flags_get_query_count(self, api_client, django_assert_num_queries):
+        owner, profile = _make_retailer("mod_q_get", "Mod Query Get")
+        org = profile.organization
+        api_client.force_authenticate(user=owner)
+        with django_assert_num_queries(2):
+            resp = api_client.get(_module_flags_url(org.id))
+        assert resp.status_code == status.HTTP_200_OK
+        assert set(resp.data["flags"].keys()) == set(ALL_MODULE_CODES)
+
+    def test_module_flags_patch_query_count(self, api_client, django_assert_num_queries):
+        owner, profile = _make_retailer("mod_q_patch", "Mod Query Patch")
+        org = profile.organization
+        api_client.force_authenticate(user=owner)
+        with django_assert_num_queries(4):
+            resp = api_client.patch(
+                _module_flags_url(org.id),
+                {"flags": {"catalog": False}},
+                format="json",
+            )
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.data["flags"]["catalog"] is False
+
+    def test_module_flags_catalog_query_count(self, api_client, django_assert_num_queries):
+        owner, profile = _make_retailer("mod_q_cat", "Mod Query Cat")
+        org = profile.organization
+        api_client.force_authenticate(user=owner)
+        with django_assert_num_queries(1):
+            resp = api_client.get(_module_catalog_url(org.id))
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.data["version"] == MODULE_CATALOG_VERSION
+
+    def test_cross_tenant_module_flags_get_denied_one_query(
+        self, api_client, django_assert_num_queries
+    ):
+        owner_a, profile_a = _make_retailer("mod_iso_get_a", "Mod Iso Get A")
+        owner_b, _profile_b = _make_retailer("mod_iso_get_b", "Mod Iso Get B")
+        api_client.force_authenticate(user=owner_b)
+        with django_assert_num_queries(1):
+            resp = api_client.get(_module_flags_url(profile_a.organization_id))
+        assert resp.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_cross_tenant_module_flags_patch_denied_one_query(
+        self, api_client, django_assert_num_queries
+    ):
+        owner_a, profile_a = _make_retailer("mod_iso_patch_a", "Mod Iso Patch A")
+        owner_b, _profile_b = _make_retailer("mod_iso_patch_b", "Mod Iso Patch B")
+        api_client.force_authenticate(user=owner_b)
+        with django_assert_num_queries(1):
+            resp = api_client.patch(
+                _module_flags_url(profile_a.organization_id),
+                {"flags": {"catalog": False}},
+                format="json",
+            )
+        assert resp.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.django_db
 class TestModuleFlagsAuthMatrix:
     def test_unauthenticated_get_returns_401(self, api_client):
         owner, profile = _make_retailer("mod_unauth", "Mod Unauth")
