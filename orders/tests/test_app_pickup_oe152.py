@@ -1,6 +1,10 @@
 """
 OE-152 / F-0054 — App order / shop pickup.
 
+Scope lock: F-0113 and F-0029 are NOT on this stack. Reuses existing ATP hooks
+(restore_order_inventory) and OE-183 dispatch only. Pickup = delivery_mode +
+Order.status on unified Order — no second table, no marketplace.
+
 Covers AC: customer creates app pickup order on unified Order (OE-131),
 pickup appears in retailer inbox (app source, OE-135), customer views status,
 staff/customer permission matrix, cross-tenant isolation, cancel/reject restores
