@@ -300,6 +300,7 @@ class OrgAuditLog(models.Model):
     OBJECT_STAFF_MEMBERSHIP = 'staff_membership'
     OBJECT_API_KEY = 'api_key'
     OBJECT_MODULE_FLAGS = 'module_flags'
+    OBJECT_NOTIFICATION_CONFIG = 'notification_config'
 
     organization = models.ForeignKey(
         Organization,
@@ -368,6 +369,114 @@ class OrgModuleFlags(models.Model):
 
     def __str__(self):
         return f"module_flags org={self.organization_id}"
+
+
+class OrgNotificationConfig(models.Model):
+    """
+    Per-organization notification preferences (OE-183 / F-0005).
+
+    Non-statutory types may be disabled. Channel overrides are optional.
+    """
+    organization = models.OneToOneField(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='notification_config',
+    )
+    default_channel = models.CharField(
+        max_length=16,
+        default='push',
+        help_text='Default channel when no per-type override is set.',
+    )
+    disabled_types = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='Non-statutory notification type codes disabled for this org.',
+    )
+    channel_overrides = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='Optional map of notification_type -> channel code.',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'org_notification_config'
+
+    def __str__(self):
+        return f"notification_config org={self.organization_id}"
+
+
+class OrgNotificationDelivery(models.Model):
+    """
+    Outbox / delivery log for org notifications (OE-183 / F-0005).
+
+    Failed sends retain last_error and support bounded retries.
+    """
+    STATUS_PENDING = 'pending'
+    STATUS_SENT = 'sent'
+    STATUS_FAILED = 'failed'
+    STATUS_CHOICES = [
+        (STATUS_PENDING, 'Pending'),
+        (STATUS_SENT, 'Sent'),
+        (STATUS_FAILED, 'Failed'),
+    ]
+
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='notification_deliveries',
+    )
+    location = models.ForeignKey(
+        'RetailerProfile',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='notification_deliveries',
+    )
+    order = models.ForeignKey(
+        'orders.Order',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='notification_deliveries',
+    )
+    recipient_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='notification_deliveries_received',
+    )
+    notification_type = models.CharField(max_length=64)
+    event_name = models.CharField(max_length=64)
+    channel = models.CharField(max_length=16)
+    status = models.CharField(
+        max_length=16,
+        choices=STATUS_CHOICES,
+        default=STATUS_PENDING,
+    )
+    retry_count = models.PositiveSmallIntegerField(default=0)
+    last_error = models.TextField(blank=True, default='')
+    payload = models.JSONField(default=dict, blank=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'org_notification_delivery'
+        indexes = [
+            models.Index(fields=['organization', 'created_at']),
+            models.Index(fields=['organization', 'status']),
+            models.Index(fields=['order', 'notification_type']),
+        ]
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return (
+            f"{self.notification_type} via {self.channel} "
+            f"({self.status}) org={self.organization_id}"
+        )
 
 
 class RetailerProfile(models.Model):

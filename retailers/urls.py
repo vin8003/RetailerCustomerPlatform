@@ -70,6 +70,31 @@ urlpatterns = [
         views.organization_module_flags,
         name='organization_module_flags',
     ),
+    path(
+        'org/<int:org_id>/notifications/catalog/',
+        views.organization_notification_catalog,
+        name='organization_notification_catalog',
+    ),
+    path(
+        'org/<int:org_id>/notifications/config/',
+        views.organization_notification_config,
+        name='organization_notification_config',
+    ),
+    path(
+        'org/<int:org_id>/notifications/deliveries/',
+        views.organization_notification_deliveries,
+        name='organization_notification_deliveries',
+    ),
+    path(
+        'org/<int:org_id>/notifications/deliveries/<int:delivery_id>/retry/',
+        views.organization_notification_delivery_retry,
+        name='organization_notification_delivery_retry',
+    ),
+    path(
+        'org/<int:org_id>/notifications/blast/',
+        views.organization_notification_blast,
+        name='organization_notification_blast',
+    ),
 
     # Public retailer endpoints
     path('', views.list_retailers, name='list_retailers'),

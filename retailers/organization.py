@@ -149,6 +149,10 @@ def ensure_org_rbac_bootstrap(organization):
 
         ensure_org_module_flags(org)
 
+        from common.notification_dispatcher import ensure_org_notification_config
+
+        ensure_org_notification_config(org)
+
 
 def get_organization_for_user(user):
     """
@@ -235,6 +239,37 @@ def is_org_owner(user, organization):
         user
         and organization is not None
         and organization.owner_id == getattr(user, 'id', None)
+    )
+
+
+def resolve_org_blast_recipients(organization, recipient_user_ids):
+    """
+    Return customer users mapped to this org via RetailerCustomerMapping.
+
+    Blast recipients must belong to the org through at least one shop location
+    (RetailerProfile). Unknown or cross-tenant ids are excluded — not leaked.
+    """
+    if organization is None or not recipient_user_ids:
+        return []
+
+    from django.contrib.auth import get_user_model
+    from .models import RetailerCustomerMapping
+
+    User = get_user_model()
+    mapped_ids = set(
+        RetailerCustomerMapping.objects.filter(
+            retailer__organization=organization,
+            customer_id__in=recipient_user_ids,
+        ).values_list('customer_id', flat=True)
+    )
+    if not mapped_ids:
+        return []
+
+    return list(
+        User.objects.filter(
+            id__in=mapped_ids,
+            user_type='customer',
+        )
     )
 
 

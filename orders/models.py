@@ -278,9 +278,6 @@ class Order(models.Model):
             changed_by=user
         )
         
-        # Create notification for customer
-        from customers.models import CustomerNotification
-        
         status_messages = {
             'confirmed': 'Your order has been confirmed',
             'processing': 'Your order is being processed',
@@ -293,39 +290,13 @@ class Order(models.Model):
         }
         
         if new_status in status_messages and self.customer:
-            msg = status_messages[new_status]
-            CustomerNotification.objects.create(
-                customer=self.customer,
-                notification_type='order_update',
-                title=f'Order #{self.order_number} Update',
-                message=msg
-            )
-            
-            # Send Push Notification
-            from common.notifications import send_push_notification, send_silent_update
-            send_push_notification(
-                user=self.customer,
-                title=f"Order Update: #{self.order_number}",
-                message=msg,
-                data={
-                    'type': 'order_status_update',
-                    'order_id': str(self.id),
-                    'status': new_status
-                }
-            )
-            
-            # Send silent update to refresh UI
-            send_silent_update(
-                user=self.customer,
-                event_type='order_refresh',
-                data={'order_id': str(self.id)}
-            )
-            
-            # Also notify and refresh Retailer UI
-            send_silent_update(
-                user=self.retailer.user,
-                event_type='order_refresh',
-                data={'order_id': str(self.id)}
+            from common.notification_dispatcher import dispatch_order_status_notification
+            from common.notifications import send_push_notification
+
+            dispatch_order_status_notification(
+                order=self,
+                new_status=new_status,
+                old_status=old_status,
             )
             
             # If customer updated the status (accepted/rejected), 
