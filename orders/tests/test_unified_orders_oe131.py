@@ -398,3 +398,97 @@ class TestV1OrdersAlias:
             format="json",
         )
         assert resp.status_code == status.HTTP_200_OK
+
+
+@pytest.mark.django_db
+class TestUnifiedOrdersQueryBudget:
+    """Hot unified order endpoints must stay bounded (no N+1, tenant-scoped)."""
+
+    def test_retailer_current_orders_list_query_count(
+        self, api_client, django_assert_num_queries
+    ):
+        owner, profile = _make_retailer("oe131_q_list", "OE131 Query List")
+        customer = _make_customer("oe131_q_list_cust")
+        product = _product(profile)
+        for _ in range(3):
+            _pending_order(customer, profile, product)
+        api_client.force_authenticate(user=owner)
+        with django_assert_num_queries(9):
+            resp = api_client.get(reverse("get_current_orders"))
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.data["count"] == 3
+
+    def test_retailer_current_orders_scales_with_rows(
+        self, api_client, django_assert_num_queries
+    ):
+        owner, profile = _make_retailer("oe131_q_scale", "OE131 Query Scale")
+        customer = _make_customer("oe131_q_scale_cust")
+        product = _product(profile)
+        for _ in range(8):
+            _pending_order(customer, profile, product)
+        api_client.force_authenticate(user=owner)
+        with django_assert_num_queries(9):
+            resp = api_client.get(reverse("get_current_orders"))
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.data["count"] == 8
+
+    def test_customer_current_orders_list_query_count(
+        self, api_client, django_assert_num_queries
+    ):
+        _owner, profile = _make_retailer("oe131_q_cust", "OE131 Cust List")
+        customer = _make_customer("oe131_q_cust_user")
+        product = _product(profile)
+        _pending_order(customer, profile, product)
+        api_client.force_authenticate(user=customer)
+        with django_assert_num_queries(6):
+            resp = api_client.get(reverse("get_current_orders"))
+        assert resp.status_code == status.HTTP_200_OK
+
+    def test_retailer_order_detail_query_count(
+        self, api_client, django_assert_num_queries
+    ):
+        owner, profile = _make_retailer("oe131_q_detail", "OE131 Query Detail")
+        customer = _make_customer("oe131_q_detail_cust")
+        product = _product(profile)
+        order = _pending_order(customer, profile, product)
+        api_client.force_authenticate(user=owner)
+        with django_assert_num_queries(21):
+            resp = api_client.get(reverse("get_order_detail", args=[order.id]))
+        assert resp.status_code == status.HTTP_200_OK
+
+    @patch("common.notification_dispatcher.dispatch_order_status_notification")
+    @patch("common.notifications.send_push_notification")
+    @patch("common.notifications.send_silent_update")
+    def test_retailer_status_update_query_count(
+        self,
+        mock_silent,
+        mock_push,
+        mock_dispatch,
+        api_client,
+        django_assert_num_queries,
+    ):
+        owner, profile = _make_retailer("oe131_q_status", "OE131 Query Status")
+        customer = _make_customer("oe131_q_status_cust")
+        product = _product(profile)
+        order = _pending_order(customer, profile, product)
+        api_client.force_authenticate(user=owner)
+        with django_assert_num_queries(32):
+            resp = api_client.patch(
+                reverse("update_order_status", args=[order.id]),
+                {"status": "confirmed"},
+                format="json",
+            )
+        assert resp.status_code == status.HTTP_200_OK
+
+    def test_cross_tenant_order_detail_bounded_queries(
+        self, api_client, django_assert_num_queries
+    ):
+        _owner_a, profile_a = _make_retailer("oe131_q_iso_a", "OE131 Iso A")
+        owner_b, _profile_b = _make_retailer("oe131_q_iso_b", "OE131 Iso B")
+        customer = _make_customer("oe131_q_iso_cust")
+        product = _product(profile_a)
+        order = _pending_order(customer, profile_a, product)
+        api_client.force_authenticate(user=owner_b)
+        with django_assert_num_queries(4):
+            resp = api_client.get(reverse("get_order_detail", args=[order.id]))
+        assert resp.status_code == status.HTTP_404_NOT_FOUND

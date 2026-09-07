@@ -5,10 +5,14 @@ Org-scoped staff RBAC, module gate, and location resolution for POS + app
 order APIs. Extends F-0002 permissions and F-0004 module flags without
 forking the Order model.
 """
+from decimal import Decimal
+
+from django.db.models import Count, DecimalField, Exists, OuterRef, Subquery, Sum, Value
+from django.db.models.functions import Coalesce
 from rest_framework import status
 from rest_framework.response import Response
 
-from retailers.models import RetailerProfile
+from retailers.models import RetailerCustomerMapping, RetailerProfile
 from retailers.module_flags import is_module_enabled, module_disabled_response
 from retailers.organization import get_organization_for_user, user_has_org_permission
 
@@ -49,6 +53,79 @@ def retailer_locations_for_org(organization):
     return RetailerProfile.objects.filter(organization=organization)
 
 
+def order_list_queryset():
+    """Bounded queryset for order list endpoints (tenant-safe filters applied in views)."""
+    from returns.models import SalesReturn
+
+    from .models import Order, OrderFeedback, RetailerRating
+
+    nickname_subq = RetailerCustomerMapping.objects.filter(
+        retailer_id=OuterRef('retailer_id'),
+        customer_id=OuterRef('customer_id'),
+    ).values('nickname')[:1]
+    refund_subq = (
+        SalesReturn.objects.filter(order_id=OuterRef('pk'))
+        .values('order_id')
+        .annotate(total=Sum('refund_amount'))
+        .values('total')[:1]
+    )
+    has_feedback_subquery = Exists(OrderFeedback.objects.filter(order=OuterRef('pk')))
+    has_rating_subquery = Exists(RetailerRating.objects.filter(order=OuterRef('pk')))
+
+    return (
+        Order.objects.select_related(
+            'retailer',
+            'customer',
+            'customer__customer_profile',
+        )
+        .prefetch_related(
+            'payment_transactions',
+            'returns',
+            'feedback',
+            'retailer_rating',
+        )
+        .annotate(
+            items_count_annotated=Count('items', distinct=True),
+            has_feedback_annotated=has_feedback_subquery,
+            has_rating_annotated=has_rating_subquery,
+            refund_total_annotated=Coalesce(
+                Subquery(refund_subq),
+                Value(Decimal('0')),
+                output_field=DecimalField(max_digits=12, decimal_places=2),
+            ),
+            customer_nickname_annotated=Subquery(nickname_subq),
+        )
+    )
+
+
+def order_detail_queryset():
+    """Bounded queryset for order detail and status mutation responses."""
+    from django.db.models import Prefetch
+
+    from .models import Order, OrderItem
+
+    return Order.objects.select_related(
+        'retailer',
+        'customer',
+        'customer__customer_profile',
+        'delivery_address',
+    ).prefetch_related(
+        Prefetch(
+            'items',
+            queryset=OrderItem.objects.select_related('product', 'batch').prefetch_related(
+                'returns'
+            ),
+        ),
+        'payment_transactions',
+        'returns',
+        'applied_offers',
+        'applied_offers__offer',
+        'chat_messages',
+        'feedback',
+        'retailer_rating',
+    )
+
+
 def require_retailer_orders_access(user, permission_code, *, check_module=True):
     """
     Validate retailer JWT, org membership, optional orders module, and RBAC.
@@ -83,13 +160,7 @@ def get_order_for_retailer(user, order_id, permission_code):
     if err is not None:
         return None, err
 
-    from .models import Order
-
-    order = (
-        Order.objects.filter(id=order_id, retailer__in=locations)
-        .select_related('retailer', 'customer', 'delivery_address')
-        .first()
-    )
+    order = order_detail_queryset().filter(id=order_id, retailer__in=locations).first()
     if order is None:
         return None, Response(
             {'error': 'Order not found'},

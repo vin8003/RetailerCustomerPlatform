@@ -23,13 +23,14 @@ from .serializers import (
 from retailers.models import RetailerProfile, RetailerReview, RetailerRewardConfig
 from retailers.serializers import RetailerReviewSerializer
 from customers.models import CustomerAddress, CustomerLoyalty
-from django.db.models import Exists, OuterRef, Prefetch
 from common.notifications import send_push_notification
 from orders.access import (
     PERM_ORDERS_READ,
     PERM_ORDERS_UPDATE,
     check_retailer_accepts_customer_orders,
     get_order_for_retailer,
+    order_detail_queryset,
+    order_list_queryset,
     retailer_location_ids,
 )
 
@@ -85,7 +86,8 @@ def place_order(request):
                      pass # Serializer will handle this
 
             order = serializer.save()
-            
+            order = order_detail_queryset().get(pk=order.pk)
+
             # Notify Retailer
             if order.retailer and order.retailer.user:
                 send_push_notification(
@@ -128,19 +130,8 @@ def get_current_orders(request):
     """
     try:
         user = request.user
-        
-        # Base queryset with optimizations
-        # We annotate items_count to avoid N+1 count queries
-        # Annotate has_feedback and has_rating efficiently
-        
-        has_feedback_subquery = Exists(OrderFeedback.objects.filter(order=OuterRef('pk')))
-        has_rating_subquery = Exists(RetailerRating.objects.filter(order=OuterRef('pk')))
-        
-        base_qs = Order.objects.select_related('retailer', 'customer').annotate(
-            items_count_annotated=Count('items'),
-            has_feedback_annotated=has_feedback_subquery,
-            has_rating_annotated=has_rating_subquery
-        )
+
+        base_qs = order_list_queryset()
 
         if user.user_type == 'customer':
             orders = base_qs.filter(
@@ -198,17 +189,8 @@ def get_order_history(request):
     """
     try:
         user = request.user
-        
-        # Base queryset with optimizations
-        has_feedback_subquery = Exists(OrderFeedback.objects.filter(order=OuterRef('pk')))
-        has_rating_subquery = Exists(RetailerRating.objects.filter(order=OuterRef('pk')))
-        
-        # Base queryset with optimizations
-        base_qs = Order.objects.select_related('retailer', 'customer').annotate(
-            items_count_annotated=Count('items'),
-            has_feedback_annotated=has_feedback_subquery,
-            has_rating_annotated=has_rating_subquery
-        )
+
+        base_qs = order_list_queryset()
 
         if user.user_type == 'customer':
             orders = base_qs.filter(
@@ -285,25 +267,21 @@ def get_order_detail(request, order_id):
     """
     try:
         user = request.user
-        
-        # Optimize queryset for detail view
-        qs = Order.objects.select_related(
-            'retailer', 
-            'customer', 
-            'delivery_address'
-        ).prefetch_related(
-            'items',
-            'items__product',
-            'items__batch'
-        )
+
+        qs = order_detail_queryset()
 
         if user.user_type == 'customer':
             order = get_object_or_404(qs, id=order_id, customer=user)
         elif user.user_type == 'retailer':
-            order, access_err = get_order_for_retailer(user, order_id, PERM_ORDERS_READ)
+            location_ids, access_err = retailer_location_ids(user, PERM_ORDERS_READ)
             if access_err is not None:
                 return access_err
-            order = qs.filter(id=order.id).first()
+            order = qs.filter(id=order_id, retailer_id__in=location_ids).first()
+            if order is None:
+                return Response(
+                    {'error': 'Order not found'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
         else:
             return Response(
                 {'error': 'Invalid user type'}, 
@@ -359,6 +337,7 @@ def update_order_status(request, order_id):
         
         if serializer.is_valid():
             order = serializer.save()
+            order = order_detail_queryset().get(pk=order.pk)
             response_serializer = OrderDetailSerializer(order, context={'request': request})
             logger.info(f"Order status updated: {order.order_number} to {order.status}")
             return Response(response_serializer.data, status=status.HTTP_200_OK)

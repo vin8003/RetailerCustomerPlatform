@@ -50,7 +50,11 @@ class OrderItemSerializer(serializers.ModelSerializer):
         return float(obj.total_price)
 
     def get_returned_quantity(self, obj):
-        qty = SalesReturnItem.objects.filter(order_item=obj).aggregate(total=Sum('quantity'))['total'] or 0
+        prefetched = getattr(obj, '_prefetched_objects_cache', {}).get('returns')
+        if prefetched is not None:
+            qty = sum((item.quantity for item in prefetched), Decimal('0'))
+        else:
+            qty = SalesReturnItem.objects.filter(order_item=obj).aggregate(total=Sum('quantity'))['total'] or 0
         if isinstance(qty, Decimal):
             if qty == qty.to_integral_value(): return int(qty)
             return float(qty.normalize())
@@ -112,30 +116,41 @@ class OrderListSerializer(serializers.ModelSerializer):
     total_amount = serializers.SerializerMethodField()
 
     def get_refund_amount(self, obj):
+        if hasattr(obj, 'refund_total_annotated') and obj.refund_total_annotated is not None:
+            return float(obj.refund_total_annotated)
         val = obj.returns.aggregate(total=Sum('refund_amount'))['total'] or Decimal('0.00')
         return float(val)
 
     def get_net_amount(self, obj):
-        refund = obj.returns.aggregate(total=Sum('refund_amount'))['total'] or Decimal('0.00')
+        if hasattr(obj, 'refund_total_annotated') and obj.refund_total_annotated is not None:
+            refund = obj.refund_total_annotated
+        else:
+            refund = obj.returns.aggregate(total=Sum('refund_amount'))['total'] or Decimal('0.00')
         return float(obj.total_amount - refund)
 
     def get_total_amount(self, obj):
         return float(obj.total_amount)
 
     def get_is_returned(self, obj):
+        if hasattr(obj, 'refund_total_annotated'):
+            return bool(obj.refund_total_annotated)
         return obj.returns.exists()
     
     def get_items_count(self, obj):
         """Get number of items in order"""
-        # Fallback for when serializer used without annotation
-        return getattr(obj, 'items_count_annotated', obj.items.count())
+        if hasattr(obj, 'items_count_annotated'):
+            return obj.items_count_annotated
+        return obj.items.count()
 
     def get_customer_name(self, obj):
         """Get unified customer name based on priority"""
+        if hasattr(obj, 'customer_nickname_annotated') and obj.customer_nickname_annotated:
+            return obj.customer_nickname_annotated
+
         from retailers.models import RetailerCustomerMapping
-        
-        # 1. Try mapping nickname
-        if obj.customer and obj.retailer:
+
+        # 1. Try mapping nickname (non-list callers without annotation)
+        if obj.customer and obj.retailer and not hasattr(obj, 'customer_nickname_annotated'):
             mapping = RetailerCustomerMapping.objects.filter(
                 retailer=obj.retailer,
                 customer=obj.customer

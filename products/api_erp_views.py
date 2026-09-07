@@ -440,9 +440,14 @@ def create_pos_order(request):
                         reason=f'POS Sale: Order #{order.order_number}'
                     )
 
+        from orders.access import order_detail_queryset
+
         response_data = {
             'message': 'POS Order created successfully!',
-            'order': OrderDetailSerializer(order, context={'request': request}).data
+            'order': OrderDetailSerializer(
+                order_detail_queryset().get(pk=order.pk),
+                context={'request': request},
+            ).data
         }
         return Response(response_data, status=status.HTTP_201_CREATED)
 
