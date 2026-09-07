@@ -15,6 +15,7 @@ from .api_scopes import validate_scope_codes
 from .module_flags_catalog import validate_module_flags
 from common.notification_catalog import (
     ALL_CHANNELS,
+    MAX_BLAST_RECIPIENTS,
     validate_disabled_types,
     validate_channel,
 )
@@ -199,6 +200,7 @@ class OrgNotificationBlastSerializer(serializers.Serializer):
     recipient_user_ids = serializers.ListField(
         child=serializers.IntegerField(min_value=1),
         allow_empty=False,
+        max_length=MAX_BLAST_RECIPIENTS,
     )
     context = serializers.DictField(required=False, default=dict)
     channel = serializers.ChoiceField(choices=sorted(ALL_CHANNELS), required=False)

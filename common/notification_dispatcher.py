@@ -28,21 +28,23 @@ def ensure_org_notification_config(organization):
 
     if organization is None:
         return None
-    row, _created = OrgNotificationConfig.objects.get_or_create(
+    row, _created = OrgNotificationConfig.objects.select_related(
+        'organization',
+    ).get_or_create(
         organization=organization,
     )
     return row
 
 
-def get_disabled_types(organization):
-    config = ensure_org_notification_config(organization)
+def get_disabled_types(organization, config=None):
+    config = config or ensure_org_notification_config(organization)
     raw = config.disabled_types or []
     return set(raw) if isinstance(raw, list) else set()
 
 
-def resolve_channel(organization, notification_type):
+def resolve_channel(organization, notification_type, config=None):
     """Pick channel from org config override or catalog default."""
-    config = ensure_org_notification_config(organization)
+    config = config or ensure_org_notification_config(organization)
     overrides = config.channel_overrides or {}
     if isinstance(overrides, dict) and notification_type in overrides:
         channel = overrides[notification_type]
@@ -53,10 +55,10 @@ def resolve_channel(organization, notification_type):
     return default if default in ALL_CHANNELS else spec['default_channel']
 
 
-def is_notification_type_enabled(organization, notification_type):
+def is_notification_type_enabled(organization, notification_type, config=None):
     if is_statutory_notification_type(notification_type):
         return True
-    return notification_type not in get_disabled_types(organization)
+    return notification_type not in get_disabled_types(organization, config=config)
 
 
 def _build_template_context(*, order=None, extra=None):
@@ -183,6 +185,7 @@ def dispatch_notification(
     order=None,
     location=None,
     channel=None,
+    config=None,
     skip_module_check=False,
 ):
     """
@@ -198,16 +201,21 @@ def dispatch_notification(
         return None, 'organization_required'
     if notification_type not in NOTIFICATION_DEFINITIONS:
         return None, 'unknown_notification_type'
+    config = config or ensure_org_notification_config(organization)
     if not skip_module_check and not is_module_enabled(organization, 'notifications'):
         return None, 'module_disabled'
-    if not is_notification_type_enabled(organization, notification_type):
+    if not is_notification_type_enabled(
+        organization, notification_type, config=config
+    ):
         return None, 'notification_type_disabled'
 
     spec = NOTIFICATION_DEFINITIONS[notification_type]
     ctx = _build_template_context(order=order, extra=context)
     title = render_template(spec['title_template'], ctx)
     message = render_template(spec['message_template'], ctx)
-    resolved_channel = channel or resolve_channel(organization, notification_type)
+    resolved_channel = channel or resolve_channel(
+        organization, notification_type, config=config
+    )
 
     payload = {
         'title': title,
@@ -232,7 +240,6 @@ def dispatch_notification(
         payload=payload,
     )
     _attempt_delivery(delivery)
-    delivery.refresh_from_db()
     return delivery, None
 
 
@@ -288,7 +295,6 @@ def retry_notification_delivery(delivery):
     if delivery.retry_count >= MAX_DELIVERY_RETRIES:
         return delivery, 'Maximum retries exceeded'
     _attempt_delivery(delivery)
-    delivery.refresh_from_db()
     if delivery.status == delivery.STATUS_SENT:
         return delivery, None
     return delivery, delivery.last_error or 'Retry failed'
@@ -308,6 +314,7 @@ def dispatch_bulk_notifications(
 
     Returns list of (delivery, skip_reason) tuples.
     """
+    config = ensure_org_notification_config(organization)
     results = []
     for user in recipient_users:
         delivery, skip = dispatch_notification(
@@ -316,6 +323,8 @@ def dispatch_bulk_notifications(
             recipient_user=user,
             context=context,
             channel=channel,
+            config=config,
+            skip_module_check=True,
         )
         results.append((delivery, skip))
     return results

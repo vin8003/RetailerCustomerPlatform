@@ -1908,13 +1908,16 @@ def organization_notification_deliveries(request, org_id):
         if module_err is not None:
             return module_err
 
-        qs = OrgNotificationDelivery.objects.filter(organization=org).order_by('-created_at')
+        qs = (
+            OrgNotificationDelivery.objects.filter(organization=org)
+            .select_related('organization', 'recipient_user', 'order')
+            .order_by('-created_at')
+        )
         status_filter = request.query_params.get('status')
         if status_filter:
             qs = qs.filter(status=status_filter)
 
-        paginator = PageNumberPagination()
-        paginator.page_size = 50
+        paginator = AuditLogPagination()
         page = paginator.paginate_queryset(qs, request)
         if page is not None:
             serializer = OrgNotificationDeliverySerializer(page, many=True)
@@ -1950,7 +1953,9 @@ def organization_notification_delivery_retry(request, org_id, delivery_id):
             )
 
         try:
-            delivery = OrgNotificationDelivery.objects.get(
+            delivery = OrgNotificationDelivery.objects.select_related(
+                'organization', 'recipient_user', 'order'
+            ).get(
                 pk=delivery_id,
                 organization=org,
             )

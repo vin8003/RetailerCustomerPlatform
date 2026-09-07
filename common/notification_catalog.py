@@ -91,6 +91,7 @@ ORDER_STATUS_TO_NOTIFICATION_TYPE = {
 }
 
 MAX_DELIVERY_RETRIES = 3
+MAX_BLAST_RECIPIENTS = 100
 
 
 def is_known_notification_type(code: str) -> bool:

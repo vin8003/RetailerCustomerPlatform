@@ -11,6 +11,7 @@ from rest_framework import status
 
 from authentication.models import User
 from common.notification_catalog import (
+    MAX_BLAST_RECIPIENTS,
     NOTIFICATION_CATALOG_VERSION,
     NON_STATUTORY_NOTIFICATION_TYPES,
     STATUTORY_NOTIFICATION_TYPES,
@@ -448,3 +449,183 @@ class TestNotificationCrossTenant:
         owner, profile = _make_retailer("notif_unauth", "Notif Unauth")
         resp = api_client.get(_config_url(profile.organization.id))
         assert resp.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+@pytest.mark.django_db
+class TestNotificationQueryBudget:
+    """Hot notification endpoints must stay bounded (no N+1, tenant-scoped)."""
+
+    def test_notification_config_get_query_count(
+        self, api_client, django_assert_num_queries
+    ):
+        owner, profile = _make_retailer("notif_q_cfg_get", "Notif Q Cfg Get")
+        org = profile.organization
+        api_client.force_authenticate(user=owner)
+        with django_assert_num_queries(4):
+            resp = api_client.get(_config_url(org.id))
+        assert resp.status_code == status.HTTP_200_OK
+
+    def test_notification_config_patch_query_count(
+        self, api_client, django_assert_num_queries
+    ):
+        owner, profile = _make_retailer("notif_q_cfg_patch", "Notif Q Cfg Patch")
+        org = profile.organization
+        api_client.force_authenticate(user=owner)
+        with django_assert_num_queries(6):
+            resp = api_client.patch(
+                _config_url(org.id),
+                {"disabled_types": ["order.status.processing"]},
+                format="json",
+            )
+        assert resp.status_code == status.HTTP_200_OK
+
+    def test_notification_catalog_query_count(
+        self, api_client, django_assert_num_queries
+    ):
+        owner, profile = _make_retailer("notif_q_cat", "Notif Q Cat")
+        org = profile.organization
+        api_client.force_authenticate(user=owner)
+        with django_assert_num_queries(1):
+            resp = api_client.get(_catalog_url(org.id))
+        assert resp.status_code == status.HTTP_200_OK
+
+    def test_notification_deliveries_list_query_count(
+        self, api_client, django_assert_num_queries
+    ):
+        owner, profile = _make_retailer("notif_q_del", "Notif Q Del")
+        org = profile.organization
+        cust = _make_customer("notif_q_del_cust")
+        with patch(
+            "common.notification_dispatcher._deliver_via_channel",
+            return_value=(True, None),
+        ):
+            for _ in range(5):
+                dispatch_notification(
+                    organization=org,
+                    notification_type="order.status.processing",
+                    recipient_user=cust,
+                )
+        api_client.force_authenticate(user=owner)
+        with django_assert_num_queries(5):
+            resp = api_client.get(_deliveries_url(org.id))
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.data["count"] == 5
+
+    def test_notification_deliveries_scales_with_rows(
+        self, api_client, django_assert_num_queries
+    ):
+        owner, profile = _make_retailer("notif_q_del_scale", "Notif Q Del Scale")
+        org = profile.organization
+        cust = _make_customer("notif_q_del_scale_cust")
+        with patch(
+            "common.notification_dispatcher._deliver_via_channel",
+            return_value=(True, None),
+        ):
+            for _ in range(10):
+                dispatch_notification(
+                    organization=org,
+                    notification_type="order.status.processing",
+                    recipient_user=cust,
+                )
+        api_client.force_authenticate(user=owner)
+        with django_assert_num_queries(5):
+            resp = api_client.get(_deliveries_url(org.id))
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.data["count"] == 10
+
+    @patch("common.notification_dispatcher._deliver_via_channel", return_value=(True, None))
+    def test_blast_query_count(
+        self, mock_deliver, api_client, django_assert_num_queries
+    ):
+        owner, profile = _make_retailer("notif_q_blast", "Notif Q Blast")
+        org = profile.organization
+        customer = _make_customer("notif_q_blast_cust")
+        RetailerCustomerMapping.objects.create(
+            retailer=profile,
+            customer=customer,
+            customer_type="online",
+        )
+        api_client.force_authenticate(user=owner)
+        with django_assert_num_queries(8):
+            resp = api_client.post(
+                _blast_url(org.id),
+                {
+                    "notification_type": "order.status.processing",
+                    "recipient_user_ids": [customer.id],
+                },
+                format="json",
+            )
+        assert resp.status_code == status.HTTP_200_OK
+
+    @patch("common.notification_dispatcher._deliver_via_channel", return_value=(True, None))
+    def test_blast_write_queries_scale_linearly(
+        self, mock_deliver, api_client
+    ):
+        """Extra recipients add delivery writes only — no config re-read N+1."""
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        def _count_recipients(n):
+            owner, profile = _make_retailer(
+                f"notif_q_blast_lin_{n}", f"Notif Q Blast Lin {n}"
+            )
+            org = profile.organization
+            customers = []
+            for i in range(n):
+                c = _make_customer(f"notif_q_blast_lin_{n}_{i}")
+                RetailerCustomerMapping.objects.create(
+                    retailer=profile,
+                    customer=c,
+                    customer_type="online",
+                )
+                customers.append(c)
+            api_client.force_authenticate(user=owner)
+            with CaptureQueriesContext(connection) as ctx:
+                resp = api_client.post(
+                    _blast_url(org.id),
+                    {
+                        "notification_type": "order.status.processing",
+                        "recipient_user_ids": [c.id for c in customers],
+                    },
+                    format="json",
+                )
+            assert resp.status_code == status.HTTP_200_OK
+            return len(ctx)
+
+        q1 = _count_recipients(1)
+        q3 = _count_recipients(3)
+        assert q3 - q1 == 2 * (3 - 1)
+
+    def test_cross_tenant_config_get_denied_one_query(
+        self, api_client, django_assert_num_queries
+    ):
+        owner_a, profile_a = _make_retailer("notif_iso_get_a", "Notif Iso Get A")
+        owner_b, _profile_b = _make_retailer("notif_iso_get_b", "Notif Iso Get B")
+        api_client.force_authenticate(user=owner_b)
+        with django_assert_num_queries(1):
+            resp = api_client.get(_config_url(profile_a.organization_id))
+        assert resp.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_cross_tenant_deliveries_list_denied_one_query(
+        self, api_client, django_assert_num_queries
+    ):
+        owner_a, profile_a = _make_retailer("notif_iso_del_a", "Notif Iso Del A")
+        owner_b, _profile_b = _make_retailer("notif_iso_del_b", "Notif Iso Del B")
+        api_client.force_authenticate(user=owner_b)
+        with django_assert_num_queries(1):
+            resp = api_client.get(_deliveries_url(profile_a.organization_id))
+        assert resp.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_blast_recipient_list_bounded(self, api_client):
+        owner, profile = _make_retailer("notif_blast_bound", "Notif Blast Bound")
+        org = profile.organization
+        api_client.force_authenticate(user=owner)
+        resp = api_client.post(
+            _blast_url(org.id),
+            {
+                "notification_type": "order.status.processing",
+                "recipient_user_ids": list(range(1, MAX_BLAST_RECIPIENTS + 2)),
+            },
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
