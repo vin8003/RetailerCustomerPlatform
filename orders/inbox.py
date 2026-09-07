@@ -61,7 +61,7 @@ def allowed_inbox_actions_for_status(current_status: str) -> list[str]:
     )
 
 
-def validate_inbox_action(current_status: str, action: str) -> str:
+def validate_inbox_action(current_status: str, action: str, *, delivery_mode: str | None = None) -> str:
     """
     Validate an inbox action against the status policy.
 
@@ -70,6 +70,11 @@ def validate_inbox_action(current_status: str, action: str) -> str:
     target = target_status_for_inbox_action(action)
     if target is None:
         raise ValueError(f"Unknown inbox action '{action}'")
+    if delivery_mode == 'pickup' and action == 'dispatch':
+        raise ValueError(
+            "Dispatch is not applicable for shop pickup orders; "
+            "use mark_delivered when the customer collects the order"
+        )
     try:
         ensure_transition_allowed(current_status, target)
     except Exception as exc:
@@ -115,6 +120,10 @@ def apply_inbox_filters(queryset, query_params):
                 f"Unknown source filter '{source}'; allowed values: {allowed}"
             )
         queryset = queryset.filter(source=source)
+
+    delivery_mode = query_params.get('delivery_mode')
+    if delivery_mode in ('delivery', 'pickup'):
+        queryset = queryset.filter(delivery_mode=delivery_mode)
 
     location_id = query_params.get('location_id')
     if location_id:

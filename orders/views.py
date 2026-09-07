@@ -306,6 +306,8 @@ def get_order_detail(request, order_id):
         serializer = OrderDetailSerializer(order, context={'request': request})
         return Response(serializer.data, status=status.HTTP_200_OK)
     
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error getting order detail: {str(e)}")
         return Response(

@@ -1229,7 +1229,11 @@ class OrderInboxActionSerializer(serializers.Serializer):
 
         action = attrs['action']
         try:
-            attrs['target_status'] = validate_inbox_action(order.status, action)
+            attrs['target_status'] = validate_inbox_action(
+                order.status,
+                action,
+                delivery_mode=order.delivery_mode,
+            )
         except ValueError as exc:
             raise serializers.ValidationError({'action': [str(exc)]}) from exc
         return attrs
