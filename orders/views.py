@@ -18,7 +18,7 @@ from .serializers import (
     OrderListSerializer, OrderDetailSerializer, OrderCreateSerializer,
     OrderStatusUpdateSerializer, OrderFeedbackSerializer, OrderReturnSerializer,
     OrderStatsSerializer, OrderModificationSerializer, OrderChatMessageSerializer,
-    RetailerRatingSerializer
+    RetailerRatingSerializer, OrderInboxActionSerializer,
 )
 from retailers.models import RetailerProfile, RetailerReview, RetailerRewardConfig
 from retailers.serializers import RetailerReviewSerializer
@@ -29,9 +29,11 @@ from orders.access import (
     PERM_ORDERS_UPDATE,
     check_retailer_accepts_customer_orders,
     get_order_for_retailer,
+    get_order_for_retailer_served,
     order_detail_queryset,
     order_list_queryset,
     retailer_location_ids,
+    retailer_served_location_ids,
 )
 
 logger = logging.getLogger(__name__)
@@ -390,27 +392,9 @@ def cancel_order(request, order_id):
         order.save()
         
         # Restore product quantities
-        logs_to_create = []
-        items = order.items.select_related('product').all()
-        for item in items:
-            prev_qty = item.product.quantity
-            item.product.increase_quantity(item.quantity)
-            new_qty = prev_qty + item.quantity
-            
-            from products.models import ProductInventoryLog
-            logs_to_create.append(ProductInventoryLog(
-                product=item.product,
-                log_type='returned',
-                quantity_change=item.quantity,
-                previous_quantity=prev_qty,
-                new_quantity=new_qty,
-                reason=f"Order Cancelled: #{order.order_number}",
-                created_by=user
-            ))
-            
-        if logs_to_create:
-            from products.models import ProductInventoryLog
-            ProductInventoryLog.objects.bulk_create(logs_to_create)
+        from .inventory import restore_order_inventory
+
+        restore_order_inventory(order, user)
             
         # Refund loyalty points if used (Handled in update_status but ensured here logic is consistent)
         # Actually update_status('cancelled') already calls refund logic in models.py.
@@ -1324,4 +1308,102 @@ def verify_payment(request, order_id):
         return Response(
             {'error': format_exception(e)}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def list_retailer_inbox(request):
+    """
+    List org-scoped incoming orders for retailer staff (OE-135 / F-0050).
+
+    Queries the unified Order model for app/POS sources only (OE-131).
+    F-0117 marketplace ingest is out of scope. Customer JWT is rejected.
+    """
+    try:
+        if request.user.user_type != 'retailer':
+            return Response(
+                {'error': 'Only retailers can access the order inbox'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        location_ids, access_err = retailer_served_location_ids(request.user, PERM_ORDERS_READ)
+        if access_err is not None:
+            return access_err
+
+        from .inbox import apply_inbox_filters, build_inbox_queryset
+
+        try:
+            orders = apply_inbox_filters(
+                build_inbox_queryset(location_ids),
+                request.query_params,
+            )
+        except ValueError as exc:
+            return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        paginator = OrderPagination()
+        page = paginator.paginate_queryset(orders, request)
+
+        if page is not None:
+            serializer = OrderListSerializer(page, many=True)
+            return paginator.get_paginated_response(serializer.data)
+
+        serializer = OrderListSerializer(orders, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        logger.error(f"Error listing retailer inbox: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def retailer_inbox_action(request, order_id):
+    """
+    Take an inbox action on an order (accept/confirm/etc.) via the status machine.
+
+    Operates on unified Order rows (app/POS). Reuses Order.update_status and
+    OE-183 notification dispatch. F-0117 marketplace ingest is out of scope.
+    """
+    try:
+        if request.user.user_type != 'retailer':
+            return Response(
+                {'error': 'Only retailers can perform inbox actions'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        order, access_err = get_order_for_retailer_served(
+            request.user, order_id, PERM_ORDERS_UPDATE
+        )
+        if access_err is not None:
+            return access_err
+
+        serializer = OrderInboxActionSerializer(
+            data=request.data,
+            context={'order': order, 'user': request.user},
+        )
+
+        if serializer.is_valid():
+            order = serializer.save()
+            order = order_detail_queryset().get(pk=order.pk)
+            response_serializer = OrderDetailSerializer(
+                order, context={'request': request}
+            )
+            logger.info(
+                "Inbox action %s on order %s",
+                request.data.get('action'),
+                order.order_number,
+            )
+            return Response(response_serializer.data, status=status.HTTP_200_OK)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    except Exception as e:
+        logger.error(f"Error performing inbox action: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )

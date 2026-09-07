@@ -101,6 +101,14 @@ class OrgStaffMembership(models.Model):
         related_name='memberships',
     )
     is_active = models.BooleanField(default=True)
+    served_location_ids = models.JSONField(
+        default=list,
+        blank=True,
+        help_text=(
+            'RetailerProfile ids this staff member may operate on. '
+            'Empty on a multi-location org means no locations until assigned.'
+        ),
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

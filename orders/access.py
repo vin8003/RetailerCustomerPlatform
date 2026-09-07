@@ -14,7 +14,12 @@ from rest_framework.response import Response
 
 from retailers.models import RetailerCustomerMapping, RetailerProfile
 from retailers.module_flags import is_module_enabled, module_disabled_response
-from retailers.organization import get_organization_for_user, user_has_org_permission
+from retailers.organization import (
+    get_organization_for_user,
+    user_has_org_permission,
+    is_org_owner,
+    get_active_staff_membership,
+)
 
 PERM_ORDERS_READ = 'orders.read'
 PERM_ORDERS_CREATE = 'orders.create'
@@ -229,6 +234,78 @@ def check_retailer_accepts_customer_orders(retailer):
     if not is_module_enabled(org, 'orders'):
         return False, module_disabled_response('orders')
     return True, None
+
+
+def staff_served_location_ids(user, organization):
+    """
+    RetailerProfile ids the user may operate on within the org.
+
+    Owner: all locations. Shop profile holder: linked location(s). Staff seat:
+    ``served_location_ids`` on membership (single-location orgs fall back to
+    the sole location when the list is empty).
+    """
+    if organization is None:
+        return []
+
+    if is_org_owner(user, organization):
+        return list(
+            retailer_locations_for_org(organization).values_list('id', flat=True)
+        )
+
+    profile_ids = list(
+        RetailerProfile.objects.filter(
+            organization=organization,
+            user=user,
+        ).values_list('id', flat=True)
+    )
+    if profile_ids:
+        return profile_ids
+
+    membership = get_active_staff_membership(user, organization)
+    if membership is None:
+        return []
+
+    org_location_ids = set(
+        retailer_locations_for_org(organization).values_list('id', flat=True)
+    )
+    served = membership.served_location_ids or []
+    if served:
+        return [location_id for location_id in served if location_id in org_location_ids]
+
+    if len(org_location_ids) == 1:
+        return list(org_location_ids)
+
+    return []
+
+
+def _location_not_served_response():
+    return Response(
+        {'error': 'Order location is not served by this staff member'},
+        status=status.HTTP_403_FORBIDDEN,
+    )
+
+
+def retailer_served_location_ids(user, permission_code):
+    """
+    Return served location id list for inbox-style filters, or error Response.
+    """
+    org, _locations, err = require_retailer_orders_access(user, permission_code)
+    if err is not None:
+        return None, err
+    return staff_served_location_ids(user, org), None
+
+
+def get_order_for_retailer_served(user, order_id, permission_code):
+    """Fetch an order scoped to org and staff-served locations."""
+    order, err = get_order_for_retailer(user, order_id, permission_code)
+    if err is not None:
+        return None, err
+
+    org = get_organization_for_user(user)
+    served_ids = staff_served_location_ids(user, org)
+    if order.retailer_id not in served_ids:
+        return None, _location_not_served_response()
+    return order, None
 
 
 def retailer_location_ids(user, permission_code):
