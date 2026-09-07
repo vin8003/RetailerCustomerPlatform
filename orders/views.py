@@ -25,6 +25,13 @@ from retailers.serializers import RetailerReviewSerializer
 from customers.models import CustomerAddress, CustomerLoyalty
 from django.db.models import Exists, OuterRef, Prefetch
 from common.notifications import send_push_notification
+from orders.access import (
+    PERM_ORDERS_READ,
+    PERM_ORDERS_UPDATE,
+    check_retailer_accepts_customer_orders,
+    get_order_for_retailer,
+    retailer_location_ids,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +73,9 @@ def place_order(request):
             if retailer_id:
                 try:
                     retailer = RetailerProfile.objects.get(id=retailer_id)
+                    allowed, module_err = check_retailer_accepts_customer_orders(retailer)
+                    if not allowed:
+                        return module_err
                     if RetailerBlacklist.objects.filter(retailer=retailer, customer=request.user).exists():
                         return Response(
                             {'error': 'You are blacklisted by this retailer and cannot place orders.'},
@@ -138,17 +148,13 @@ def get_current_orders(request):
                 status__in=['pending', 'confirmed', 'processing', 'packed', 'out_for_delivery']
             ).order_by('-created_at')
         elif user.user_type == 'retailer':
-            try:
-                retailer = RetailerProfile.objects.get(user=user)
-                orders = base_qs.filter(
-                    retailer=retailer,
-                    status__in=['pending', 'confirmed', 'processing', 'packed', 'out_for_delivery']
-                ).order_by('-created_at')
-            except RetailerProfile.DoesNotExist:
-                return Response(
-                    {'error': 'Retailer profile not found'}, 
-                    status=status.HTTP_404_NOT_FOUND
-                )
+            location_ids, access_err = retailer_location_ids(user, PERM_ORDERS_READ)
+            if access_err is not None:
+                return access_err
+            orders = base_qs.filter(
+                retailer_id__in=location_ids,
+                status__in=['pending', 'confirmed', 'processing', 'packed', 'out_for_delivery']
+            ).order_by('-created_at')
         else:
             return Response(
                 {'error': 'Invalid user type'}, 
@@ -209,16 +215,12 @@ def get_order_history(request):
                 customer=user
             ).order_by('-created_at')
         elif user.user_type == 'retailer':
-            try:
-                retailer = RetailerProfile.objects.get(user=user)
-                orders = base_qs.filter(
-                    retailer=retailer
-                ).order_by('-created_at')
-            except RetailerProfile.DoesNotExist:
-                return Response(
-                    {'error': 'Retailer profile not found'}, 
-                    status=status.HTTP_404_NOT_FOUND
-                )
+            location_ids, access_err = retailer_location_ids(user, PERM_ORDERS_READ)
+            if access_err is not None:
+                return access_err
+            orders = base_qs.filter(
+                retailer_id__in=location_ids
+            ).order_by('-created_at')
         else:
             return Response(
                 {'error': 'Invalid user type'}, 
@@ -298,14 +300,10 @@ def get_order_detail(request, order_id):
         if user.user_type == 'customer':
             order = get_object_or_404(qs, id=order_id, customer=user)
         elif user.user_type == 'retailer':
-            try:
-                retailer = RetailerProfile.objects.get(user=user)
-                order = get_object_or_404(qs, id=order_id, retailer=retailer)
-            except RetailerProfile.DoesNotExist:
-                return Response(
-                    {'error': 'Retailer profile not found'}, 
-                    status=status.HTTP_404_NOT_FOUND
-                )
+            order, access_err = get_order_for_retailer(user, order_id, PERM_ORDERS_READ)
+            if access_err is not None:
+                return access_err
+            order = qs.filter(id=order.id).first()
         else:
             return Response(
                 {'error': 'Invalid user type'}, 
@@ -349,14 +347,9 @@ def update_order_status(request, order_id):
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        try:
-            retailer = RetailerProfile.objects.get(user=request.user)
-            order = get_object_or_404(Order, id=order_id, retailer=retailer)
-        except RetailerProfile.DoesNotExist:
-            return Response(
-                {'error': 'Retailer profile not found'}, 
-                status=status.HTTP_404_NOT_FOUND
-            )
+        order, access_err = get_order_for_retailer(request.user, order_id, PERM_ORDERS_UPDATE)
+        if access_err is not None:
+            return access_err
         
         serializer = OrderStatusUpdateSerializer(
             order,
@@ -392,14 +385,9 @@ def cancel_order(request, order_id):
         if user.user_type == 'customer':
             order = get_object_or_404(Order, id=order_id, customer=user)
         elif user.user_type == 'retailer':
-            try:
-                retailer = RetailerProfile.objects.get(user=user)
-                order = get_object_or_404(Order, id=order_id, retailer=retailer)
-            except RetailerProfile.DoesNotExist:
-                return Response(
-                    {'error': 'Retailer profile not found'}, 
-                    status=status.HTTP_404_NOT_FOUND
-                )
+            order, access_err = get_order_for_retailer(user, order_id, PERM_ORDERS_UPDATE)
+            if access_err is not None:
+                return access_err
         else:
             return Response(
                 {'error': 'Invalid user type'}, 
@@ -551,18 +539,19 @@ def get_order_stats(request):
         _org, module_err = require_module_enabled(request.user, 'orders')
         if module_err is not None:
             return module_err
+
+        location_ids, access_err = retailer_location_ids(request.user, PERM_ORDERS_READ)
+        if access_err is not None:
+            return access_err
+
+        primary_retailer = (
+            RetailerProfile.objects.filter(id__in=location_ids, user=request.user).first()
+            or RetailerProfile.objects.filter(id__in=location_ids).first()
+        )
         
-        try:
-            retailer = RetailerProfile.objects.get(user=request.user)
-        except RetailerProfile.DoesNotExist:
-            return Response(
-                {'error': 'Retailer profile not found'}, 
-                status=status.HTTP_404_NOT_FOUND
-            )
-        
-        orders = Order.objects.filter(retailer=retailer)
+        orders = Order.objects.filter(retailer_id__in=location_ids)
         from products.models import Product
-        total_products = Product.objects.filter(retailer=retailer).count()
+        total_products = Product.objects.filter(retailer_id__in=location_ids).count()
         today = timezone.now().date()
         
         # Apply date filters
@@ -612,7 +601,7 @@ def get_order_stats(request):
         
         # Aggregate Returns for correctly calculating NET revenue
         from returns.models import SalesReturn
-        returns_qs = SalesReturn.objects.filter(retailer=retailer)
+        returns_qs = SalesReturn.objects.filter(retailer_id__in=location_ids)
         if time_range == 'today':
             returns_qs = returns_qs.filter(created_at__date=today)
         elif time_range == 'this_week':
@@ -667,7 +656,7 @@ def get_order_stats(request):
             })
         
         recent_feedbacks = OrderFeedback.objects.filter(
-            order__retailer=retailer
+            order__retailer_id__in=location_ids
         ).select_related('customer').order_by('-created_at')[:5]
         
         recent_reviews_data = []
@@ -692,7 +681,7 @@ def get_order_stats(request):
             'top_customers': list(top_customers),
             'recent_orders': recent_orders_data,
             'total_products': total_products,
-            'average_rating': float(retailer.average_rating),
+            'average_rating': float(primary_retailer.average_rating) if primary_retailer else 0.0,
             'recent_reviews': recent_reviews_data,
             'cash_sales': float(stats['cash_sales'] or 0) - float(cash_refund),
             'digital_sales': float(stats['digital_sales'] or 0) - float(upi_refund),
@@ -775,14 +764,10 @@ def modify_order(request, order_id):
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        try:
-            retailer = RetailerProfile.objects.get(user=request.user)
-            order = get_object_or_404(Order, id=order_id, retailer=retailer)
-        except RetailerProfile.DoesNotExist:
-            return Response(
-                {'error': 'Retailer profile not found'}, 
-                status=status.HTTP_404_NOT_FOUND
-            )
+        order, access_err = get_order_for_retailer(request.user, order_id, PERM_ORDERS_UPDATE)
+        if access_err is not None:
+            return access_err
+        retailer = order.retailer
         
         if order.status != 'pending':
             return Response(
@@ -958,11 +943,9 @@ def get_order_chat(request, order_id):
         if user.user_type == 'customer':
             order = get_object_or_404(Order, id=order_id, customer=user)
         elif user.user_type == 'retailer':
-            try:
-                retailer = RetailerProfile.objects.get(user=user)
-                order = get_object_or_404(Order, id=order_id, retailer=retailer)
-            except RetailerProfile.DoesNotExist:
-                return Response({'error': 'Retailer profile not found'}, status=404)
+            order, access_err = get_order_for_retailer(user, order_id, PERM_ORDERS_READ)
+            if access_err is not None:
+                return access_err
         else:
             return Response({'error': 'Invalid user type'}, status=403)
             
@@ -990,12 +973,10 @@ def send_order_message(request, order_id):
             order = get_object_or_404(Order, id=order_id, customer=user)
             recipient = order.retailer.user
         elif user.user_type == 'retailer':
-            try:
-                retailer = RetailerProfile.objects.get(user=user)
-                order = get_object_or_404(Order, id=order_id, retailer=retailer)
-                recipient = order.customer
-            except RetailerProfile.DoesNotExist:
-                return Response({'error': 'Retailer profile not found'}, status=404)
+            order, access_err = get_order_for_retailer(user, order_id, PERM_ORDERS_READ)
+            if access_err is not None:
+                return access_err
+            recipient = order.customer
         else:
             return Response({'error': 'Invalid user type'}, status=403)
             
@@ -1052,14 +1033,10 @@ def create_retailer_rating(request, order_id):
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        try:
-            retailer = RetailerProfile.objects.get(user=request.user)
-            order = get_object_or_404(Order, id=order_id, retailer=retailer)
-        except RetailerProfile.DoesNotExist:
-            return Response(
-                {'error': 'Retailer profile not found'}, 
-                status=status.HTTP_404_NOT_FOUND
-            )
+        order, access_err = get_order_for_retailer(request.user, order_id, PERM_ORDERS_UPDATE)
+        if access_err is not None:
+            return access_err
+        retailer = order.retailer
         
         serializer = RetailerRatingSerializer(
             data=request.data,
@@ -1093,11 +1070,9 @@ def mark_chat_read(request, order_id):
         if user.user_type == 'customer':
             order = get_object_or_404(Order, id=order_id, customer=user)
         elif user.user_type == 'retailer':
-            try:
-                retailer = RetailerProfile.objects.get(user=user)
-                order = get_object_or_404(Order, id=order_id, retailer=retailer)
-            except RetailerProfile.DoesNotExist:
-                return Response({'error': 'Retailer profile not found'}, status=404)
+            order, access_err = get_order_for_retailer(user, order_id, PERM_ORDERS_READ)
+            if access_err is not None:
+                return access_err
         else:
             return Response({'error': 'Invalid user type'}, status=403)
             
@@ -1140,14 +1115,9 @@ def update_estimated_time(request, order_id):
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        try:
-            retailer = RetailerProfile.objects.get(user=request.user)
-            order = get_object_or_404(Order, id=order_id, retailer=retailer)
-        except RetailerProfile.DoesNotExist:
-            return Response(
-                {'error': 'Retailer profile not found'}, 
-                status=status.HTTP_404_NOT_FOUND
-            )
+        order, access_err = get_order_for_retailer(request.user, order_id, PERM_ORDERS_UPDATE)
+        if access_err is not None:
+            return access_err
             
         if order.status not in ['confirmed', 'processing']:
             return Response(
@@ -1318,8 +1288,9 @@ def verify_payment(request, order_id):
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        retailer = RetailerProfile.objects.get(user=request.user)
-        order = get_object_or_404(Order, id=order_id, retailer=retailer)
+        order, access_err = get_order_for_retailer(request.user, order_id, PERM_ORDERS_UPDATE)
+        if access_err is not None:
+            return access_err
         
         action = request.data.get('action') # 'verify' or 'fail'
         if action not in ['verify', 'fail']:
@@ -1340,6 +1311,8 @@ def verify_payment(request, order_id):
         
         # Notify Customer (wrapped in try-except)
         try:
+            from common.notifications import send_silent_update
+
             if order.customer:
                 send_push_notification(
                     user=order.customer,

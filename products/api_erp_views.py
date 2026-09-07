@@ -128,8 +128,15 @@ def create_pos_order(request):
     }
     """
     try:
-        retailer = RetailerProfile.objects.get(user=request.user)
-    except RetailerProfile.DoesNotExist:
+        from orders.access import resolve_pos_retailer_location
+
+        retailer, access_err = resolve_pos_retailer_location(
+            request.user,
+            request.data.get('location_id'),
+        )
+        if access_err is not None:
+            return access_err
+    except Exception:
         return Response({'error': 'Only retailers can use POS.'}, status=status.HTTP_403_FORBIDDEN)
 
     data = request.data
