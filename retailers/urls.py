@@ -55,6 +55,11 @@ urlpatterns = [
         views.organization_api_key_detail,
         name='organization_api_key_detail',
     ),
+    path(
+        'org/<int:org_id>/audit-log/',
+        views.organization_audit_log,
+        name='organization_audit_log',
+    ),
 
     # Public retailer endpoints
     path('', views.list_retailers, name='list_retailers'),

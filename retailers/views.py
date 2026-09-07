@@ -15,7 +15,7 @@ from common.error_utils import format_exception
 from .models import (
     Organization, RetailerProfile, RetailerOperatingHours, RetailerCategory,
     RetailerCategoryMapping, RetailerReview, RetailerRewardConfig,
-    OrgRole, OrgStaffMembership, OrgStaffRoleAudit, OrgApiKey,
+    OrgRole, OrgStaffMembership, OrgStaffRoleAudit, OrgApiKey, OrgAuditLog,
 )
 from .serializers import (
     RetailerProfileSerializer, RetailerProfileUpdateSerializer,
@@ -27,7 +27,9 @@ from .serializers import (
     OrgRoleSerializer, OrgRoleCreateSerializer, OrgRoleUpdateSerializer,
     OrgStaffMembershipSerializer, OrgStaffAssignSerializer, OrgStaffUpdateSerializer,
     OrgApiKeySerializer, OrgApiKeyCreateSerializer, OrgApiKeyUpdateSerializer,
+    OrgAuditLogSerializer,
 )
+from .audit_log import record_org_audit_event
 from .organization import (
     ensure_organization_for_profile,
     ensure_org_rbac_bootstrap,
@@ -58,6 +60,12 @@ logger = logging.getLogger(__name__)
 
 class GeoEstimateThrottle(AnonRateThrottle):
     scope = 'geo_estimate'
+
+
+class AuditLogPagination(PageNumberPagination):
+    page_size = 50
+    page_size_query_param = 'page_size'
+    max_page_size = 200
 
 
 # Map common state abbreviations ↔ full names for retailer filters
@@ -986,7 +994,23 @@ def organization_detail(request, org_id):
         if not update_ser.is_valid():
             return Response(update_ser.errors, status=status.HTTP_400_BAD_REQUEST)
 
+        summary_before = {
+            'name': org.name,
+            'is_active': org.is_active,
+        }
         org = update_ser.save()
+        record_org_audit_event(
+            organization=org,
+            actor=request.user,
+            action=OrgAuditLog.ACTION_UPDATE,
+            object_type=OrgAuditLog.OBJECT_ORGANIZATION,
+            object_id=org.id,
+            summary_before=summary_before,
+            summary_after={
+                'name': org.name,
+                'is_active': org.is_active,
+            },
+        )
         logger.info("Organization updated: %s (active=%s)", org.pk, org.is_active)
         return Response(
             _serialize_organization(org),
@@ -1062,6 +1086,19 @@ def organization_roles(request, org_id):
             permissions=ser.validated_data.get('permissions') or [],
             is_system=False,
         )
+        record_org_audit_event(
+            organization=org,
+            actor=request.user,
+            action=OrgAuditLog.ACTION_CREATE,
+            object_type=OrgAuditLog.OBJECT_ORG_ROLE,
+            object_id=role.id,
+            summary_before={},
+            summary_after={
+                'slug': role.slug,
+                'name': role.name,
+                'permissions': list(role.permissions or []),
+            },
+        )
         return Response(
             OrgRoleSerializer(role).data,
             status=status.HTTP_201_CREATED,
@@ -1113,11 +1150,29 @@ def organization_role_detail(request, org_id, role_id):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
+        summary_before = {
+            'slug': role.slug,
+            'name': role.name,
+            'permissions': list(role.permissions or []),
+        }
         if 'name' in ser.validated_data:
             role.name = ser.validated_data['name']
         if 'permissions' in ser.validated_data:
             role.permissions = ser.validated_data['permissions']
         role.save()
+        record_org_audit_event(
+            organization=org,
+            actor=request.user,
+            action=OrgAuditLog.ACTION_UPDATE,
+            object_type=OrgAuditLog.OBJECT_ORG_ROLE,
+            object_id=role.id,
+            summary_before=summary_before,
+            summary_after={
+                'slug': role.slug,
+                'name': role.name,
+                'permissions': list(role.permissions or []),
+            },
+        )
         return Response(OrgRoleSerializer(role).data, status=status.HTTP_200_OK)
     except Exception as e:
         logger.error(f"Error in organization_role_detail: {str(e)}")
@@ -1549,8 +1604,28 @@ def organization_api_key_detail(request, org_id, key_id):
 
         data = update_ser.validated_data
         if 'name' in data:
+            summary_before = {
+                'api_key_id': api_key.id,
+                'prefix': api_key.prefix,
+                'name': api_key.name,
+                'scopes': list(api_key.scopes or []),
+            }
             api_key.name = data['name']
             api_key.save(update_fields=['name', 'updated_at'])
+            record_org_audit_event(
+                organization=org,
+                actor=request.user,
+                action=OrgAuditLog.ACTION_UPDATE,
+                object_type=OrgAuditLog.OBJECT_API_KEY,
+                object_id=api_key.id,
+                summary_before=summary_before,
+                summary_after={
+                    'api_key_id': api_key.id,
+                    'prefix': api_key.prefix,
+                    'name': api_key.name,
+                    'scopes': list(api_key.scopes or []),
+                },
+            )
         if 'scopes' in data:
             update_org_api_key_scopes(
                 api_key=api_key,
@@ -1565,6 +1640,61 @@ def organization_api_key_detail(request, org_id, key_id):
         )
     except Exception as e:
         logger.error(f"Error in organization_api_key_detail: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_audit_log(request, org_id):
+    """
+    List immutable audit rows for this organization (OE-99 / F-0003).
+
+    Requires ``audit.read``. Cross-tenant callers get 403. Optional
+    ``location_id`` query param filters to location-scoped rows only.
+    Append-only: no POST/PATCH/DELETE.
+    """
+    try:
+        org, err = _resolve_org_for_caller(request, org_id)
+        if err is not None:
+            return err
+
+        if not user_has_org_permission(request.user, org, 'audit.read'):
+            return Response(
+                {'error': 'Audit read permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        qs = (
+            OrgAuditLog.objects.filter(organization=org)
+            .select_related('organization', 'actor', 'location')
+            .order_by('-created_at', '-id')
+        )
+
+        location_id = request.query_params.get('location_id')
+        if location_id is not None:
+            try:
+                location_pk = int(location_id)
+            except (TypeError, ValueError):
+                return Response(
+                    {'error': 'location_id must be an integer'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if not org.locations.filter(pk=location_pk).exists():
+                return Response(
+                    {'error': 'Location not found in this organization'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            qs = qs.filter(location_id=location_pk)
+
+        paginator = AuditLogPagination()
+        page = paginator.paginate_queryset(qs, request)
+        serializer = OrgAuditLogSerializer(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
+    except Exception as e:
+        logger.error(f"Error in organization_audit_log: {str(e)}")
         return Response(
             {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,

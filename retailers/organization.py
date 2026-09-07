@@ -17,6 +17,7 @@ from .models import (
     OrgStaffRoleAudit,
     RetailerProfile,
 )
+from .audit_log import record_org_audit_event, staff_role_audit_summaries
 from .permissions_catalog import (
     ALL_PERMISSION_CODES,
     BOOTSTRAP_ROLES,
@@ -262,7 +263,7 @@ def record_staff_role_audit(
     from_role=None,
     to_role=None,
 ):
-    return OrgStaffRoleAudit.objects.create(
+    row = OrgStaffRoleAudit.objects.create(
         organization=organization,
         actor=actor if getattr(actor, 'is_authenticated', False) else None,
         target_user=target_user,
@@ -270,6 +271,21 @@ def record_staff_role_audit(
         from_role=from_role,
         to_role=to_role,
     )
+    summary_before, summary_after = staff_role_audit_summaries(
+        target_user=target_user,
+        from_role=from_role,
+        to_role=to_role,
+    )
+    record_org_audit_event(
+        organization=organization,
+        actor=actor,
+        action=action,
+        object_type='staff_membership',
+        object_id=target_user.id,
+        summary_before=summary_before,
+        summary_after=summary_after,
+    )
+    return row
 
 
 def organization_is_session_blocked(user):
