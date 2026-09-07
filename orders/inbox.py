@@ -8,11 +8,10 @@ allowed by the status state machine.
 Scope: existing app/POS order sources only. F-0117 marketplace ingest,
 MarketplaceOrder, and channel adapters are out of scope for this stack.
 """
-from django.db.models import Count, Exists, OuterRef
 from django.utils import timezone
 
 from orders.domain.status_policy import ALLOWED_STATUS_TRANSITIONS, ensure_transition_allowed
-from orders.models import Order, OrderFeedback, RetailerRating
+from orders.access import order_list_queryset
 
 # OE-131 unified Order sources in scope for the retailer inbox (not F-0117).
 INBOX_ORDER_SOURCES = frozenset({'app', 'pos'})
@@ -81,20 +80,14 @@ def validate_inbox_action(current_status: str, action: str) -> str:
 def build_inbox_queryset(location_ids):
     """
     Base queryset for retailer inbox list — org-scoped via location ids.
-    """
-    has_feedback_subquery = Exists(OrderFeedback.objects.filter(order=OuterRef('pk')))
-    has_rating_subquery = Exists(RetailerRating.objects.filter(order=OuterRef('pk')))
 
+    Reuses OE-131 order_list_queryset (select_related, prefetch, annotations).
+    """
     return (
-        Order.objects.filter(
+        order_list_queryset()
+        .filter(
             retailer_id__in=location_ids,
             source__in=INBOX_ORDER_SOURCES,
-        )
-        .select_related('retailer', 'customer')
-        .annotate(
-            items_count_annotated=Count('items'),
-            has_feedback_annotated=has_feedback_subquery,
-            has_rating_annotated=has_rating_subquery,
         )
         .order_by('-created_at')
     )

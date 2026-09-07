@@ -167,7 +167,7 @@ class TestRetailerInboxList:
 
         staff = _make_staff(org, "oe135_list_staff", ["orders.read"])
         api_client.force_authenticate(user=staff)
-        with django_assert_num_queries(22):
+        with django_assert_num_queries(13):
             resp = api_client.get(reverse("list_retailer_inbox"))
         assert resp.status_code == status.HTTP_200_OK
         assert resp.data["count"] == 1

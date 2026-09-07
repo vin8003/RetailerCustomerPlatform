@@ -1388,6 +1388,7 @@ def retailer_inbox_action(request, order_id):
 
         if serializer.is_valid():
             order = serializer.save()
+            order = order_detail_queryset().get(pk=order.pk)
             response_serializer = OrderDetailSerializer(
                 order, context={'request': request}
             )
