@@ -5,14 +5,54 @@ from django.core.validators import RegexValidator
 from common.utils import generate_upload_path, resize_image
 
 
+class Organization(models.Model):
+    """
+    Tenant parent for shop locations (RetailerProfile).
+
+    v1 keeps a 1:1 org↔location mapping for existing kirana shops.
+    GSTIN, UPI, and receipt footer stay on RetailerProfile, not here.
+    Disabling (is_active=False) blocks new sessions without deleting history.
+    """
+    name = models.CharField(max_length=255)
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='owned_organizations',
+    )
+    is_active = models.BooleanField(
+        default=True,
+        help_text='When false, new sessions are blocked; history is retained.',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'organization'
+        indexes = [
+            models.Index(fields=['owner']),
+            models.Index(fields=['is_active']),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
 class RetailerProfile(models.Model):
     """
-    Extended profile for retailer users
+    Extended profile for retailer users (operational shop / location record).
     """
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL, 
         on_delete=models.CASCADE, 
         related_name='retailer_profile'
+    )
+    organization = models.ForeignKey(
+        'Organization',
+        on_delete=models.PROTECT,
+        related_name='locations',
+        null=True,
+        blank=True,
+        help_text='Tenant parent. Implicit for existing single-shop tenants (1:1).',
     )
     shop_name = models.CharField(max_length=255)
     shop_description = models.TextField(blank=True)

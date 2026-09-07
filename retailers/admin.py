@@ -1,9 +1,19 @@
 from django.contrib import admin
 from .models import (
-    RetailerProfile, RetailerOperatingHours, RetailerCategory,
+    Organization, RetailerProfile, RetailerOperatingHours, RetailerCategory,
     RetailerCategoryMapping, RetailerReview, RetailerRewardConfig,
     RetailerBlacklist, Supplier, RetailerCustomerMapping, CustomerLedger
 )
+
+
+@admin.register(Organization)
+class OrganizationAdmin(admin.ModelAdmin):
+    """Admin for retailer tenant organizations (OE-97)."""
+    list_display = ['name', 'owner', 'is_active', 'created_at']
+    list_filter = ['is_active']
+    search_fields = ['name', 'owner__username', 'owner__email']
+    ordering = ['-created_at']
+    readonly_fields = ['created_at', 'updated_at']
 
 
 @admin.register(RetailerProfile)
@@ -11,15 +21,15 @@ class RetailerProfileAdmin(admin.ModelAdmin):
     """
     Admin configuration for retailer profiles
     """
-    list_display = ['shop_name', 'user', 'city', 'state', 'is_verified', 'is_active', 'average_rating', 'created_at']
+    list_display = ['shop_name', 'organization', 'user', 'city', 'state', 'is_verified', 'is_active', 'average_rating', 'created_at']
     list_filter = ['is_verified', 'is_active', 'city', 'state', 'offers_delivery', 'offers_pickup']
-    search_fields = ['shop_name', 'user__username', 'city', 'state', 'business_type']
+    search_fields = ['shop_name', 'user__username', 'city', 'state', 'business_type', 'organization__name']
     ordering = ['-created_at']
     readonly_fields = ['average_rating', 'total_ratings', 'created_at', 'updated_at']
     
     fieldsets = (
         ('Basic Information', {
-            'fields': ('user', 'shop_name', 'shop_description', 'shop_image')
+            'fields': ('user', 'organization', 'shop_name', 'shop_description', 'shop_image')
         }),
         ('Contact Information', {
             'fields': ('contact_email', 'contact_phone', 'whatsapp_number')
