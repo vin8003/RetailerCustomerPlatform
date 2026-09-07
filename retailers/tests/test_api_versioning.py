@@ -384,6 +384,88 @@ class TestVersioningAndJwtCompatibility:
     def test_owner_still_has_api_keys_manage_in_catalog(self):
         assert "api_keys.manage" in ALL_PERMISSION_CODES
 
+    def test_v1_customer_jwt_alias_mount_resolves(self, api_client):
+        from authentication.models import User
+        from customers.models import CustomerProfile
+
+        user = User.objects.create_user(
+            username="v1_customer_alias",
+            email="v1_customer_alias@test.com",
+            password="TestPass123!",
+            user_type="customer",
+            is_active=True,
+        )
+        CustomerProfile.objects.create(user=user)
+        api_client.force_authenticate(user=user)
+
+        resp_unversioned = api_client.get(reverse("get_customer_profile"))
+        assert resp_unversioned.status_code == status.HTTP_200_OK
+
+        resp_v1 = api_client.get("/api/v1/customer/profile/")
+        assert resp_v1.status_code == status.HTTP_200_OK
+
+    def test_v1_orders_jwt_alias_mount_resolves(self, api_client):
+        owner, profile = _make_retailer("v1_orders_alias", "V1 Orders Shop")
+        customer = User.objects.create_user(
+            username="v1_orders_cust",
+            email="v1_orders_cust@test.com",
+            password="TestPass123!",
+            user_type="customer",
+            is_active=True,
+        )
+        from customers.models import CustomerProfile, CustomerAddress
+        from orders.models import Order, OrderItem
+        from products.models import Product, ProductCategory, ProductBrand
+        from decimal import Decimal
+
+        CustomerProfile.objects.create(user=customer)
+        category = ProductCategory.objects.create(name="Cat", retailer=profile)
+        brand = ProductBrand.objects.create(name="Brand")
+        product = Product.objects.create(
+            retailer=profile,
+            name="Item",
+            category=category,
+            brand=brand,
+            price=Decimal("10.00"),
+            quantity=5,
+            is_active=True,
+            is_available=True,
+        )
+        address = CustomerAddress.objects.create(
+            customer=customer,
+            address_line1="1 Lane",
+            city="City",
+            state="State",
+            pincode="110001",
+            is_default=True,
+        )
+        order = Order.objects.create(
+            customer=customer,
+            retailer=profile,
+            delivery_address=address,
+            delivery_mode="delivery",
+            payment_mode="cash",
+            subtotal=Decimal("10.00"),
+            total_amount=Decimal("10.00"),
+            status="pending",
+        )
+        OrderItem.objects.create(
+            order=order,
+            product=product,
+            product_name=product.name,
+            product_price=product.price,
+            quantity=1,
+            unit_price=product.price,
+            total_price=product.price,
+        )
+
+        api_client.force_authenticate(user=owner)
+        resp_unversioned = api_client.get(reverse("get_current_orders"))
+        assert resp_unversioned.status_code == status.HTTP_200_OK
+
+        resp_v1 = api_client.get("/api/v1/orders/current/")
+        assert resp_v1.status_code == status.HTTP_200_OK
+
 
 @pytest.mark.django_db
 class TestApiKeyQueryBudget:
