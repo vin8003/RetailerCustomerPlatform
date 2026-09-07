@@ -373,3 +373,72 @@ class TestStaffCrossTenantIsolation:
             ).status_code
             == status.HTTP_401_UNAUTHORIZED
         )
+
+
+@pytest.mark.django_db
+class TestStaffQueryBudget:
+    """Hot staff endpoints must stay bounded (no N+1, tenant-scoped queryset)."""
+
+    def test_staff_list_query_count(self, api_client, django_assert_num_queries):
+        owner, profile = _make_retailer("staff_q_owner", "Staff Query Shop")
+        org = profile.organization
+        api_client.force_authenticate(user=owner)
+        url = reverse("organization_staff", kwargs={"org_id": org.id})
+        with django_assert_num_queries(5):
+            response = api_client.get(url)
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["count"] == 1
+        assert len(response.data["results"]) == 1
+
+    def test_staff_list_scales_with_memberships(
+        self, api_client, django_assert_num_queries
+    ):
+        owner, profile = _make_retailer("staff_q_scale", "Scale Shop")
+        org = profile.organization
+        cashier_role = OrgRole.objects.get(organization=org, slug=ROLE_SLUG_CASHIER)
+        api_client.force_authenticate(user=owner)
+        for i in range(3):
+            resp = api_client.post(
+                reverse("organization_staff", kwargs={"org_id": org.id}),
+                {
+                    "username": f"scale_cashier_{i}",
+                    "password": "CashPass123!",
+                    "role_id": cashier_role.id,
+                },
+                format="json",
+            )
+            assert resp.status_code == status.HTTP_201_CREATED
+
+        url = reverse("organization_staff", kwargs={"org_id": org.id})
+        with django_assert_num_queries(5):
+            response = api_client.get(url)
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["count"] == 4
+
+    def test_staff_detail_query_count(self, api_client, django_assert_num_queries):
+        owner, profile = _make_retailer("staff_q_detail", "Detail Shop")
+        org = profile.organization
+        membership = OrgStaffMembership.objects.get(organization=org, user=owner)
+        api_client.force_authenticate(user=owner)
+        url = reverse(
+            "organization_staff_detail",
+            kwargs={"org_id": org.id, "membership_id": membership.id},
+        )
+        with django_assert_num_queries(4):
+            response = api_client.get(url)
+        assert response.status_code == status.HTTP_200_OK
+        assert response.data["username"] == owner.username
+
+    def test_cross_tenant_staff_list_denied_one_query(
+        self, api_client, django_assert_num_queries
+    ):
+        owner_a, profile_a = _make_retailer("staff_iso_a", "Iso A")
+        owner_b, _profile_b = _make_retailer("staff_iso_b", "Iso B")
+        api_client.force_authenticate(user=owner_b)
+        url = reverse(
+            "organization_staff",
+            kwargs={"org_id": profile_a.organization_id},
+        )
+        with django_assert_num_queries(1):
+            response = api_client.get(url)
+        assert response.status_code == status.HTTP_403_FORBIDDEN

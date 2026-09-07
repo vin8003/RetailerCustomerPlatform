@@ -811,7 +811,7 @@ def _serialize_organization(org):
     return OrganizationSerializer(org).data
 
 
-def _resolve_org_for_caller(request, org_id):
+def _resolve_org_for_caller(request, org_id, *, bootstrap=False):
     """
     Same-tenant org resolution for profile owners and staff members.
 
@@ -825,47 +825,46 @@ def _resolve_org_for_caller(request, org_id):
             status=status.HTTP_403_FORBIDDEN,
         )
 
-    profile_org_id = (
-        RetailerProfile.objects.filter(user=request.user)
-        .values_list('organization_id', flat=True)
-        .first()
-    )
-    if profile_org_id == org_id:
-        try:
-            org = Organization.objects.get(pk=org_id)
-        except Organization.DoesNotExist:
+    try:
+        profile = RetailerProfile.objects.select_related('organization').get(
+            user=request.user
+        )
+    except RetailerProfile.DoesNotExist:
+        profile = None
+
+    if profile is not None:
+        if profile.organization_id == org_id:
+            org = profile.organization
+            if org is None:
+                try:
+                    org = Organization.objects.get(pk=org_id)
+                except Organization.DoesNotExist:
+                    return None, Response(
+                        {'error': 'Organization not found or access denied'},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+            if bootstrap:
+                ensure_org_rbac_bootstrap(org)
+            return org, None
+        if profile.organization_id is not None:
             return None, Response(
                 {'error': 'Organization not found or access denied'},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        ensure_org_rbac_bootstrap(org)
-        return org, None
 
-    if profile_org_id is not None and profile_org_id != org_id:
-        if not OrgStaffMembership.objects.filter(
+    belongs = (
+        Organization.objects.filter(pk=org_id, owner_id=request.user.id).exists()
+        or OrgStaffMembership.objects.filter(
             organization_id=org_id,
             user=request.user,
             is_active=True,
-        ).exists():
-            return None, Response(
-                {'error': 'Organization not found or access denied'},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-    elif profile_org_id is None:
-        belongs = (
-            Organization.objects.filter(pk=org_id, owner_id=request.user.id).exists()
-            or OrgStaffMembership.objects.filter(
-                organization_id=org_id,
-                user=request.user,
-                is_active=True,
-            ).exists()
+        ).exists()
+    )
+    if not belongs:
+        return None, Response(
+            {'error': 'Organization not found or access denied'},
+            status=status.HTTP_403_FORBIDDEN,
         )
-        if not belongs:
-            return None, Response(
-                {'error': 'Organization not found or access denied'},
-                status=status.HTTP_403_FORBIDDEN,
-            )
 
     try:
         org = Organization.objects.get(pk=org_id)
@@ -881,7 +880,8 @@ def _resolve_org_for_caller(request, org_id):
             status=status.HTTP_403_FORBIDDEN,
         )
 
-    ensure_org_rbac_bootstrap(org)
+    if bootstrap:
+        ensure_org_rbac_bootstrap(org)
     return org, None
 
 
@@ -901,8 +901,6 @@ def organization_me(request):
             org = profile.organization
             if org is None:
                 org = ensure_organization_for_profile(profile)
-            else:
-                ensure_org_rbac_bootstrap(org)
             return Response(
                 _serialize_organization(org),
                 status=status.HTTP_200_OK,
@@ -950,7 +948,7 @@ def organization_detail(request, org_id):
     and the resource is unchanged. PATCH requires ``org.update``.
     """
     try:
-        org, err = _resolve_org_for_caller(request, org_id)
+        org, err = _resolve_org_for_caller(request, org_id, bootstrap=False)
         if err is not None:
             return err
 
@@ -959,6 +957,8 @@ def organization_detail(request, org_id):
                 _serialize_organization(org),
                 status=status.HTTP_200_OK,
             )
+
+        ensure_org_rbac_bootstrap(org)
 
         # PATCH — requires org.update; refuse without mutating
         if not user_has_org_permission(request.user, org, 'org.update'):
@@ -993,7 +993,7 @@ def organization_detail(request, org_id):
 def organization_permission_catalog(request, org_id):
     """Versioned permission catalog for this org (same-tenant read)."""
     try:
-        org, err = _resolve_org_for_caller(request, org_id)
+        org, err = _resolve_org_for_caller(request, org_id, bootstrap=True)
         if err is not None:
             return err
         return Response(catalog_payload(), status=status.HTTP_200_OK)
@@ -1014,7 +1014,7 @@ def organization_roles(request, org_id):
     POST requires ``roles.manage``. Unknown permission codes → 400.
     """
     try:
-        org, err = _resolve_org_for_caller(request, org_id)
+        org, err = _resolve_org_for_caller(request, org_id, bootstrap=True)
         if err is not None:
             return err
 
@@ -1066,7 +1066,7 @@ def organization_roles(request, org_id):
 def organization_role_detail(request, org_id, role_id):
     """Get or update a named role. PATCH requires ``roles.manage``."""
     try:
-        org, err = _resolve_org_for_caller(request, org_id)
+        org, err = _resolve_org_for_caller(request, org_id, bootstrap=True)
         if err is not None:
             return err
 
@@ -1124,7 +1124,7 @@ def organization_staff(request, org_id):
     for new cashiers (password auth — not customer OTP).
     """
     try:
-        org, err = _resolve_org_for_caller(request, org_id)
+        org, err = _resolve_org_for_caller(request, org_id, bootstrap=True)
         if err is not None:
             return err
 
@@ -1276,7 +1276,7 @@ def organization_staff_detail(request, org_id, membership_id):
     Unauthorized users cannot change another user's role.
     """
     try:
-        org, err = _resolve_org_for_caller(request, org_id)
+        org, err = _resolve_org_for_caller(request, org_id, bootstrap=True)
         if err is not None:
             return err
 

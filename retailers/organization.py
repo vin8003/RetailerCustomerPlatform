@@ -77,6 +77,16 @@ def ensure_org_rbac_bootstrap(organization):
     if organization is None:
         return
 
+    if (
+        OrgRole.objects.filter(organization=organization, slug=ROLE_SLUG_ADMIN).exists()
+        and OrgStaffMembership.objects.filter(
+            organization=organization,
+            user_id=organization.owner_id,
+            is_active=True,
+        ).exists()
+    ):
+        return
+
     with transaction.atomic():
         org = (
             Organization.objects.select_for_update()
