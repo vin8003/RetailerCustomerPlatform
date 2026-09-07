@@ -264,3 +264,80 @@ class TestAuditLogLocationFilter:
 
         resp = api_client.get(_audit_url(org.id), {"location_id": 999999})
         assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.django_db
+class TestAuditLogQueryBudget:
+    """Hot audit list must stay bounded (no N+1, tenant-scoped queryset)."""
+
+    def test_audit_list_query_count(self, api_client, django_assert_num_queries):
+        owner, profile = _make_retailer("audit_q_owner", "Audit Query Shop")
+        org = profile.organization
+        record_org_audit_event(
+            organization=org,
+            actor=owner,
+            action=OrgAuditLog.ACTION_UPDATE,
+            object_type=OrgAuditLog.OBJECT_ORGANIZATION,
+            object_id=org.id,
+            summary_before={"name": "Before"},
+            summary_after={"name": "After"},
+        )
+        api_client.force_authenticate(user=owner)
+        with django_assert_num_queries(3):
+            resp = api_client.get(_audit_url(org.id))
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.data["count"] == 1
+        assert resp.data["results"][0]["actor_username"] == owner.username
+
+    def test_audit_list_scales_with_rows(
+        self, api_client, django_assert_num_queries
+    ):
+        owner, profile = _make_retailer("audit_q_scale", "Audit Scale Shop")
+        org = profile.organization
+        for i in range(5):
+            record_org_audit_event(
+                organization=org,
+                actor=owner,
+                action=OrgAuditLog.ACTION_UPDATE,
+                object_type=OrgAuditLog.OBJECT_ORGANIZATION,
+                object_id=org.id,
+                summary_before={"i": i},
+                summary_after={"i": i + 1},
+            )
+        api_client.force_authenticate(user=owner)
+        with django_assert_num_queries(3):
+            resp = api_client.get(_audit_url(org.id))
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.data["count"] == 5
+        assert len(resp.data["results"]) == 5
+
+    def test_audit_list_with_location_filter_query_count(
+        self, api_client, django_assert_num_queries
+    ):
+        owner, profile = _make_retailer("audit_q_loc", "Audit Loc Filter Shop")
+        org = profile.organization
+        record_org_audit_event(
+            organization=org,
+            actor=owner,
+            action=OrgAuditLog.ACTION_UPDATE,
+            object_type="location_profile",
+            object_id=profile.id,
+            summary_before={"shop_name": "Old"},
+            summary_after={"shop_name": profile.shop_name},
+            location=profile,
+        )
+        api_client.force_authenticate(user=owner)
+        with django_assert_num_queries(4):
+            resp = api_client.get(_audit_url(org.id), {"location_id": profile.id})
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.data["count"] == 1
+
+    def test_cross_tenant_audit_list_denied_one_query(
+        self, api_client, django_assert_num_queries
+    ):
+        owner_a, profile_a = _make_retailer("audit_iso_a", "Audit Iso A")
+        owner_b, _profile_b = _make_retailer("audit_iso_b", "Audit Iso B")
+        api_client.force_authenticate(user=owner_b)
+        with django_assert_num_queries(1):
+            resp = api_client.get(_audit_url(profile_a.organization_id))
+        assert resp.status_code == status.HTTP_403_FORBIDDEN

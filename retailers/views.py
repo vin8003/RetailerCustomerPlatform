@@ -1669,7 +1669,7 @@ def organization_audit_log(request, org_id):
 
         qs = (
             OrgAuditLog.objects.filter(organization=org)
-            .select_related('actor', 'location')
+            .select_related('organization', 'actor', 'location')
             .order_by('-created_at', '-id')
         )
 
