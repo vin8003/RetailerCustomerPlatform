@@ -20,6 +20,7 @@ from authentication.models import User
 from cart.models import Cart, CartItem
 from customers.models import CustomerAddress, CustomerProfile
 from orders.models import Order, OrderItem
+from orders.pickup import expire_uncollected_pickup_orders
 from products.models import Product, ProductCategory, ProductBrand
 from retailers.models import OrgModuleFlags, OrgRole, OrgStaffMembership, RetailerProfile
 from retailers.module_flags_catalog import ERROR_CODE_MODULE_DISABLED
@@ -119,6 +120,30 @@ def _cart_with_item(customer, retailer, product):
     return cart
 
 
+def _packed_pickup_order(customer, retailer, product, *, pickup_code="123456"):
+    order = Order.objects.create(
+        customer=customer,
+        retailer=retailer,
+        delivery_mode="pickup",
+        payment_mode="cash_pickup",
+        subtotal=Decimal("100.00"),
+        total_amount=Decimal("100.00"),
+        status="packed",
+        source="app",
+        pickup_code=pickup_code,
+    )
+    OrderItem.objects.create(
+        order=order,
+        product=product,
+        product_name=product.name,
+        product_price=product.price,
+        quantity=1,
+        unit_price=product.price,
+        total_price=product.price,
+    )
+    return order
+
+
 @pytest.mark.django_db
 class TestCustomerPickupCreate:
     @patch("common.notifications.send_push_notification")
@@ -147,6 +172,8 @@ class TestCustomerPickupCreate:
         assert order.delivery_fee == Decimal("0.00")
         assert order.delivery_address is None
         assert order.status == "pending"
+        assert len(order.pickup_code) == 6
+        assert order.pickup_code.isdigit()
 
     def test_pickup_rejected_when_retailer_does_not_offer_pickup(self, api_client):
         _owner, profile = _make_retailer(
@@ -576,3 +603,189 @@ class TestPickupModuleGate:
         )
         assert resp.status_code == status.HTTP_403_FORBIDDEN
         assert resp.data["error_code"] == ERROR_CODE_MODULE_DISABLED
+
+
+@pytest.mark.django_db
+class TestPickupCollectionVerification:
+    """AC3 — mark_delivered requires pickup_code / customer id verification."""
+
+    def test_mark_delivered_without_code_denied_order_unchanged(self, api_client):
+        owner, profile = _make_retailer("oe152_verify_deny", "Verify Deny")
+        customer = _make_customer("oe152_verify_deny_cust")
+        product = _product(profile)
+        order = _packed_pickup_order(customer, profile, product, pickup_code="654321")
+
+        api_client.force_authenticate(user=owner)
+        resp = api_client.post(
+            reverse("retailer_inbox_action", args=[order.id]),
+            {"action": "mark_delivered"},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        assert "pickup_code" in resp.data
+        order.refresh_from_db()
+        assert order.status == "packed"
+
+    def test_mark_delivered_with_wrong_code_denied(self, api_client):
+        owner, profile = _make_retailer("oe152_verify_wrong", "Verify Wrong")
+        customer = _make_customer("oe152_verify_wrong_cust")
+        product = _product(profile)
+        order = _packed_pickup_order(customer, profile, product, pickup_code="111111")
+
+        api_client.force_authenticate(user=owner)
+        resp = api_client.post(
+            reverse("retailer_inbox_action", args=[order.id]),
+            {"action": "mark_delivered", "pickup_code": "999999"},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        order.refresh_from_db()
+        assert order.status == "packed"
+
+    @patch("common.notification_dispatcher.dispatch_order_status_notification")
+    def test_mark_delivered_with_valid_code_succeeds(
+        self, mock_dispatch, api_client
+    ):
+        owner, profile = _make_retailer("oe152_verify_ok", "Verify OK")
+        customer = _make_customer("oe152_verify_ok_cust")
+        product = _product(profile)
+        order = _packed_pickup_order(customer, profile, product, pickup_code="424242")
+
+        api_client.force_authenticate(user=owner)
+        resp = api_client.post(
+            reverse("retailer_inbox_action", args=[order.id]),
+            {
+                "action": "mark_delivered",
+                "pickup_code": "424242",
+                "customer_id": customer.id,
+            },
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        order.refresh_from_db()
+        assert order.status == "delivered"
+        mock_dispatch.assert_called_once()
+
+    def test_mark_delivered_with_mismatched_customer_id_denied(self, api_client):
+        owner, profile = _make_retailer("oe152_verify_cust", "Verify Cust")
+        customer = _make_customer("oe152_verify_cust_owner")
+        other = _make_customer("oe152_verify_cust_other")
+        product = _product(profile)
+        order = _packed_pickup_order(customer, profile, product, pickup_code="808080")
+
+        api_client.force_authenticate(user=owner)
+        resp = api_client.post(
+            reverse("retailer_inbox_action", args=[order.id]),
+            {
+                "action": "mark_delivered",
+                "pickup_code": "808080",
+                "customer_id": other.id,
+            },
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        order.refresh_from_db()
+        assert order.status == "packed"
+
+    def test_direct_status_delivered_requires_pickup_code(self, api_client):
+        owner, profile = _make_retailer("oe152_status_verify", "Status Verify")
+        customer = _make_customer("oe152_status_cust")
+        product = _product(profile)
+        order = _packed_pickup_order(customer, profile, product, pickup_code="303030")
+
+        api_client.force_authenticate(user=owner)
+        resp = api_client.patch(
+            reverse("update_order_status", args=[order.id]),
+            {"status": "delivered"},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        order.refresh_from_db()
+        assert order.status == "packed"
+
+
+@pytest.mark.django_db
+class TestUncollectedPickupExpiry:
+    """AC4 — policy hours expiry releases ATP and cancels uncollected pickup."""
+
+    def test_expire_uncollected_pickup_restores_atp_and_cancels(self):
+        from django.utils import timezone
+
+        owner, profile = _make_retailer("oe152_expire_shop", "Expire Shop")
+        profile.pickup_uncollected_hours = 24
+        profile.save(update_fields=["pickup_uncollected_hours"])
+        customer = _make_customer("oe152_expire_cust")
+        product = _product(profile)
+        product.reduce_quantity(1)
+        product.refresh_from_db()
+        reserved_qty = product.quantity
+
+        ready_at = timezone.now() - timezone.timedelta(hours=25)
+        order = _packed_pickup_order(customer, profile, product)
+        order.pickup_ready_at = ready_at
+        order.save(update_fields=["pickup_ready_at"])
+
+        expired = expire_uncollected_pickup_orders(now=timezone.now(), actor=owner)
+        assert len(expired) == 1
+        assert expired[0]["order_id"] == order.id
+
+        order.refresh_from_db()
+        assert order.status == "cancelled"
+        assert order.cancelled_by == "system"
+        assert "Uncollected shop pickup expired" in order.cancellation_reason
+        product.refresh_from_db()
+        assert product.quantity == reserved_qty + 1
+
+    def test_within_policy_window_not_expired(self):
+        from django.utils import timezone
+
+        owner, profile = _make_retailer("oe152_no_expire", "No Expire")
+        profile.pickup_uncollected_hours = 48
+        profile.save(update_fields=["pickup_uncollected_hours"])
+        customer = _make_customer("oe152_no_expire_cust")
+        product = _product(profile)
+        order = _packed_pickup_order(customer, profile, product)
+        order.pickup_ready_at = timezone.now() - timezone.timedelta(hours=12)
+        order.save(update_fields=["pickup_ready_at"])
+
+        expired = expire_uncollected_pickup_orders(now=timezone.now(), actor=owner)
+        assert expired == []
+        order.refresh_from_db()
+        assert order.status == "packed"
+
+    @patch("common.notification_dispatcher.dispatch_order_status_notification")
+    def test_inbox_mark_packed_sets_pickup_ready_at(self, mock_dispatch, api_client):
+        owner, profile = _make_retailer("oe152_ready_at", "Ready At Shop")
+        customer = _make_customer("oe152_ready_at_cust")
+        product = _product(profile)
+        order = Order.objects.create(
+            customer=customer,
+            retailer=profile,
+            delivery_mode="pickup",
+            payment_mode="cash_pickup",
+            subtotal=Decimal("100.00"),
+            total_amount=Decimal("100.00"),
+            status="processing",
+            source="app",
+            pickup_code="121212",
+        )
+        OrderItem.objects.create(
+            order=order,
+            product=product,
+            product_name=product.name,
+            product_price=product.price,
+            quantity=1,
+            unit_price=product.price,
+            total_price=product.price,
+        )
+
+        api_client.force_authenticate(user=owner)
+        resp = api_client.post(
+            reverse("retailer_inbox_action", args=[order.id]),
+            {"action": "mark_packed"},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        order.refresh_from_db()
+        assert order.status == "packed"
+        assert order.pickup_ready_at is not None
