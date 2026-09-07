@@ -21,6 +21,7 @@ from .permissions_catalog import (
     ALL_PERMISSION_CODES,
     BOOTSTRAP_ROLES,
     ROLE_SLUG_ADMIN,
+    ROLE_SLUG_CASHIER,
 )
 
 
@@ -77,8 +78,18 @@ def ensure_org_rbac_bootstrap(organization):
     if organization is None:
         return
 
+    system_roles = {
+        r.slug: r
+        for r in OrgRole.objects.filter(
+            organization=organization,
+            slug__in=(ROLE_SLUG_ADMIN, ROLE_SLUG_CASHIER),
+        )
+    }
+    admin_role = system_roles.get(ROLE_SLUG_ADMIN)
     if (
-        OrgRole.objects.filter(organization=organization, slug=ROLE_SLUG_ADMIN).exists()
+        admin_role is not None
+        and ROLE_SLUG_CASHIER in system_roles
+        and set(admin_role.permissions or []) == set(ALL_PERMISSION_CODES)
         and OrgStaffMembership.objects.filter(
             organization=organization,
             user_id=organization.owner_id,

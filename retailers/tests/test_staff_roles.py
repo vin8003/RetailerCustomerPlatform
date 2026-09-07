@@ -17,6 +17,7 @@ from retailers.models import (
     RetailerProfile,
 )
 from retailers.organization import (
+    ensure_org_rbac_bootstrap,
     ensure_organization_for_profile,
     user_has_org_permission,
     user_is_org_staff_admin,
@@ -82,6 +83,34 @@ class TestPermissionCatalogAndBootstrap:
         assert len(memberships) == 1
         assert memberships[0].user_id == user.id
         assert memberships[0].role.slug == ROLE_SLUG_ADMIN
+
+    def test_bootstrap_syncs_stale_admin_permissions_on_fast_path(self):
+        """Catalog growth must not leave OrgRole(admin).permissions stale."""
+        user, profile = _make_retailer("stale_admin", "Stale Admin Shop", with_org=False)
+        org = ensure_organization_for_profile(profile, name="Stale Admin Org")
+        admin_role = OrgRole.objects.get(organization=org, slug=ROLE_SLUG_ADMIN)
+        assert set(admin_role.permissions) == set(ALL_PERMISSION_CODES)
+
+        # Simulate org bootstrapped before a catalog bump (incomplete admin role).
+        admin_role.permissions = ['org.update', 'staff.manage']
+        admin_role.save(update_fields=['permissions', 'updated_at'])
+
+        ensure_org_rbac_bootstrap(org)
+        admin_role.refresh_from_db()
+        assert set(admin_role.permissions) == set(ALL_PERMISSION_CODES)
+        assert OrgRole.objects.filter(
+            organization=org, slug=ROLE_SLUG_CASHIER
+        ).exists()
+
+    def test_bootstrap_ensures_cashier_when_admin_and_owner_exist(self):
+        user, profile = _make_retailer("no_cashier", "No Cashier Shop", with_org=False)
+        org = ensure_organization_for_profile(profile, name="No Cashier Org")
+        OrgRole.objects.filter(organization=org, slug=ROLE_SLUG_CASHIER).delete()
+
+        ensure_org_rbac_bootstrap(org)
+        assert OrgRole.objects.filter(
+            organization=org, slug=ROLE_SLUG_CASHIER
+        ).exists()
 
     def test_catalog_endpoint_versioned(self, api_client):
         user, profile = _make_retailer("cat_owner", "Cat Shop")
