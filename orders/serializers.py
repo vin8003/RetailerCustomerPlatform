@@ -82,6 +82,21 @@ class OrderItemSerializer(serializers.ModelSerializer):
         return None
 
 
+class OrderDeliverySerializer(serializers.ModelSerializer):
+    """Embedded courier assign details (OE-275)."""
+
+    class Meta:
+        model = OrderDelivery
+        fields = [
+            'delivery_person_name',
+            'delivery_person_phone',
+            'estimated_delivery_time',
+            'delivery_status',
+            'actual_delivery_time',
+        ]
+        read_only_fields = fields
+
+
 class OrderListSerializer(serializers.ModelSerializer):
     """
     Serializer for order list view
@@ -287,6 +302,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     upi_amount = serializers.SerializerMethodField()
     card_amount = serializers.SerializerMethodField()
     credit_amount = serializers.SerializerMethodField()
+    delivery_info = serializers.SerializerMethodField()
     
     class Meta:
         model = Order
@@ -308,7 +324,18 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'preparation_time_minutes', 'estimated_ready_time', 'expected_processing_start', 'customer_average_rating', 'source',
             'retailer_delivery_charge', 'retailer_free_delivery_threshold',
             'pickup_code', 'pickup_ready_at',
+            'delivery_info',
         ]
+
+    def get_delivery_info(self, obj):
+        from django.core.exceptions import ObjectDoesNotExist
+
+        try:
+            if obj.delivery_info:
+                return OrderDeliverySerializer(obj.delivery_info).data
+        except ObjectDoesNotExist:
+            pass
+        return None
     
     def get_customer_name(self, obj):
         """Get unified customer name based on priority"""
@@ -837,6 +864,9 @@ class OrderStatusUpdateSerializer(serializers.Serializer):
     preparation_time_minutes = serializers.IntegerField(required=False, min_value=0, allow_null=True)
     pickup_code = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     customer_id = serializers.IntegerField(required=False, allow_null=True)
+    delivery_person_name = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    delivery_person_phone = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    estimated_delivery_time = serializers.DateTimeField(required=False, allow_null=True)
     
     def validate(self, attrs):
         order = self.context['order']
@@ -855,6 +885,19 @@ class OrderStatusUpdateSerializer(serializers.Serializer):
                 )
             except ValueError as exc:
                 raise serializers.ValidationError({'pickup_code': [str(exc)]}) from exc
+
+        if new_status == 'out_for_delivery' and order.delivery_mode == 'delivery':
+            from .delivery import validate_courier_assign
+
+            try:
+                validate_courier_assign(
+                    delivery_mode=order.delivery_mode,
+                    new_status=new_status,
+                    name=attrs.get('delivery_person_name'),
+                    phone=attrs.get('delivery_person_phone'),
+                )
+            except ValueError as exc:
+                raise serializers.ValidationError({'non_field_errors': [str(exc)]}) from exc
         return attrs
 
     def validate_status(self, value):
@@ -901,6 +944,16 @@ class OrderStatusUpdateSerializer(serializers.Serializer):
 
         # Update order status
         instance.update_status(new_status, user)
+
+        if new_status == 'out_for_delivery' and instance.delivery_mode == 'delivery':
+            from .delivery import upsert_order_delivery
+
+            upsert_order_delivery(
+                instance,
+                delivery_person_name=validated_data['delivery_person_name'],
+                delivery_person_phone=validated_data['delivery_person_phone'],
+                estimated_delivery_time=validated_data.get('estimated_delivery_time'),
+            )
 
         if new_status == 'cancelled':
             from .inventory import restore_order_inventory
@@ -1252,6 +1305,9 @@ class OrderInboxActionSerializer(serializers.Serializer):
     )
     pickup_code = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     customer_id = serializers.IntegerField(required=False, allow_null=True)
+    delivery_person_name = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    delivery_person_phone = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    estimated_delivery_time = serializers.DateTimeField(required=False, allow_null=True)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1272,6 +1328,20 @@ class OrderInboxActionSerializer(serializers.Serializer):
             )
         except ValueError as exc:
             raise serializers.ValidationError({'action': [str(exc)]}) from exc
+
+        target_status = attrs['target_status']
+        if target_status == 'out_for_delivery' and order.delivery_mode == 'delivery':
+            from .delivery import validate_courier_assign
+
+            try:
+                validate_courier_assign(
+                    delivery_mode=order.delivery_mode,
+                    new_status=target_status,
+                    name=attrs.get('delivery_person_name'),
+                    phone=attrs.get('delivery_person_phone'),
+                )
+            except ValueError as exc:
+                raise serializers.ValidationError({'non_field_errors': [str(exc)]}) from exc
 
         if (
             action == 'mark_delivered'
@@ -1306,6 +1376,12 @@ class OrderInboxActionSerializer(serializers.Serializer):
             status_data['pickup_code'] = self.validated_data.get('pickup_code')
         if 'customer_id' in self.validated_data:
             status_data['customer_id'] = self.validated_data.get('customer_id')
+        if 'delivery_person_name' in self.validated_data:
+            status_data['delivery_person_name'] = self.validated_data.get('delivery_person_name')
+        if 'delivery_person_phone' in self.validated_data:
+            status_data['delivery_person_phone'] = self.validated_data.get('delivery_person_phone')
+        if 'estimated_delivery_time' in self.validated_data:
+            status_data['estimated_delivery_time'] = self.validated_data.get('estimated_delivery_time')
 
         status_serializer = OrderStatusUpdateSerializer(
             order,
