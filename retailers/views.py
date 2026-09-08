@@ -34,6 +34,7 @@ from .serializers import (
     OrgModuleFlagsSerializer, OrgModuleFlagsUpdateSerializer,
     OrgNotificationConfigSerializer, OrgNotificationConfigUpdateSerializer,
     OrgNotificationDeliverySerializer, OrgNotificationBlastSerializer,
+    FulfillmentSlotConfigSerializer, FulfillmentSlotConfigUpdateSerializer,
 )
 from .audit_log import record_org_audit_event
 from .organization import (
@@ -2031,6 +2032,184 @@ def organization_notification_blast(request, org_id):
         return Response({'deliveries': deliveries}, status=status.HTTP_200_OK)
     except Exception as e:
         logger.error(f"Error in organization_notification_blast: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def list_fulfillment_slots(request, retailer_id):
+    """
+    List open pickup/delivery fulfillment slots for a shop location (OE-243).
+
+    Slots are 30 minutes, derived from existing operating hours. Capacity is
+    retailer-configurable; express is out of scope for v1.
+    """
+    try:
+        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        delivery_mode = request.query_params.get('delivery_mode', 'pickup')
+        if delivery_mode not in {'pickup', 'delivery'}:
+            return Response(
+                {'error': 'delivery_mode must be pickup or delivery'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            days = int(request.query_params.get('days', 7))
+        except (TypeError, ValueError):
+            return Response(
+                {'error': 'days must be an integer'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        from orders.fulfillment_slots import (
+            FulfillmentSlotError,
+            MAX_SLOT_LIST_DAYS,
+            build_slot_payloads,
+            slot_capacity,
+        )
+
+        if days < 1 or days > MAX_SLOT_LIST_DAYS:
+            return Response(
+                {'error': f'days must be between 1 and {MAX_SLOT_LIST_DAYS}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        slots = build_slot_payloads(
+            retailer,
+            delivery_mode=delivery_mode,
+            days=days,
+        )
+        return Response(
+            {
+                'retailer_id': retailer.id,
+                'delivery_mode': delivery_mode,
+                'slot_capacity': slot_capacity(retailer),
+                'timezone': retailer.timezone or 'Asia/Kolkata',
+                'slots': slots,
+            },
+            status=status.HTTP_200_OK,
+        )
+    except FulfillmentSlotError as exc:
+        return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Error in list_fulfillment_slots: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+def _org_locations(org):
+    return RetailerProfile.objects.filter(organization=org)
+
+
+def _resolve_org_location(org, location_id):
+    locations = _org_locations(org)
+    if location_id is None:
+        location = locations.first()
+        if location is None:
+            return None, Response(
+                {'error': 'No shop location found for this organization'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return location, None
+    try:
+        return locations.get(pk=location_id), None
+    except RetailerProfile.DoesNotExist:
+        return None, Response(
+            {'error': 'Location not found for this organization'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+
+@api_view(['GET', 'PATCH'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_fulfillment_slot_config(request, org_id):
+    """
+    Read or update per-location fulfillment slot capacity (OE-243).
+
+    GET — any same-tenant retailer.
+    PATCH — requires ``fulfillment.manage``; writes OrgAuditLog row.
+    """
+    try:
+        org, err = _resolve_org_for_caller(request, org_id)
+        if err is not None:
+            return err
+
+        location_id = request.query_params.get('location_id')
+        if location_id is not None:
+            try:
+                location_id = int(location_id)
+            except (TypeError, ValueError):
+                return Response(
+                    {'error': 'location_id must be an integer'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        if request.method == 'GET':
+            locations = _org_locations(org)
+            if location_id is not None:
+                location, loc_err = _resolve_org_location(org, location_id)
+                if loc_err is not None:
+                    return loc_err
+                locations = [location]
+            data = FulfillmentSlotConfigSerializer(locations, many=True).data
+            return Response({'locations': data}, status=status.HTTP_200_OK)
+
+        if not user_has_org_permission(request.user, org, 'fulfillment.manage'):
+            return Response(
+                {'error': 'Fulfillment manage permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        body_location_id = request.data.get('location_id', location_id)
+        if body_location_id is not None:
+            try:
+                body_location_id = int(body_location_id)
+            except (TypeError, ValueError):
+                return Response(
+                    {'error': 'location_id must be an integer'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        location, loc_err = _resolve_org_location(org, body_location_id)
+        if loc_err is not None:
+            return loc_err
+
+        update_ser = FulfillmentSlotConfigUpdateSerializer(data=request.data)
+        if not update_ser.is_valid():
+            return Response(update_ser.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        summary_before = {
+            'fulfillment_slot_capacity': location.fulfillment_slot_capacity,
+        }
+        location.fulfillment_slot_capacity = update_ser.validated_data[
+            'fulfillment_slot_capacity'
+        ]
+        location.save(update_fields=['fulfillment_slot_capacity', 'updated_at'])
+        summary_after = {
+            'fulfillment_slot_capacity': location.fulfillment_slot_capacity,
+        }
+
+        record_org_audit_event(
+            organization=org,
+            actor=request.user,
+            action=OrgAuditLog.ACTION_UPDATE,
+            object_type='fulfillment_slot_config',
+            object_id=location.id,
+            summary_before=summary_before,
+            summary_after=summary_after,
+            location=location,
+        )
+        return Response(
+            FulfillmentSlotConfigSerializer(location).data,
+            status=status.HTTP_200_OK,
+        )
+    except Exception as e:
+        logger.error(f"Error in organization_fulfillment_slot_config: {str(e)}")
         return Response(
             {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,

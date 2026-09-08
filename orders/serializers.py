@@ -122,13 +122,23 @@ class OrderListSerializer(serializers.ModelSerializer):
             'status', 'total_amount', 'refund_amount', 'net_amount', 'is_returned', 'items_count', 'created_at', 'updated_at', 
             'has_customer_feedback', 'has_retailer_rating', 'feedback',
             'preparation_time_minutes', 'estimated_ready_time', 'expected_processing_start', 'cancelled_by', 'customer_average_rating', 'source'
-            , 'payment_status', 'payment_reference_id', 'cash_amount', 'upi_amount', 'card_amount', 'credit_amount'
+            , 'payment_status', 'payment_reference_id', 'cash_amount', 'upi_amount', 'card_amount', 'credit_amount',
+            'fulfillment_slot_start', 'fulfillment_slot_end',
         ]
 
     refund_amount = serializers.SerializerMethodField()
     net_amount = serializers.SerializerMethodField()
     is_returned = serializers.SerializerMethodField()
     total_amount = serializers.SerializerMethodField()
+
+    fulfillment_slot_end = serializers.SerializerMethodField()
+
+    def get_fulfillment_slot_end(self, obj):
+        if not obj.fulfillment_slot_start:
+            return None
+        from orders.fulfillment_slots import slot_end
+
+        return slot_end(obj.fulfillment_slot_start).isoformat()
 
     def get_refund_amount(self, obj):
         if hasattr(obj, 'refund_total_annotated') and obj.refund_total_annotated is not None:
@@ -324,8 +334,18 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'preparation_time_minutes', 'estimated_ready_time', 'expected_processing_start', 'customer_average_rating', 'source',
             'retailer_delivery_charge', 'retailer_free_delivery_threshold',
             'pickup_code', 'pickup_ready_at',
+            'fulfillment_slot_start', 'fulfillment_slot_end',
             'delivery_info',
         ]
+
+    fulfillment_slot_end = serializers.SerializerMethodField()
+
+    def get_fulfillment_slot_end(self, obj):
+        if not obj.fulfillment_slot_start:
+            return None
+        from orders.fulfillment_slots import slot_end
+
+        return slot_end(obj.fulfillment_slot_start).isoformat()
 
     def get_delivery_info(self, obj):
         from django.core.exceptions import ObjectDoesNotExist
@@ -486,6 +506,7 @@ class OrderCreateSerializer(serializers.Serializer):
     payment_mode = serializers.ChoiceField(choices=Order.PAYMENT_MODE_CHOICES)
     special_instructions = serializers.CharField(required=False, allow_blank=True)
     use_reward_points = serializers.BooleanField(required=False, default=False)
+    fulfillment_slot_start = serializers.DateTimeField(required=False, allow_null=True)
     
     def validate_retailer_id(self, value):
         """Validate retailer exists"""
@@ -612,6 +633,34 @@ class OrderCreateSerializer(serializers.Serializer):
                 raise serializers.ValidationError(
                     f"Total combined cart items require {demand} of '{master.name}', but only {master.quantity} is available."
                 )
+
+        slot_start = data.get('fulfillment_slot_start')
+        if slot_start is not None:
+            from orders.fulfillment_slots import (
+                FulfillmentSlotError,
+                booked_counts_for_slots,
+                slot_capacity,
+                validate_slot_bookable,
+            )
+
+            try:
+                retailer = RetailerProfile.objects.get(id=retailer_id)
+                normalized = validate_slot_bookable(
+                    retailer,
+                    slot_start,
+                    data['delivery_mode'],
+                )
+                booked = booked_counts_for_slots(
+                    retailer, [normalized], data['delivery_mode']
+                ).get(normalized, 0)
+                if booked >= slot_capacity(retailer):
+                    raise serializers.ValidationError(
+                        {'fulfillment_slot_start': 'Fulfillment slot is fully booked'}
+                    )
+            except RetailerProfile.DoesNotExist:
+                pass
+            except FulfillmentSlotError as exc:
+                raise serializers.ValidationError({'fulfillment_slot_start': str(exc)}) from exc
 
         return data
     
@@ -754,6 +803,17 @@ class OrderCreateSerializer(serializers.Serializer):
 
                 order.pickup_code = generate_pickup_code()
                 order.save(update_fields=['pickup_code'])
+
+            slot_start = validated_data.get('fulfillment_slot_start')
+            if slot_start is not None:
+                from .fulfillment_slots import FulfillmentSlotError, book_fulfillment_slot
+
+                try:
+                    book_fulfillment_slot(order, slot_start)
+                except FulfillmentSlotError as exc:
+                    raise serializers.ValidationError(
+                        {'fulfillment_slot_start': str(exc)}
+                    ) from exc
             
             # Create Offer Redemptions
             from offers.models import OfferRedemption
@@ -1463,3 +1523,43 @@ class RetailerRatingSerializer(serializers.ModelSerializer):
             customer=customer,
             **validated_data
         )
+
+
+class FulfillmentSlotRescheduleSerializer(serializers.Serializer):
+    """Customer or staff reschedule of a booked fulfillment slot (OE-243)."""
+
+    fulfillment_slot_start = serializers.DateTimeField()
+
+    def validate(self, attrs):
+        from orders.fulfillment_slots import FulfillmentSlotError, validate_slot_bookable
+
+        order = self.context['order']
+        try:
+            validate_slot_bookable(
+                order.retailer,
+                attrs['fulfillment_slot_start'],
+                order.delivery_mode,
+                exclude_order_id=order.pk,
+            )
+        except FulfillmentSlotError as exc:
+            raise serializers.ValidationError(
+                {'fulfillment_slot_start': str(exc)}
+            ) from exc
+        return attrs
+
+    def save(self, **kwargs):
+        from orders.fulfillment_slots import FulfillmentSlotError, reschedule_fulfillment_slot
+
+        order = self.context['order']
+        by_staff = self.context.get('by_staff', False)
+        try:
+            reschedule_fulfillment_slot(
+                order,
+                self.validated_data['fulfillment_slot_start'],
+                by_staff=by_staff,
+            )
+        except FulfillmentSlotError as exc:
+            raise serializers.ValidationError(
+                {'fulfillment_slot_start': str(exc)}
+            ) from exc
+        return order

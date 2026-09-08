@@ -148,6 +148,9 @@ class Order(models.Model):
     # Shop pickup (OE-152) — verification + uncollected window anchor on unified Order
     pickup_code = models.CharField(max_length=6, blank=True, default='')
     pickup_ready_at = models.DateTimeField(null=True, blank=True)
+
+    # Fulfillment window (OE-243) — customer-chosen 30-minute slot start (retailer TZ)
+    fulfillment_slot_start = models.DateTimeField(null=True, blank=True)
     
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
