@@ -555,6 +555,10 @@ class RetailerProfile(models.Model):
     minimum_order_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     delivery_charge = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     free_delivery_threshold = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    pickup_uncollected_hours = models.PositiveIntegerField(
+        default=48,
+        help_text='Hours after pickup-ready before uncollected orders expire and ATP is restored',
+    )
     
     # Status and ratings
     is_verified = models.BooleanField(default=False)
