@@ -888,7 +888,36 @@ class TestPickupQueryCounts:
         order.pickup_ready_at = timezone.now() - timezone.timedelta(hours=25)
         order.save(update_fields=["pickup_ready_at"])
 
-        with django_assert_num_queries(14):
+        with django_assert_num_queries(15):
             expired = expire_uncollected_pickup_orders(now=timezone.now(), actor=owner)
         assert len(expired) == 1
         assert expired[0]["order_id"] == order.id
+
+    def test_expire_multi_order_query_count_scales_without_per_row_items(
+        self, django_assert_num_queries
+    ):
+        """Prefetch must survive chunked expire scan — no items SELECT per order."""
+        from django.utils import timezone
+
+        owner, profile = _make_retailer("oe152_q_expire_multi", "Q Expire Multi Shop")
+        profile.pickup_uncollected_hours = 24
+        profile.save(update_fields=["pickup_uncollected_hours"])
+        customer = _make_customer("oe152_q_expire_multi_cust")
+        product = _product(profile)
+        ready_at = timezone.now() - timezone.timedelta(hours=25)
+        order_ids = []
+        for i in range(5):
+            product.reduce_quantity(1)
+            order = _packed_pickup_order(customer, profile, product)
+            order.pickup_ready_at = ready_at
+            order.save(update_fields=["pickup_ready_at"])
+            order_ids.append(order.id)
+
+        # With prefetch: one batched items query per chunk. Without it, +1 items
+        # SELECT per expired order (restore_order_inventory fallback).
+        with django_assert_num_queries(63):
+            expired = expire_uncollected_pickup_orders(
+                now=timezone.now(), actor=owner, retailer_id=profile.id
+            )
+        assert len(expired) == 5
+        assert {row["order_id"] for row in expired} == set(order_ids)

@@ -23,6 +23,11 @@ DEFAULT_PICKUP_CODE_LENGTH = getattr(settings, 'OTP_LENGTH', 6)
 # Statuses where a packed pickup order is awaiting customer collection.
 UNCOLLECTED_PICKUP_STATUSES = frozenset({'packed'})
 
+# Chunk size for expire job scans. Must not use queryset.iterator() here — Django
+# drops prefetch_related on iterator(), which would force per-order item queries
+# in restore_order_inventory.
+EXPIRE_CHUNK_SIZE = 200
+
 
 def generate_pickup_code(*, length: int | None = None) -> str:
     """Generate a numeric pickup verification code (same length as OTP)."""
@@ -86,31 +91,37 @@ def expire_uncollected_pickup_orders(*, now=None, retailer_id=None, actor=None):
         qs = qs.filter(retailer_id=retailer_id)
 
     expired = []
-    for order in qs.iterator(chunk_size=200):
-        policy_hours = getattr(order.retailer, 'pickup_uncollected_hours', None) or 48
-        deadline = order.pickup_ready_at + timezone.timedelta(hours=policy_hours)
-        if now < deadline:
-            continue
+    last_pk = 0
+    while True:
+        chunk = list(qs.filter(pk__gt=last_pk).order_by('pk')[:EXPIRE_CHUNK_SIZE])
+        if not chunk:
+            break
+        for order in chunk:
+            policy_hours = getattr(order.retailer, 'pickup_uncollected_hours', None) or 48
+            deadline = order.pickup_ready_at + timezone.timedelta(hours=policy_hours)
+            if now < deadline:
+                continue
 
-        previous_status = order.status
-        reason = (
-            f'Uncollected shop pickup expired after {policy_hours} hours '
-            f'(order #{order.order_number})'
-        )
-        order.update_status('cancelled', actor)
-        order.cancellation_reason = reason
-        order.cancelled_by = 'system'
-        order.save(update_fields=['cancellation_reason', 'cancelled_by'])
-        restore_order_inventory(order, actor, reason=reason)
+            previous_status = order.status
+            reason = (
+                f'Uncollected shop pickup expired after {policy_hours} hours '
+                f'(order #{order.order_number})'
+            )
+            order.update_status('cancelled', actor)
+            order.cancellation_reason = reason
+            order.cancelled_by = 'system'
+            order.save(update_fields=['cancellation_reason', 'cancelled_by'])
+            restore_order_inventory(order, actor, reason=reason)
 
-        expired.append(
-            {
-                'order_id': order.id,
-                'order_number': order.order_number,
-                'previous_status': previous_status,
-                'policy_hours': policy_hours,
-                'pickup_ready_at': order.pickup_ready_at,
-            }
-        )
+            expired.append(
+                {
+                    'order_id': order.id,
+                    'order_number': order.order_number,
+                    'previous_status': previous_status,
+                    'policy_hours': policy_hours,
+                    'pickup_ready_at': order.pickup_ready_at,
+                }
+            )
+        last_pk = chunk[-1].pk
 
     return expired
