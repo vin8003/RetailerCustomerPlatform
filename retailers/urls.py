@@ -96,6 +96,12 @@ urlpatterns = [
         name='organization_notification_blast',
     ),
 
+    path(
+        'org/<int:org_id>/fulfillment-slots/config/',
+        views.organization_fulfillment_slot_config,
+        name='organization_fulfillment_slot_config',
+    ),
+
     # Public retailer endpoints
     path('', views.list_retailers, name='list_retailers'),
     path('cities/', views.list_operational_cities, name='list_operational_cities'),
@@ -103,6 +109,11 @@ urlpatterns = [
     path('search/', views.search_retailers, name='search_retailers'),
     path('categories/', views.get_retailer_categories, name='get_retailer_categories'),
     path('<int:retailer_id>/', views.get_retailer_detail, name='get_retailer_detail'),
+    path(
+        '<int:retailer_id>/fulfillment-slots/',
+        views.list_fulfillment_slots,
+        name='list_fulfillment_slots',
+    ),
 
     # Reviews
     path('<int:retailer_id>/reviews/', views.get_retailer_reviews, name='get_retailer_reviews'),

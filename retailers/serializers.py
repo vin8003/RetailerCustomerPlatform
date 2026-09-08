@@ -833,3 +833,20 @@ class SupplierSerializer(serializers.ModelSerializer):
         fields = '__all__'
         read_only_fields = ['id', 'retailer', 'balance_due', 'created_at', 'updated_at']
 
+
+class FulfillmentSlotConfigSerializer(serializers.ModelSerializer):
+    """Read shape for per-location fulfillment slot capacity (OE-243)."""
+
+    location_id = serializers.IntegerField(source='id', read_only=True)
+
+    class Meta:
+        model = RetailerProfile
+        fields = ['location_id', 'fulfillment_slot_capacity', 'timezone']
+        read_only_fields = ['location_id', 'timezone']
+
+
+class FulfillmentSlotConfigUpdateSerializer(serializers.Serializer):
+    """PATCH body for fulfillment slot capacity."""
+
+    fulfillment_slot_capacity = serializers.IntegerField(min_value=1, max_value=9999)
+

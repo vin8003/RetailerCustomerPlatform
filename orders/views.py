@@ -1,5 +1,6 @@
 from decimal import Decimal
 from rest_framework import status, permissions
+from rest_framework.exceptions import ValidationError
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
@@ -19,6 +20,7 @@ from .serializers import (
     OrderStatusUpdateSerializer, OrderFeedbackSerializer, OrderReturnSerializer,
     OrderStatsSerializer, OrderModificationSerializer, OrderChatMessageSerializer,
     RetailerRatingSerializer, OrderInboxActionSerializer,
+    FulfillmentSlotRescheduleSerializer,
 )
 from retailers.models import RetailerProfile, RetailerReview, RetailerRewardConfig
 from retailers.serializers import RetailerReviewSerializer
@@ -115,6 +117,9 @@ def place_order(request):
             return Response(response_serializer.data, status=status.HTTP_201_CREATED)
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    except ValidationError as e:
+        return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
     
     except Exception as e:
         logger.error(f"Error placing order: {str(e)}")
@@ -1405,6 +1410,92 @@ def retailer_inbox_action(request, order_id):
 
     except Exception as e:
         logger.error(f"Error performing inbox action: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['PATCH'])
+@permission_classes([permissions.IsAuthenticated])
+def reschedule_order_fulfillment_slot(request, order_id):
+    """
+    Customer reschedule of a booked fulfillment slot (OE-243).
+
+    Allowed only while the order is active and the target slot is open with capacity.
+    """
+    try:
+        if request.user.user_type != 'customer':
+            return Response(
+                {'error': 'Only customers can reschedule their order slot'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        order = get_object_or_404(
+            order_detail_queryset(),
+            pk=order_id,
+            customer=request.user,
+        )
+
+        serializer = FulfillmentSlotRescheduleSerializer(
+            data=request.data,
+            context={'order': order, 'by_staff': False},
+        )
+        if serializer.is_valid():
+            order = serializer.save()
+            order = order_detail_queryset().get(pk=order.pk)
+            response_serializer = OrderDetailSerializer(
+                order, context={'request': request}
+            )
+            return Response(response_serializer.data, status=status.HTTP_200_OK)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    except Exception as e:
+        logger.error(f"Error rescheduling fulfillment slot: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['PATCH'])
+@permission_classes([permissions.IsAuthenticated])
+def retailer_reschedule_order_fulfillment_slot(request, order_id):
+    """
+    Staff reschedule of a booked fulfillment slot (OE-243).
+
+    Requires ``orders.update``. Staff are not blocked by shopper-only cutoff rules.
+    """
+    try:
+        if request.user.user_type != 'retailer':
+            return Response(
+                {'error': 'Only retailers can reschedule order slots for customers'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        order, access_err = get_order_for_retailer_served(
+            request.user, order_id, PERM_ORDERS_UPDATE
+        )
+        if access_err is not None:
+            return access_err
+
+        serializer = FulfillmentSlotRescheduleSerializer(
+            data=request.data,
+            context={'order': order, 'by_staff': True},
+        )
+        if serializer.is_valid():
+            order = serializer.save()
+            order = order_detail_queryset().get(pk=order.pk)
+            response_serializer = OrderDetailSerializer(
+                order, context={'request': request}
+            )
+            return Response(response_serializer.data, status=status.HTTP_200_OK)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    except Exception as e:
+        logger.error(f"Error in retailer_reschedule_order_fulfillment_slot: {str(e)}")
         return Response(
             {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,

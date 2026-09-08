@@ -559,6 +559,10 @@ class RetailerProfile(models.Model):
         default=48,
         help_text='Hours after pickup-ready before uncollected orders expire and ATP is restored',
     )
+    fulfillment_slot_capacity = models.PositiveIntegerField(
+        default=5,
+        help_text='Max orders per 30-minute pickup/delivery slot at this location',
+    )
     
     # Status and ratings
     is_verified = models.BooleanField(default=False)
