@@ -9,7 +9,11 @@ def restore_order_inventory(order, user, *, reason=None):
     """
     reason = reason or f"Order Cancelled: #{order.order_number}"
     logs_to_create = []
-    items = order.items.select_related('product').all()
+    prefetched_items = getattr(order, '_prefetched_objects_cache', {}).get('items')
+    if prefetched_items is not None:
+        items = prefetched_items
+    else:
+        items = order.items.select_related('product').all()
     for item in items:
         product = item.product
         if product is None:

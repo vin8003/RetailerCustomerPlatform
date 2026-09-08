@@ -65,21 +65,28 @@ def expire_uncollected_pickup_orders(*, now=None, retailer_id=None, actor=None):
     Returns a list of dicts describing each expired order (for tests/ops).
     Intended to be invoked by a management command or scheduled job.
     """
+    from django.db.models import Prefetch
+
     from orders.inventory import restore_order_inventory
-    from orders.models import Order
+    from orders.models import Order, OrderItem
 
     now = now or timezone.now()
     qs = Order.objects.filter(
         delivery_mode='pickup',
         status__in=UNCOLLECTED_PICKUP_STATUSES,
         pickup_ready_at__isnull=False,
-    ).select_related('retailer', 'customer')
+    ).select_related('retailer', 'customer').prefetch_related(
+        Prefetch(
+            'items',
+            queryset=OrderItem.objects.select_related('product'),
+        ),
+    )
 
     if retailer_id is not None:
         qs = qs.filter(retailer_id=retailer_id)
 
     expired = []
-    for order in qs.iterator():
+    for order in qs.iterator(chunk_size=200):
         policy_hours = getattr(order.retailer, 'pickup_uncollected_hours', None) or 48
         deadline = order.pickup_ready_at + timezone.timedelta(hours=policy_hours)
         if now < deadline:

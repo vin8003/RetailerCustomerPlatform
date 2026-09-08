@@ -789,3 +789,106 @@ class TestUncollectedPickupExpiry:
         order.refresh_from_db()
         assert order.status == "packed"
         assert order.pickup_ready_at is not None
+
+
+@pytest.mark.django_db
+class TestPickupQueryCounts:
+    """Hot-path query budgets (OE-152 eng-rules)."""
+
+    @patch("common.notifications.send_push_notification")
+    @patch("common.notifications.send_silent_update")
+    def test_place_pickup_order_query_count(
+        self, mock_silent, mock_push, api_client, django_assert_num_queries
+    ):
+        _owner, profile = _make_retailer("oe152_q_place", "Q Place Shop")
+        customer = _make_customer("oe152_q_place_cust")
+        product = _product(profile)
+        _cart_with_item(customer, profile, product)
+
+        api_client.force_authenticate(user=customer)
+        with django_assert_num_queries(45):
+            resp = api_client.post(
+                reverse("place_order"),
+                {
+                    "retailer_id": profile.id,
+                    "delivery_mode": "pickup",
+                    "payment_mode": "cash_pickup",
+                },
+                format="json",
+            )
+        assert resp.status_code == status.HTTP_201_CREATED
+
+    def test_inbox_pickup_filter_query_count(
+        self, api_client, django_assert_num_queries
+    ):
+        owner, profile = _make_retailer("oe152_q_inbox", "Q Inbox Shop")
+        customer = _make_customer("oe152_q_inbox_cust")
+        product = _product(profile)
+        order = Order.objects.create(
+            customer=customer,
+            retailer=profile,
+            delivery_mode="pickup",
+            payment_mode="cash_pickup",
+            subtotal=Decimal("100.00"),
+            total_amount=Decimal("100.00"),
+            status="pending",
+            source="app",
+        )
+        OrderItem.objects.create(
+            order=order,
+            product=product,
+            product_name=product.name,
+            product_price=product.price,
+            quantity=1,
+            unit_price=product.price,
+            total_price=product.price,
+        )
+
+        api_client.force_authenticate(user=owner)
+        with django_assert_num_queries(9):
+            resp = api_client.get(
+                reverse("list_retailer_inbox"),
+                {"source": "app", "delivery_mode": "pickup"},
+            )
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.data["count"] == 1
+
+    @patch("common.notification_dispatcher.dispatch_order_status_notification")
+    def test_mark_delivered_pickup_query_count(
+        self, mock_dispatch, api_client, django_assert_num_queries
+    ):
+        owner, profile = _make_retailer("oe152_q_deliver", "Q Deliver Shop")
+        customer = _make_customer("oe152_q_deliver_cust")
+        product = _product(profile)
+        order = _packed_pickup_order(customer, profile, product, pickup_code="424242")
+
+        api_client.force_authenticate(user=owner)
+        with django_assert_num_queries(35):
+            resp = api_client.post(
+                reverse("retailer_inbox_action", args=[order.id]),
+                {
+                    "action": "mark_delivered",
+                    "pickup_code": "424242",
+                    "customer_id": customer.id,
+                },
+                format="json",
+            )
+        assert resp.status_code == status.HTTP_200_OK
+
+    def test_expire_uncollected_pickup_query_count(self, django_assert_num_queries):
+        owner, profile = _make_retailer("oe152_q_expire", "Q Expire Shop")
+        profile.pickup_uncollected_hours = 24
+        profile.save(update_fields=["pickup_uncollected_hours"])
+        customer = _make_customer("oe152_q_expire_cust")
+        product = _product(profile)
+        product.reduce_quantity(1)
+        order = _packed_pickup_order(customer, profile, product)
+        from django.utils import timezone
+
+        order.pickup_ready_at = timezone.now() - timezone.timedelta(hours=25)
+        order.save(update_fields=["pickup_ready_at"])
+
+        with django_assert_num_queries(14):
+            expired = expire_uncollected_pickup_orders(now=timezone.now(), actor=owner)
+        assert len(expired) == 1
+        assert expired[0]["order_id"] == order.id
