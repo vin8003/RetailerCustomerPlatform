@@ -114,6 +114,7 @@ def order_detail_queryset():
         'customer',
         'customer__customer_profile',
         'delivery_address',
+        'delivery_info',
     ).prefetch_related(
         Prefetch(
             'items',
