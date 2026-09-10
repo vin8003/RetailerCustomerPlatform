@@ -1,5 +1,5 @@
 from decimal import Decimal
-from rest_framework import status, permissions
+from rest_framework import status, permissions, exceptions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
@@ -105,6 +105,8 @@ def get_current_orders(request):
             return paginator.get_paginated_response(serializer.data)
         serializer = OrderListSerializer(orders, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
+    except exceptions.NotFound as e:
+        raise e
     except Exception as e:
         logger.error(f"Error getting current orders: {str(e)}")
         return Response({'error': format_exception(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -153,6 +155,9 @@ def get_order_history(request):
             return paginator.get_paginated_response(serializer.data)
         serializer = OrderListSerializer(orders, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
+    except exceptions.NotFound as e:
+        # Let DRF handle standard 404 errors (like invalid page)
+        raise e
     except Exception as e:
         logger.error(f"Error getting order history: {str(e)}")
         return Response({'error': format_exception(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
