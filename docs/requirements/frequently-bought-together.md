@@ -1,6 +1,6 @@
 # Frequently bought together (cross-sell)
 
-- **Status:** Proposed (not assumed shipped)
+- **Status:** Implemented (API + cart/PDP lanes)
 - **Ticket:** [KAN-17](https://vin8003.atlassian.net/browse/KAN-17) · [snapshot](../tickets/KAN-17.md)
 
 Show high-affinity add-ons from the current cart on product detail and cart, to raise AOV.

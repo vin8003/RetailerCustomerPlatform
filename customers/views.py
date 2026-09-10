@@ -664,6 +664,42 @@ def get_all_customer_loyalty(request):
         traceback.print_exc()
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def get_all_customer_credit(request):
+    """
+    Retailer-wise credit (khata) balances for the authenticated customer.
+
+    Includes mappings even when credit_limit is 0 (KAN-70). remaining_credit
+    is credit_limit minus current_balance and may be negative.
+    """
+    if request.user.user_type != 'customer':
+        return Response(
+            {'error': 'Only customers can access this endpoint'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    mappings = (
+        RetailerCustomerMapping.objects
+        .filter(customer=request.user)
+        .select_related('retailer')
+        .order_by('retailer__shop_name')
+    )
+
+    data = []
+    for mapping in mappings:
+        credit_limit = float(mapping.credit_limit or 0)
+        current_balance = float(mapping.current_balance or 0)
+        data.append({
+            'retailer_id': mapping.retailer.id,
+            'retailer_name': mapping.retailer.shop_name,
+            'credit_limit': credit_limit,
+            'current_balance': current_balance,
+            'remaining_credit': credit_limit - current_balance,
+        })
+    return Response(data, status=status.HTTP_200_OK)
+
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
 def get_loyalty_transactions(request):
@@ -1342,4 +1378,3 @@ def update_customer_credit_limit(request, customer_id):
     except Exception as e:
         logger.error(f"Error updating credit limit: {str(e)}")
         return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-

@@ -328,3 +328,16 @@ class TestProductGrouping:
         parent.refresh_from_db()
         assert parent.is_parent_bulk is True
 
+    def test_parent_availability_does_not_override_children(self, setup_catalog):
+        """KAN-49: hiding a parent from the customer app must not hide children."""
+        parent, child = setup_catalog
+        child.is_available = True
+        child.save(update_fields=['is_available'])
+
+        parent.is_available = False
+        parent.save()
+
+        child.refresh_from_db()
+        assert parent.is_available is False
+        assert child.is_available is True
+        assert child.quantity == parent.quantity / child.conversion_factor

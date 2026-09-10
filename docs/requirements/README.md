@@ -15,7 +15,13 @@ Ticket snapshots (acceptance context, ship notes) stay in [`../tickets/`](../tic
 | [supplier-mobile-optional.md](supplier-mobile-optional.md) | KAN-56 |
 | [purchase-bill-image.md](purchase-bill-image.md) | KAN-60 |
 | [credit-remaining-balance.md](credit-remaining-balance.md) | KAN-61 |
+| [customer-profile-credit.md](customer-profile-credit.md) | KAN-70 |
 | [daily-db-backup.md](daily-db-backup.md) | KAN-46 |
 | [inactive-product-edit.md](inactive-product-edit.md) | KAN-62 |
 | [retailer-web-mobile.md](retailer-web-mobile.md) | KAN-11 |
 | [customer-retailer-city-map.md](customer-retailer-city-map.md) | KAN-69 |
+| [product-search-barcodes.md](product-search-barcodes.md) | KAN-72 |
+| [customer-hide-oos.md](customer-hide-oos.md) | KAN-63 |
+| [parent-child-visibility.md](parent-child-visibility.md) | KAN-49 |
+| [returned-orders-filter.md](returned-orders-filter.md) | KAN-77 |
+| [supplier-edit-and-deactivate.md](supplier-edit-and-deactivate.md) | KAN-78 |

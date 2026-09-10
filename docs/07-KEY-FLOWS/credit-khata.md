@@ -54,4 +54,5 @@ flowchart LR
 - Balance is always updated in real time.
 - Credit limit can be used to block or warn on further credit sales.
 - Full history is available through the ledger entries.
-- Customer-facing credit bills must show remaining balance on the bill itself ([credit-remaining-balance.md](../requirements/credit-remaining-balance.md), KAN-61).
+- Customer-facing credit lives on the **profile**, retailer by retailer, including when `credit_limit` is 0 ([customer-profile-credit.md](../requirements/customer-profile-credit.md), KAN-70). Remaining is `credit_limit - current_balance`.
+- Order detail in the customer app does not show a Credit / Khata remaining block (KAN-61 UI was limited to limit > 0 and was removed by KAN-70).

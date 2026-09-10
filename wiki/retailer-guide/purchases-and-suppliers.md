@@ -34,6 +34,19 @@ Stock increases automatically for each line.
 
 Mobile number is **not required** — you can track suppliers by name alone.
 
+## Inactive suppliers
+
+When a distributor is no longer used:
+
+1. Open **Khata & Suppliers** (or their ledger)
+2. **Deactivate** — they stay on the list with an Inactive badge
+3. Old purchases, payments, and khata remain
+4. They no longer appear when recording a **new purchase**
+5. You can still **edit** their details and **record payments** without reactivating
+6. **Reactivate** if you start buying from them again
+
+Do not delete a supplier who has bills or khata. Deactivate instead so history stays linked.
+
 ## Supplier khata (what you owe)
 
 Many kirana shops buy on **credit from suppliers** and pay weekly or monthly.

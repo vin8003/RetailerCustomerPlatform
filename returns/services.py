@@ -139,7 +139,25 @@ def process_sales_return(retailer, order, items_data, refund_payment_mode, reaso
                     description=f"Points reverted due to return (Order #{order.order_number})"
                 )
 
+        if order:
+            _maybe_mark_order_returned(order, created_by)
+
         return sales_return
+
+
+def _maybe_mark_order_returned(order, user):
+    """Set order.status to returned when every line is fully returned (KAN-77)."""
+    items = list(order.items.all())
+    if not items:
+        return
+    for item in items:
+        already_returned = SalesReturnItem.objects.filter(order_item=item).aggregate(
+            total=Sum('quantity')
+        )['total'] or 0
+        if already_returned < item.quantity:
+            return
+    if order.status != 'returned':
+        order.update_status('returned', user)
 
 def process_purchase_return(retailer, supplier, invoice, items_data, notes, created_by):
     """
