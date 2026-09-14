@@ -42,6 +42,8 @@ OrderEasy can track stock in two ways:
 
 One number per product — goes down on sale, up on purchase or return.
 
+Cashiers cannot type a new stock number on the product screen. Owners (and staff given inventory-adjust permission) can still correct on-hand that way. Everyday sales and purchases still change stock automatically.
+
 ### Batch tracking
 
 For items bought at different costs or expiry dates:
