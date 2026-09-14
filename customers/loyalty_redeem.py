@@ -218,7 +218,7 @@ def apply_pending_order_redeem(order, otp_code=None, requested_points=None):
 
 
 def staff_order_for_redeem(user, order_id):
-    org, err = require_staff_redeem_access(user)
+    _org, err = require_staff_redeem_access(user)
     if err is not None:
         return None, err
     _org, locations, loc_err = require_retailer_orders_access(user, PERM_ORDERS_UPDATE)
