@@ -11,14 +11,16 @@ Products can be managed either with direct quantity or with multiple independent
 - When `Product.has_batches = true`, stock is tracked at the `ProductBatch` level.
 - Total available quantity on the Product is the sum of all **active** batch quantities.
 - Each batch has its own selling price and stock quantity.
+- Each batch may store an optional `expiry_date` (OE-136). Null expiry stays valid.
 
 ### 2. FIFO Stock Deduction
 
-When an order or POS sale reduces stock:
+When an order or POS sale reduces stock and no specific batch is passed:
 
-1. The system prefers the oldest batch first (FIFO).
-2. Once a batch is depleted, deduction moves to the next oldest batch.
-3. Product.quantity is recomputed as the sum of remaining active batches.
+1. FIFO prefers the **earliest dated** saleable batch (`expiry_date ASC NULLS LAST`, then `created_at`).
+2. Expired batches (`expiry_date < today`) are not eligible. Default policy forbids selling them; there is no org-level FIFO/expired flag in this slice.
+3. Once a batch is depleted, deduction moves to the next eligible batch.
+4. Product.quantity is recomputed as the sum of remaining **active** batches (expired qty can still sit on that total until written off).
 
 ### 3. Fractional / Child Products
 
@@ -31,7 +33,7 @@ When an order or POS sale reduces stock:
 
 ![Inventory and Batch Management](../visuals/inventory-and-batches.jpg)
 
-*Illustrative diagram: Products can have multiple batches (each with own quantity & price). Total available stock is the sum of active batches. FIFO deduction sells oldest batch first. Parent bulk products can create fractional child products via a conversion factor.*
+*Illustrative diagram: Products can have multiple batches (each with own quantity, price, and optional expiry). Total listed stock is the sum of active batches. FIFO deduction sells the earliest expiry first. Parent bulk products can create fractional child products via a conversion factor.*
 
 ```mermaid
 flowchart TD
@@ -45,7 +47,7 @@ flowchart TD
     Children -->|conversion_factor| Sync[Auto-sync child quantities from parent]
 
     Sale[Order / POS Sale] --> Decision{Product.has_batches?}
-    Decision -->|Yes| FIFO[Reduce from specific batch or FIFO oldest first]
+    Decision -->|Yes| FIFO[Reduce from specific batch or FIFO earliest expiry]
     Decision -->|No| Direct[Reduce Product.quantity]
 
     FIFO --> SyncBatches[Recompute Product.quantity]
@@ -59,6 +61,7 @@ flowchart TD
 ## Key Rules
 
 - Hand-set `Product.quantity` / `ProductBatch.quantity` on product update or bulk requires `inventory.adjust` (see [inventory-adjust-permission.md](../requirements/inventory-adjust-permission.md)). Cashiers cannot type a new on-hand number. Sales and purchases still change stock through their existing paths.
-- Only active batches contribute to available quantity.
-- Completed or expired batches can be excluded from available stock.
+- Setting or changing `ProductBatch.expiry_date` on product update also requires `inventory.adjust` (echo allowed). Bulk does not write expiry. See [product-batch-expiry.md](../requirements/product-batch-expiry.md).
+- Only active batches contribute to `Product.quantity`. Expired batches cannot be sold; `can_order_quantity` uses saleable qty.
+- Completed or expired write-off is a later ticket (OE-141 / E16).
 - Fractional children inherit stock availability from the parent via the conversion factor.

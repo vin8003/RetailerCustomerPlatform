@@ -104,8 +104,18 @@ class Cart(models.Model):
         
         total_required_parent_qty = Decimal('0.000')
         product_found_in_cart = False
+
+        from products.models import Product
+        items = list(
+            self.items.select_related(
+                'product', 'product__parent_bulk_product'
+            ).all()
+        )
+        Product.cache_saleable_quantities(
+            [item.product for item in items] + [product, master_product]
+        )
         
-        for item in self.items.select_related('product').all():
+        for item in items:
             item_prod = item.product
             qty_to_consider = item.quantity
             
@@ -129,8 +139,12 @@ class Cart(models.Model):
                 if product.conversion_factor:
                     total_required_parent_qty += (qty_to_consider * product.conversion_factor)
                     
-        if total_required_parent_qty > master_product.quantity:
-            return False, f"Total combined cart items require {total_required_parent_qty} of {master_product.name}, but only {master_product.quantity} is available."
+        available = master_product.saleable_quantity()
+        if total_required_parent_qty > available:
+            return False, (
+                f"Total combined cart items require {total_required_parent_qty} of "
+                f"{master_product.name}, but only {available} is available."
+            )
             
         return True, ""
 

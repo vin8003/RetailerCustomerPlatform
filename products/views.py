@@ -41,9 +41,12 @@ from products.inventory_adjust import (
     bulk_items_would_change_on_hand,
     bulk_write_quantity,
     create_payload_sets_pack_link,
+    payload_has_invalid_expiry,
+    payload_sets_batch_expiry,
     payload_sets_on_hand_quantity,
     payload_sets_pack_link,
     require_inventory_adjust,
+    submitted_batch_expiry_differs,
     submitted_on_hand_differs,
     submitted_pack_link_differs,
 )
@@ -649,6 +652,7 @@ def update_product(request, product_id):
             if (
                 payload_sets_on_hand_quantity(request.data)
                 or payload_sets_pack_link(request.data)
+                or payload_sets_batch_expiry(request.data)
             ):
                 adjust_err = require_inventory_adjust(request.user)
                 if adjust_err is not None:
@@ -670,12 +674,21 @@ def update_product(request, product_id):
                 )
             old_quantity = product.quantity
 
+            if payload_has_invalid_expiry(request.data):
+                return Response(
+                    {'error': 'Invalid expiry_date'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
             needs_adjust = (
                 payload_sets_on_hand_quantity(request.data)
                 and submitted_on_hand_differs(product, request.data)
             ) or (
                 payload_sets_pack_link(request.data)
                 and submitted_pack_link_differs(product, request.data)
+            ) or (
+                payload_sets_batch_expiry(request.data)
+                and submitted_batch_expiry_differs(product, request.data)
             )
             if needs_adjust:
                 adjust_err = require_inventory_adjust(
