@@ -751,43 +751,21 @@ class OrderCreateSerializer(serializers.Serializer):
         points_to_redeem = 0
         
         if validated_data.get('use_reward_points', False):
-            from retailers.models import RetailerRewardConfig
+            from customers.loyalty_redeem import redeem_points_and_discount
             from customers.models import CustomerLoyalty
+            from retailers.models import RetailerRewardConfig
             
-            # Get retailer config
             config = RetailerRewardConfig.objects.filter(retailer=retailer).first()
-            
-            # Get user points for this retailer
             try:
                 loyalty = CustomerLoyalty.objects.get(customer=customer, retailer=retailer)
                 user_points = loyalty.points
             except CustomerLoyalty.DoesNotExist:
                 user_points = 0
-            
-            if config and config.is_active and user_points > 0:
-                import math
-                
-                # 1. Percentage limit
-                max_by_percent = (total_amount * config.max_reward_usage_percent) / 100
-                
-                # 2. Flat limit
-                max_by_flat = config.max_reward_usage_flat
-                
-                # Max allowed discount (before considering user balance)
-                max_allowed_discount = min(total_amount, max_by_percent, max_by_flat)
-                
-                # Convert max allowed discount into max allowed points (must be whole)
-                max_allowed_points = int(math.floor(max_allowed_discount / config.conversion_rate))
-                
-                # Available points (must be whole)
-                available_whole_points = int(math.floor(user_points))
-                
-                # Actual points to redeem
-                points_to_redeem = min(available_whole_points, max_allowed_points)
-                
-                if points_to_redeem > 0:
-                    discount_from_points = Decimal(str(points_to_redeem)) * config.conversion_rate
-                    total_amount -= discount_from_points
+            points_to_redeem, discount_from_points = redeem_points_and_discount(
+                total_amount, config, user_points
+            )
+            if points_to_redeem > 0:
+                total_amount -= discount_from_points
         
         # Check minimum order amount
         if total_amount < retailer.minimum_order_amount:
@@ -939,7 +917,13 @@ class OrderCreateSerializer(serializers.Serializer):
                     if not ok:
                         raise serializers.ValidationError({'redeem_otp': err})
                 try:
-                    loyalty = CustomerLoyalty.objects.get(customer=customer, retailer=retailer)
+                    loyalty = CustomerLoyalty.objects.select_for_update().get(
+                        customer=customer, retailer=retailer
+                    )
+                    if loyalty.points < points_to_redeem:
+                        raise serializers.ValidationError(
+                            {'use_reward_points': 'Not enough reward points'}
+                        )
                     loyalty.points -= points_to_redeem
                     loyalty.save()
                     

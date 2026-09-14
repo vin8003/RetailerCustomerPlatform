@@ -32,13 +32,14 @@ This change is **slice B (OTP redeem)** only. Earn-on-sale already runs on POS f
 | POST | `/api/customer/loyalty/redeem-otp/` | Customer | Sends OTP to the caller's registered mobile for that retailer. Response never includes the code. |
 | POST | `/api/customer/retailer/loyalty/redeem-otp/` | Owner / staff with `orders.update` + `rewards` module | Sends OTP to the org customer. Cross-tenant **404**. Customer JWT **403**. |
 | POST | `/api/orders/place/` | Customer | `use_reward_points` + OTP mode on without `redeem_otp` → **400**, no order, wallet unchanged. Valid OTP burns and sets `discount_from_points`. |
-| POST | `/api/customer/retailer/loyalty/redeem/` | Owner / staff with `orders.update` | Applies redeem to a **pending** order in the org. OTP required when flag is on. Cross-tenant **404**. Unauthorized **403**, order and wallet unchanged. |
+| POST | `/api/customer/retailer/loyalty/redeem/` | Owner / staff with `orders.update` | Applies redeem to a **pending**, unlocked, single-tender order in the org (same location scope as `get_order_for_retailer`). OTP required when flag is on. Cross-tenant **404**. Unauthorized **403**, order and wallet unchanged. |
 
 ## Security
 
 - OTP secrets are not returned in JSON and must not be logged.
 - A used OTP cannot be reused. Failed OTP does not decrease points.
-- Tenant filter is the caller's org locations (`get_order_for_retailer`).
+- Tenant filter is the caller's org locations (`staff_order_for_redeem`, same `retailer__in=locations` rule as `get_order_for_retailer`).
+- Staff redeem locks the order and wallet in one transaction; OTP is consumed only when a burn will happen.
 - Redeem mutates order totals — reuse `orders.update` (catalog has no `rewards.redeem`).
 
 ## Not in this change

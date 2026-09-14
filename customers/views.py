@@ -1,5 +1,6 @@
 from rest_framework import status, permissions
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
+from rest_framework.throttling import AnonRateThrottle
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Count, Sum, Q, Avg, DecimalField, IntegerField, Max, Subquery, OuterRef, F
@@ -38,6 +39,11 @@ from .crm import (
 )
 
 User = get_user_model()
+
+
+class RedeemOTPThrottle(AnonRateThrottle):
+    scope = 'otp'
+
 
 logger = logging.getLogger(__name__)
 
@@ -1456,6 +1462,7 @@ def update_customer_credit_limit(request, customer_id):
 
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
+@throttle_classes([RedeemOTPThrottle])
 def customer_loyalty_redeem_otp(request):
     """Customer requests a redeem OTP for one shop wallet."""
     if request.user.user_type != 'customer':
@@ -1468,11 +1475,13 @@ def customer_loyalty_redeem_otp(request):
         return Response({'error': 'retailer_id is required'}, status=status.HTTP_400_BAD_REQUEST)
     retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
     from retailers.module_flags import is_module_enabled, module_disabled_response
-    from .loyalty_redeem import issue_redeem_otp, otp_sent_payload
+    from .loyalty_redeem import customer_has_wallet, issue_redeem_otp, otp_sent_payload
 
     org = retailer.organization
     if org is not None and not is_module_enabled(org, 'rewards'):
         return module_disabled_response('rewards')
+    if not customer_has_wallet(request.user, retailer):
+        return Response({'error': 'No loyalty wallet at this shop'}, status=status.HTTP_400_BAD_REQUEST)
     _row, err = issue_redeem_otp(request.user, retailer)
     if err:
         return Response({'error': err}, status=status.HTTP_400_BAD_REQUEST)
@@ -1481,6 +1490,7 @@ def customer_loyalty_redeem_otp(request):
 
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
+@throttle_classes([RedeemOTPThrottle])
 def staff_loyalty_redeem_otp(request):
     """Staff sends a redeem OTP to an org customer's registered mobile."""
     from .loyalty_redeem import issue_redeem_otp, otp_sent_payload, staff_customer_for_otp
@@ -1506,7 +1516,7 @@ def staff_loyalty_redeem(request):
     order, apply_err = apply_pending_order_redeem(
         order,
         otp_code=request.data.get('otp_code') or request.data.get('redeem_otp'),
-        requested_points=request.data.get('points'),
+        requested_points=request.data.get('points', None),
     )
     if apply_err:
         return Response({'error': apply_err}, status=status.HTTP_400_BAD_REQUEST)

@@ -7,7 +7,7 @@ send_sms_otp. Does not add a second wallet or restaurant_points.
 import math
 import secrets
 from datetime import timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
 from django.db import transaction
@@ -17,7 +17,7 @@ from rest_framework.response import Response
 
 from authentication.utils import generate_otp, send_sms_otp
 from customers.models import CustomerLoyalty, LoyaltyRedeemOTP, LoyaltyTransaction
-from orders.access import PERM_ORDERS_UPDATE, get_order_for_retailer, require_retailer_orders_access
+from orders.access import PERM_ORDERS_UPDATE, require_retailer_orders_access
 from orders.models import Order
 from retailers.models import RetailerCustomerMapping, RetailerRewardConfig
 from retailers.module_flags import require_module_enabled
@@ -31,6 +31,8 @@ ERR_NO_POINTS = 'No redeemable points'
 ERR_ORDER_CLOSED = 'Order is not open for redeem'
 ERR_ALREADY = 'Points already redeemed on this order'
 ERR_NO_CUSTOMER = 'Order has no customer'
+ERR_SPLIT_TENDER = 'Redeem is only allowed on a single-tender pending order'
+ERR_NO_WALLET = 'No loyalty wallet at this shop'
 
 
 def _retailer_only_response():
@@ -41,18 +43,31 @@ def _retailer_only_response():
 
 
 def require_staff_redeem_access(user):
-    """Retailer JWT first (403), then rewards module, then orders.update."""
+    """Retailer JWT (403), rewards module, then orders.update + org locations."""
     if not user or not getattr(user, 'is_authenticated', False):
-        return None, Response(
+        return None, None, Response(
             {'error': 'Insufficient permissions for order operations'},
             status=status.HTTP_403_FORBIDDEN,
         )
     if getattr(user, 'user_type', None) != 'retailer':
-        return None, _retailer_only_response()
-    org, module_err = require_module_enabled(user, 'rewards')
+        return None, None, _retailer_only_response()
+    _org, module_err = require_module_enabled(user, 'rewards')
     if module_err is not None:
-        return None, module_err
-    return org, None
+        return None, None, module_err
+    return require_retailer_orders_access(user, PERM_ORDERS_UPDATE)
+
+
+def parse_requested_points(raw):
+    """Return (Decimal-or-None, error). None means 'use the max allowed'."""
+    if raw is None or raw == '':
+        return None, None
+    try:
+        value = Decimal(str(raw))
+    except (InvalidOperation, TypeError, ValueError):
+        return None, ERR_NO_POINTS
+    if value < 0:
+        return None, ERR_NO_POINTS
+    return value, None
 
 
 def redeem_points_and_discount(total_amount, config, user_points, requested=None):
@@ -69,18 +84,23 @@ def redeem_points_and_discount(total_amount, config, user_points, requested=None
     available = int(math.floor(user_points))
     points = min(available, max_allowed_points)
     if requested is not None:
-        points = min(points, int(math.floor(Decimal(str(requested)))))
+        points = min(points, int(math.floor(requested)))
     if points <= 0:
         return zero, Decimal('0.00')
     discount = Decimal(str(points)) * rate
     return Decimal(str(points)), discount
 
 
-def _active_otp_qs(customer, retailer):
+def _normalize_otp(otp_code):
+    if otp_code is None:
+        return ''
+    return str(otp_code).strip()
+
+
+def _latest_otp_qs(customer, retailer):
     return LoyaltyRedeemOTP.objects.filter(
         customer=customer,
         retailer=retailer,
-        is_used=False,
     ).order_by('-created_at', '-id')
 
 
@@ -88,49 +108,48 @@ def _codes_match(stored, given):
     if stored is None or given is None:
         return False
     left = str(stored)
-    right = str(given)
+    right = _normalize_otp(given)
     if len(left) != len(right):
         return False
     return secrets.compare_digest(left, right)
 
 
-def peek_redeem_otp(customer, retailer, otp_code):
-    """
-    Check OTP without marking it used. Wrong code increments attempts.
-    """
-    if otp_code is None or str(otp_code).strip() == '':
+def _evaluate_otp_row(row, otp_code):
+    """Shared used / expired / attempts / match checks. May increment attempts."""
+    code = _normalize_otp(otp_code)
+    if code == '':
         return False, ERR_OTP_REQUIRED
-    row = _active_otp_qs(customer, retailer).first()
     if row is None:
         return False, ERR_OTP_INVALID
+    if row.is_used:
+        return False, ERR_OTP_USED
     if row.is_expired():
         return False, ERR_OTP_INVALID
     if row.attempts >= settings.OTP_MAX_ATTEMPTS:
         return False, ERR_OTP_INVALID
-    if not _codes_match(row.otp_code, otp_code):
+    if not _codes_match(row.otp_code, code):
         row.attempts += 1
         row.save(update_fields=['attempts'])
         return False, ERR_OTP_INVALID
     return True, None
 
 
+def peek_redeem_otp(customer, retailer, otp_code):
+    """Check OTP without marking it used. Wrong code increments attempts."""
+    if _normalize_otp(otp_code) == '':
+        return False, ERR_OTP_REQUIRED
+    row = _latest_otp_qs(customer, retailer).first()
+    return _evaluate_otp_row(row, otp_code)
+
+
 def consume_redeem_otp(customer, retailer, otp_code):
     """Mark a valid OTP used. Caller should be inside transaction.atomic()."""
-    if otp_code is None or str(otp_code).strip() == '':
+    if _normalize_otp(otp_code) == '':
         return False, ERR_OTP_REQUIRED
-    row = _active_otp_qs(customer, retailer).select_for_update().first()
-    if row is None:
-        return False, ERR_OTP_INVALID
-    if timezone.now() > row.expires_at:
-        return False, ERR_OTP_INVALID
-    if row.is_used:
-        return False, ERR_OTP_USED
-    if row.attempts >= settings.OTP_MAX_ATTEMPTS:
-        return False, ERR_OTP_INVALID
-    if not _codes_match(row.otp_code, otp_code):
-        row.attempts += 1
-        row.save(update_fields=['attempts'])
-        return False, ERR_OTP_INVALID
+    row = _latest_otp_qs(customer, retailer).select_for_update().first()
+    ok, err = _evaluate_otp_row(row, otp_code)
+    if not ok:
+        return False, err
     row.is_used = True
     row.save(update_fields=['is_used'])
     return True, None
@@ -146,7 +165,9 @@ def issue_redeem_otp(customer, retailer):
         return None, ERR_NO_MOBILE
     otp_code, _secret = generate_otp()
     expires_at = timezone.now() + timedelta(seconds=settings.OTP_EXPIRY_TIME)
-    _active_otp_qs(customer, retailer).delete()
+    LoyaltyRedeemOTP.objects.filter(
+        customer=customer, retailer=retailer, is_used=False
+    ).delete()
     row = LoyaltyRedeemOTP.objects.create(
         customer=customer,
         retailer=retailer,
@@ -160,70 +181,102 @@ def issue_redeem_otp(customer, retailer):
     return row, None
 
 
+def customer_has_wallet(customer, retailer):
+    if CustomerLoyalty.objects.filter(customer=customer, retailer=retailer).exists():
+        return True
+    return RetailerCustomerMapping.objects.filter(
+        customer=customer, retailer=retailer
+    ).exists()
+
+
+def _single_tender_field(order, old_total):
+    tenders = (
+        ('cash_amount', order.cash_amount),
+        ('upi_amount', order.upi_amount),
+        ('card_amount', order.card_amount),
+        ('credit_amount', order.credit_amount),
+    )
+    nonzero = [name for name, amount in tenders if amount and amount > 0]
+    matching = [name for name, amount in tenders if amount == old_total]
+    if len(nonzero) == 1 and matching == nonzero:
+        return nonzero[0]
+    return None
+
+
 def apply_pending_order_redeem(order, otp_code=None, requested_points=None):
     """
-    Burn wallet points onto a pending/confirmed order.
-    OTP is consumed in the same transaction as the burn.
+    Burn wallet points onto a pending order.
+    Lock order + wallet, compute, consume OTP only if there is a burn.
     """
-    if order.status not in ('pending', 'confirmed'):
-        return None, ERR_ORDER_CLOSED
-    if order.points_redeemed and order.points_redeemed > 0:
-        return None, ERR_ALREADY
-    if not order.customer:
-        return None, ERR_NO_CUSTOMER
+    requested, parse_err = parse_requested_points(requested_points)
+    if parse_err:
+        return None, parse_err
 
-    config = RetailerRewardConfig.objects.filter(retailer=order.retailer).first()
     with transaction.atomic():
-        if config and config.is_active and config.otp_required_for_redeem:
-            ok, err = consume_redeem_otp(order.customer, order.retailer, otp_code)
-            if not ok:
-                return None, err
+        locked = (
+            Order.objects.select_for_update()
+            .select_related('customer', 'retailer')
+            .get(pk=order.pk)
+        )
+        if locked.status != 'pending':
+            return None, ERR_ORDER_CLOSED
+        if locked.is_payment_locked:
+            return None, ERR_ORDER_CLOSED
+        if locked.points_redeemed and locked.points_redeemed > 0:
+            return None, ERR_ALREADY
+        if not locked.customer:
+            return None, ERR_NO_CUSTOMER
 
+        old_total = locked.total_amount
+        tender_field = _single_tender_field(locked, old_total)
+        if tender_field is None:
+            return None, ERR_SPLIT_TENDER
+
+        config = RetailerRewardConfig.objects.filter(retailer=locked.retailer).first()
         loyalty, _created = CustomerLoyalty.objects.select_for_update().get_or_create(
-            customer=order.customer,
-            retailer=order.retailer,
+            customer=locked.customer,
+            retailer=locked.retailer,
         )
-        total_before = (
-            order.subtotal + order.delivery_fee - order.discount_amount
-        )
+        total_before = locked.subtotal + locked.delivery_fee - locked.discount_amount
         points, discount = redeem_points_and_discount(
-            total_before, config, loyalty.points, requested=requested_points
+            total_before, config, loyalty.points, requested=requested
         )
         if points <= 0:
             return None, ERR_NO_POINTS
 
+        if config and config.is_active and config.otp_required_for_redeem:
+            ok, err = consume_redeem_otp(locked.customer, locked.retailer, otp_code)
+            if not ok:
+                return None, err
+
         loyalty.points -= points
         loyalty.save(update_fields=['points'])
         LoyaltyTransaction.objects.create(
-            customer=order.customer,
-            retailer=order.retailer,
+            customer=locked.customer,
+            retailer=locked.retailer,
             amount=points,
             transaction_type='redeem',
-            description=f"Redeemed on order #{order.order_number}",
+            description=f"Redeemed on order #{locked.order_number}",
         )
-        old_total = order.total_amount
         new_total = (total_before - discount).quantize(Decimal('0.01'))
-        order.discount_from_points = discount
-        order.points_redeemed = points
-        order.total_amount = new_total
-        update_fields = ['discount_from_points', 'points_redeemed', 'total_amount']
-        if order.cash_amount == old_total:
-            order.cash_amount = new_total
-            update_fields.append('cash_amount')
-        elif order.upi_amount == old_total:
-            order.upi_amount = new_total
-            update_fields.append('upi_amount')
-        order.save(update_fields=update_fields)
-    return order, None
+        locked.discount_from_points = discount
+        locked.points_redeemed = points
+        locked.total_amount = new_total
+        setattr(locked, tender_field, new_total)
+        locked.save(update_fields=[
+            'discount_from_points',
+            'points_redeemed',
+            'total_amount',
+            tender_field,
+        ])
+    return locked, None
 
 
 def staff_order_for_redeem(user, order_id):
-    _org, err = require_staff_redeem_access(user)
+    """Org-location scoped fetch (same tenant rule as get_order_for_retailer)."""
+    _org, locations, err = require_staff_redeem_access(user)
     if err is not None:
         return None, err
-    _org, locations, loc_err = require_retailer_orders_access(user, PERM_ORDERS_UPDATE)
-    if loc_err is not None:
-        return None, loc_err
     if not order_id:
         return None, Response(
             {'error': 'order_id is required'},
@@ -247,13 +300,13 @@ def staff_customer_for_otp(user, data):
     Resolve (customer, retailer) for a staff OTP send.
     Cross-tenant customer or location is 404.
     """
-    org, err = require_staff_redeem_access(user)
+    org, locations, err = require_staff_redeem_access(user)
     if err is not None:
         return None, None, err
 
     order_id = data.get('order_id')
     if order_id:
-        order, order_err = get_order_for_retailer(user, order_id, PERM_ORDERS_UPDATE)
+        order, order_err = staff_order_for_redeem(user, order_id)
         if order_err is not None:
             return None, None, order_err
         if not order.customer:
@@ -263,17 +316,13 @@ def staff_customer_for_otp(user, data):
             )
         return order.customer, order.retailer, None
 
-    _org, locations, loc_err = require_retailer_orders_access(user, PERM_ORDERS_UPDATE)
-    if loc_err is not None:
-        return None, None, loc_err
-
     location_id = data.get('location_id')
     customer_id = data.get('customer_id')
     if location_id is not None:
         retailer = locations.filter(id=location_id).first()
         if retailer is None:
             return None, None, Response(
-                {'error': 'Order not found'},
+                {'error': 'Invalid location for this organization'},
                 status=status.HTTP_404_NOT_FOUND,
             )
     elif locations.count() == 1:

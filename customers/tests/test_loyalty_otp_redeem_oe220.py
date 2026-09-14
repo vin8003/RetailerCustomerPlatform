@@ -328,6 +328,14 @@ class TestStaffRedeemEndpoint:
         assert order.points_redeemed == Decimal("50.00")
         assert order.total_amount == Decimal("50.00")
         assert loyalty.points == Decimal("30.00")
+        from customers.models import LoyaltyTransaction
+
+        assert LoyaltyTransaction.objects.filter(
+            customer=customer,
+            retailer=retailer,
+            transaction_type="redeem",
+            amount=Decimal("50.00"),
+        ).exists()
 
     def test_customer_cannot_call_staff_redeem(self, api_client):
         _owner, retailer = _make_retailer("oe220_st_403", "OE220 Staff 403")
@@ -367,6 +375,7 @@ class TestStaffRedeemEndpoint:
             organization=retailer.organization, slug=ROLE_SLUG_CASHIER
         )
         assert "orders.update" not in (cashier_role.permissions or [])
+        assert owner.user_type == "retailer"
 
         api_client.force_authenticate(user=staff)
         resp = api_client.post(
@@ -379,7 +388,6 @@ class TestStaffRedeemEndpoint:
         order.refresh_from_db()
         assert loyalty.points == Decimal("80.00")
         assert order.discount_from_points == Decimal("0.00")
-        assert owner.username == "oe220_st_cash"
 
     def test_cross_tenant_redeem_is_404(self, api_client):
         _owner_a, retailer_a = _make_retailer("oe220_st_a", "OE220 Tenant A")
@@ -417,13 +425,183 @@ class TestStaffRedeemEndpoint:
         _issue_otp(customer, retailer, "777777")
 
         api_client.force_authenticate(user=owner)
-        with django_assert_num_queries(14):
+        with django_assert_num_queries(15):
             resp = api_client.post(
                 reverse(STAFF_REDEEM_URL),
                 {"order_id": order.id, "otp_code": "777777"},
                 format="json",
             )
         assert resp.status_code == status.HTTP_200_OK
+
+    def test_wrong_otp_does_not_burn(self, api_client):
+        owner, retailer = _make_retailer("oe220_st_bad", "OE220 Staff Bad")
+        customer = _make_customer("oe220_st_bad_cust", "9000002217")
+        product = _product(retailer)
+        _reward_config(retailer)
+        loyalty = CustomerLoyalty.objects.create(
+            customer=customer, retailer=retailer, points=Decimal("80.00")
+        )
+        order = _pending_order(customer, retailer, product)
+        _issue_otp(customer, retailer, "888888")
+
+        api_client.force_authenticate(user=owner)
+        resp = api_client.post(
+            reverse(STAFF_REDEEM_URL),
+            {"order_id": order.id, "otp_code": "000000"},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        loyalty.refresh_from_db()
+        order.refresh_from_db()
+        otp = LoyaltyRedeemOTP.objects.get(customer=customer, retailer=retailer)
+        assert loyalty.points == Decimal("80.00")
+        assert order.discount_from_points == Decimal("0.00")
+        assert otp.is_used is False
+
+    def test_used_otp_cannot_be_reused(self, api_client):
+        owner, retailer = _make_retailer("oe220_st_reuse", "OE220 Staff Reuse")
+        customer = _make_customer("oe220_st_reuse_cust", "9000002218")
+        product = _product(retailer)
+        _reward_config(retailer)
+        CustomerLoyalty.objects.create(
+            customer=customer, retailer=retailer, points=Decimal("80.00")
+        )
+        order = _pending_order(customer, retailer, product)
+        _issue_otp(customer, retailer, "999999")
+
+        api_client.force_authenticate(user=owner)
+        first = api_client.post(
+            reverse(STAFF_REDEEM_URL),
+            {"order_id": order.id, "otp_code": "999999"},
+            format="json",
+        )
+        assert first.status_code == status.HTTP_200_OK
+        second_order = _pending_order(customer, retailer, product, total=Decimal("80.00"))
+        second = api_client.post(
+            reverse(STAFF_REDEEM_URL),
+            {"order_id": second_order.id, "otp_code": "999999"},
+            format="json",
+        )
+        assert second.status_code == status.HTTP_400_BAD_REQUEST
+        second_order.refresh_from_db()
+        assert second_order.points_redeemed == Decimal("0.00")
+
+    def test_otp_mode_off_redeems_without_code(self, api_client):
+        owner, retailer = _make_retailer("oe220_st_off", "OE220 Staff Off")
+        customer = _make_customer("oe220_st_off_cust", "9000002219")
+        product = _product(retailer)
+        _reward_config(retailer, otp_required_for_redeem=False)
+        loyalty = CustomerLoyalty.objects.create(
+            customer=customer, retailer=retailer, points=Decimal("80.00")
+        )
+        order = _pending_order(customer, retailer, product)
+
+        api_client.force_authenticate(user=owner)
+        resp = api_client.post(
+            reverse(STAFF_REDEEM_URL),
+            {"order_id": order.id},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        loyalty.refresh_from_db()
+        order.refresh_from_db()
+        assert order.discount_from_points == Decimal("50.00")
+        assert loyalty.points == Decimal("30.00")
+
+    def test_already_redeemed_does_not_burn_again(self, api_client):
+        owner, retailer = _make_retailer("oe220_st_again", "OE220 Staff Again")
+        customer = _make_customer("oe220_st_again_cust", "9000002220")
+        product = _product(retailer)
+        _reward_config(retailer)
+        loyalty = CustomerLoyalty.objects.create(
+            customer=customer, retailer=retailer, points=Decimal("80.00")
+        )
+        order = _pending_order(customer, retailer, product)
+        _issue_otp(customer, retailer, "121212")
+
+        api_client.force_authenticate(user=owner)
+        first = api_client.post(
+            reverse(STAFF_REDEEM_URL),
+            {"order_id": order.id, "otp_code": "121212"},
+            format="json",
+        )
+        assert first.status_code == status.HTTP_200_OK
+        _issue_otp(customer, retailer, "131313")
+        second = api_client.post(
+            reverse(STAFF_REDEEM_URL),
+            {"order_id": order.id, "otp_code": "131313"},
+            format="json",
+        )
+        assert second.status_code == status.HTTP_400_BAD_REQUEST
+        loyalty.refresh_from_db()
+        assert loyalty.points == Decimal("30.00")
+
+    def test_invalid_points_payload_is_400(self, api_client):
+        owner, retailer = _make_retailer("oe220_st_pts", "OE220 Staff Pts")
+        customer = _make_customer("oe220_st_pts_cust", "9000002224")
+        product = _product(retailer)
+        _reward_config(retailer)
+        loyalty = CustomerLoyalty.objects.create(
+            customer=customer, retailer=retailer, points=Decimal("80.00")
+        )
+        order = _pending_order(customer, retailer, product)
+        _issue_otp(customer, retailer, "141414")
+
+        api_client.force_authenticate(user=owner)
+        resp = api_client.post(
+            reverse(STAFF_REDEEM_URL),
+            {"order_id": order.id, "otp_code": "141414", "points": "abc"},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        loyalty.refresh_from_db()
+        order.refresh_from_db()
+        assert loyalty.points == Decimal("80.00")
+        assert order.points_redeemed == Decimal("0.00")
+
+    def test_no_points_does_not_consume_otp(self, api_client):
+        owner, retailer = _make_retailer("oe220_st_zero", "OE220 Staff Zero")
+        customer = _make_customer("oe220_st_zero_cust", "9000002226")
+        product = _product(retailer)
+        _reward_config(retailer)
+        CustomerLoyalty.objects.create(
+            customer=customer, retailer=retailer, points=Decimal("0.00")
+        )
+        order = _pending_order(customer, retailer, product)
+        otp = _issue_otp(customer, retailer, "161616")
+
+        api_client.force_authenticate(user=owner)
+        resp = api_client.post(
+            reverse(STAFF_REDEEM_URL),
+            {"order_id": order.id, "otp_code": "161616"},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        otp.refresh_from_db()
+        assert otp.is_used is False
+
+    def test_confirmed_order_is_rejected(self, api_client):
+        owner, retailer = _make_retailer("oe220_st_conf", "OE220 Staff Conf")
+        customer = _make_customer("oe220_st_conf_cust", "9000002225")
+        product = _product(retailer)
+        _reward_config(retailer)
+        loyalty = CustomerLoyalty.objects.create(
+            customer=customer, retailer=retailer, points=Decimal("80.00")
+        )
+        order = _pending_order(customer, retailer, product)
+        order.status = "confirmed"
+        order.save(update_fields=["status"])
+        _issue_otp(customer, retailer, "151515")
+
+        api_client.force_authenticate(user=owner)
+        resp = api_client.post(
+            reverse(STAFF_REDEEM_URL),
+            {"order_id": order.id, "otp_code": "151515"},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        loyalty.refresh_from_db()
+        assert loyalty.points == Decimal("80.00")
 
 
 @pytest.mark.django_db
@@ -433,6 +611,9 @@ class TestRequestRedeemOtp:
         _owner, retailer = _make_retailer("oe220_otp_owner", "OE220 OTP Shop")
         customer = _make_customer("oe220_otp_cust", "9000002221")
         _reward_config(retailer)
+        CustomerLoyalty.objects.create(
+            customer=customer, retailer=retailer, points=Decimal("10.00")
+        )
 
         api_client.force_authenticate(user=customer)
         resp = api_client.post(
@@ -479,7 +660,7 @@ class TestRequestRedeemOtp:
 @pytest.mark.django_db
 class TestRewardConfigOtpFlagAuth:
     def test_customer_cannot_mutate_otp_flag(self, api_client):
-        owner, retailer = _make_retailer("oe220_cfg_owner", "OE220 Config Shop")
+        _owner, retailer = _make_retailer("oe220_cfg_owner", "OE220 Config Shop")
         customer = _make_customer("oe220_cfg_cust", "9000002231")
         config = _reward_config(retailer, otp_required_for_redeem=True)
 
@@ -492,7 +673,6 @@ class TestRewardConfigOtpFlagAuth:
         assert resp.status_code == status.HTTP_403_FORBIDDEN
         config.refresh_from_db()
         assert config.otp_required_for_redeem is True
-        assert owner.username == "oe220_cfg_owner"
 
     def test_cross_tenant_put_does_not_mutate_other_config(self, api_client):
         _owner_a, retailer_a = _make_retailer("oe220_cfg_a", "OE220 Cfg A")
