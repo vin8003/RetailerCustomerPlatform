@@ -818,7 +818,8 @@ class RetailerRewardConfigSerializer(serializers.ModelSerializer):
         fields = [
             'earning_type', 'loyalty_earning_value', 'loyalty_min_order_value',
             'cashback_percentage', 'max_reward_usage_percent',
-            'max_reward_usage_flat', 'conversion_rate', 'is_active',
+            'max_reward_usage_flat', 'conversion_rate', 'otp_required_for_redeem',
+            'is_active',
             'is_referral_enabled', 'referral_reward_points',
             'referee_reward_points', 'min_referral_order_amount'
         ]

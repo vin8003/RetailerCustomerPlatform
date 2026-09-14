@@ -506,6 +506,7 @@ class OrderCreateSerializer(serializers.Serializer):
     payment_mode = serializers.ChoiceField(choices=Order.PAYMENT_MODE_CHOICES)
     special_instructions = serializers.CharField(required=False, allow_blank=True)
     use_reward_points = serializers.BooleanField(required=False, default=False)
+    redeem_otp = serializers.CharField(required=False, allow_blank=True, write_only=True)
     fulfillment_slot_start = serializers.DateTimeField(required=False, allow_null=True)
     
     def validate_retailer_id(self, value):
@@ -670,6 +671,33 @@ class OrderCreateSerializer(serializers.Serializer):
                 pass
             except FulfillmentSlotError as exc:
                 raise serializers.ValidationError({'fulfillment_slot_start': str(exc)}) from exc
+
+        if data.get('use_reward_points'):
+            from customers.loyalty_redeem import peek_redeem_otp
+            from customers.models import CustomerLoyalty
+            from retailers.models import RetailerRewardConfig
+
+            customer = self.context['customer']
+            try:
+                retailer = RetailerProfile.objects.get(id=data.get('retailer_id'))
+            except RetailerProfile.DoesNotExist:
+                retailer = None
+            if retailer is not None:
+                config = RetailerRewardConfig.objects.filter(retailer=retailer).first()
+                has_points = CustomerLoyalty.objects.filter(
+                    customer=customer, retailer=retailer, points__gt=0
+                ).exists()
+                if (
+                    config
+                    and config.is_active
+                    and config.otp_required_for_redeem
+                    and has_points
+                ):
+                    ok, err = peek_redeem_otp(
+                        customer, retailer, data.get('redeem_otp')
+                    )
+                    if not ok:
+                        raise serializers.ValidationError({'redeem_otp': err})
 
         return data
     
@@ -895,7 +923,21 @@ class OrderCreateSerializer(serializers.Serializer):
                 ProductInventoryLog.objects.bulk_create(logs_to_create)
 
             if points_to_redeem > 0:
+                from customers.loyalty_redeem import consume_redeem_otp
                 from customers.models import CustomerLoyalty, LoyaltyTransaction
+                from retailers.models import RetailerRewardConfig as RewardConfig
+
+                redeem_config = RewardConfig.objects.filter(retailer=retailer).first()
+                if (
+                    redeem_config
+                    and redeem_config.is_active
+                    and redeem_config.otp_required_for_redeem
+                ):
+                    ok, err = consume_redeem_otp(
+                        customer, retailer, validated_data.get('redeem_otp')
+                    )
+                    if not ok:
+                        raise serializers.ValidationError({'redeem_otp': err})
                 try:
                     loyalty = CustomerLoyalty.objects.get(customer=customer, retailer=retailer)
                     loyalty.points -= points_to_redeem

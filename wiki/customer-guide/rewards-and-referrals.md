@@ -33,7 +33,9 @@ Usually at **checkout**:
 3. Choose how many points to use (within shop rules)
 4. Discount applies to order total
 
-Some shops set minimum order or maximum redemption limits.
+Some shops require a **one-time code** sent to your registered mobile before points can be used. Without that code, checkout will not apply the discount and your balance stays the same.
+
+Some shops set minimum order or maximum redemption limits. Points stay **per shop** — they do not move to another shop or to a separate restaurant balance.
 
 ## Referral codes
 

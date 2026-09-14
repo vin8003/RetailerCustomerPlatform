@@ -300,6 +300,41 @@ class LoyaltyTransaction(models.Model):
         return f"{self.customer.username} - {self.amount} ({self.transaction_type})"
 
 
+class LoyaltyRedeemOTP(models.Model):
+    """
+    One-time code for loyalty redeem (OE-220). Separate from login OTP.
+    """
+    customer = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='loyalty_redeem_otps',
+    )
+    retailer = models.ForeignKey(
+        'retailers.RetailerProfile',
+        on_delete=models.CASCADE,
+        related_name='loyalty_redeem_otps',
+    )
+    otp_code = models.CharField(max_length=6)
+    is_used = models.BooleanField(default=False)
+    attempts = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+
+    class Meta:
+        db_table = 'loyalty_redeem_otp'
+        indexes = [
+            models.Index(fields=['customer', 'retailer', 'is_used']),
+            models.Index(fields=['expires_at']),
+        ]
+
+    def is_expired(self):
+        from django.utils import timezone
+        return timezone.now() > self.expires_at
+
+    def __str__(self):
+        return f"Loyalty OTP for {self.customer_id} @ {self.retailer_id}"
+
+
 class CustomerReferral(models.Model):
     """
     Tracks referrals made by customers for specific retailers

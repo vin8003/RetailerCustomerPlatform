@@ -1453,3 +1453,70 @@ def update_customer_credit_limit(request, customer_id):
         logger.error(f"Error updating credit limit: {str(e)}")
         return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def customer_loyalty_redeem_otp(request):
+    """Customer requests a redeem OTP for one shop wallet."""
+    if request.user.user_type != 'customer':
+        return Response(
+            {'error': 'Only customers can request a redeem OTP here'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    retailer_id = request.data.get('retailer_id')
+    if not retailer_id:
+        return Response({'error': 'retailer_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+    retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+    from retailers.module_flags import is_module_enabled, module_disabled_response
+    from .loyalty_redeem import issue_redeem_otp, otp_sent_payload
+
+    org = retailer.organization
+    if org is not None and not is_module_enabled(org, 'rewards'):
+        return module_disabled_response('rewards')
+    _row, err = issue_redeem_otp(request.user, retailer)
+    if err:
+        return Response({'error': err}, status=status.HTTP_400_BAD_REQUEST)
+    return Response(otp_sent_payload(), status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def staff_loyalty_redeem_otp(request):
+    """Staff sends a redeem OTP to an org customer's registered mobile."""
+    from .loyalty_redeem import issue_redeem_otp, otp_sent_payload, staff_customer_for_otp
+
+    customer, retailer, err = staff_customer_for_otp(request.user, request.data)
+    if err is not None:
+        return err
+    _row, issue_err = issue_redeem_otp(customer, retailer)
+    if issue_err:
+        return Response({'error': issue_err}, status=status.HTTP_400_BAD_REQUEST)
+    return Response(otp_sent_payload(), status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def staff_loyalty_redeem(request):
+    """Burn points onto a pending org order. OTP required when config says so."""
+    from .loyalty_redeem import apply_pending_order_redeem, staff_order_for_redeem
+
+    order, err = staff_order_for_redeem(request.user, request.data.get('order_id'))
+    if err is not None:
+        return err
+    order, apply_err = apply_pending_order_redeem(
+        order,
+        otp_code=request.data.get('otp_code') or request.data.get('redeem_otp'),
+        requested_points=request.data.get('points'),
+    )
+    if apply_err:
+        return Response({'error': apply_err}, status=status.HTTP_400_BAD_REQUEST)
+    return Response(
+        {
+            'order_id': order.id,
+            'points_redeemed': order.points_redeemed,
+            'discount_from_points': order.discount_from_points,
+            'total_amount': order.total_amount,
+        },
+        status=status.HTTP_200_OK,
+    )
+

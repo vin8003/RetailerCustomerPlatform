@@ -135,6 +135,8 @@ def _pending_order(customer, retailer, product, total=Decimal("100.00")):
 
 
 def _issue_otp(customer, retailer, code="123456"):
+    from datetime import timedelta
+
     from django.conf import settings
     from django.utils import timezone
 
@@ -145,7 +147,7 @@ def _issue_otp(customer, retailer, code="123456"):
         customer=customer,
         retailer=retailer,
         otp_code=code,
-        expires_at=timezone.now() + timezone.timedelta(seconds=settings.OTP_EXPIRY_TIME),
+        expires_at=timezone.now() + timedelta(seconds=settings.OTP_EXPIRY_TIME),
     )
 
 
@@ -171,8 +173,8 @@ class TestCheckoutRedeemRequiresOtp:
         data = {
             "retailer_id": retailer.id,
             "use_reward_points": True,
-            "delivery_mode": "pickup",
-            "payment_mode": "cash",
+            "delivery_mode": "delivery",
+            "payment_mode": "upi",
             "address_id": addr.id,
         }
         if otp is not None:
