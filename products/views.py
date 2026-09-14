@@ -36,6 +36,14 @@ from .serializers import (
 )
 from retailers.models import RetailerProfile
 from common.permissions import IsRetailerOwner
+from products.inventory_adjust import (
+    bulk_items_set_on_hand_quantity,
+    bulk_items_would_change_on_hand,
+    bulk_write_quantity,
+    payload_sets_on_hand_quantity,
+    require_inventory_adjust,
+    submitted_on_hand_differs,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -619,16 +627,43 @@ def update_product(request, product_id):
             )
 
         try:
-            retailer = RetailerProfile.objects.get(user=request.user)
+            retailer = RetailerProfile.objects.select_related('organization').get(
+                user=request.user
+            )
         except RetailerProfile.DoesNotExist:
+            retailer = None
+
+        if retailer is None:
+            if payload_sets_on_hand_quantity(request.data):
+                adjust_err = require_inventory_adjust(request.user)
+                if adjust_err is not None:
+                    return adjust_err
             return Response(
                 {'error': 'Retailer profile not found'},
                 status=status.HTTP_404_NOT_FOUND
             )
 
         with transaction.atomic():
-            product = Product.objects.select_for_update().get(id=product_id, retailer=retailer)
+            try:
+                product = Product.objects.select_for_update().get(
+                    id=product_id, retailer=retailer
+                )
+            except Product.DoesNotExist:
+                return Response(
+                    {'error': 'Product not found'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
             old_quantity = product.quantity
+
+            if (
+                payload_sets_on_hand_quantity(request.data)
+                and submitted_on_hand_differs(product, request.data)
+            ):
+                adjust_err = require_inventory_adjust(
+                    request.user, organization=retailer.organization
+                )
+                if adjust_err is not None:
+                    return adjust_err
 
             serializer = ProductUpdateSerializer(
                 product,
@@ -735,7 +770,6 @@ def bulk_update_products(request):
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        retailer, _ = RetailerProfile.objects.get_or_create(user=request.user)
         items = request.data.get('items', [])
         
         if not items or not isinstance(items, list):
@@ -743,6 +777,19 @@ def bulk_update_products(request):
                 {'error': 'Invalid payload. "items" array is required.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+        if bulk_items_set_on_hand_quantity(items):
+            try:
+                retailer = RetailerProfile.objects.select_related('organization').get(
+                    user=request.user
+                )
+            except RetailerProfile.DoesNotExist:
+                adjust_err = require_inventory_adjust(request.user)
+                if adjust_err is not None:
+                    return adjust_err
+                retailer, _ = RetailerProfile.objects.get_or_create(user=request.user)
+        else:
+            retailer, _ = RetailerProfile.objects.get_or_create(user=request.user)
 
         product_ids = [item.get('id') for item in items if item.get('id')]
         if not product_ids:
@@ -756,6 +803,16 @@ def bulk_update_products(request):
         with transaction.atomic():
             products = Product.objects.select_for_update().filter(id__in=product_ids, retailer=retailer)
             product_dict = {p.id: p for p in products}
+            # Compare after lock so a concurrent sale cannot sneak a stale echo.
+            if (
+                bulk_items_set_on_hand_quantity(items)
+                and bulk_items_would_change_on_hand(items, product_dict)
+            ):
+                adjust_err = require_inventory_adjust(
+                    request.user, organization=retailer.organization
+                )
+                if adjust_err is not None:
+                    return adjust_err
             logs_to_create = []
             
             from collections import defaultdict
@@ -785,8 +842,8 @@ def bulk_update_products(request):
                         
                 if 'quantity' in item:
                     try:
-                        new_quantity = int(item['quantity'])
-                        if new_quantity >= 0:
+                        new_quantity = bulk_write_quantity(item['quantity'])
+                        if new_quantity is not None:
                             product.quantity = new_quantity
                             changed = True
                             

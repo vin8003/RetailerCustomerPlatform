@@ -57,6 +57,7 @@ flowchart TD
 
 ## Key Rules
 
+- Hand-set `Product.quantity` / `ProductBatch.quantity` on product update or bulk requires `inventory.adjust` (see [inventory-adjust-permission.md](../requirements/inventory-adjust-permission.md)). Cashiers cannot type a new on-hand number. Sales and purchases still change stock through their existing paths.
 - Only active batches contribute to available quantity.
 - Completed or expired batches can be excluded from available stock.
 - Fractional children inherit stock availability from the parent via the conversion factor.
