@@ -417,7 +417,7 @@ class TestStaffRedeemEndpoint:
         _issue_otp(customer, retailer, "777777")
 
         api_client.force_authenticate(user=owner)
-        with django_assert_num_queries(25):
+        with django_assert_num_queries(14):
             resp = api_client.post(
                 reverse(STAFF_REDEEM_URL),
                 {"order_id": order.id, "otp_code": "777777"},
