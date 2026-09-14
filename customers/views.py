@@ -23,6 +23,19 @@ from retailers.models import RetailerProfile, RetailerRewardConfig, RetailerBlac
 from retailers.serializers import RetailerRewardConfigSerializer
 from orders.models import Order, RetailerRating
 from products.models import Product
+from .crm import (
+    RECENT_ORDERS_LIMIT,
+    annotated_history_qs,
+    customer_summary,
+    find_org_customer_mapping,
+    is_export_requested,
+    org_customer_orders_qs,
+    order_totals,
+    parse_lookup_phone,
+    require_history_export_permission,
+    require_retailer_crm_access,
+    serialize_order_row,
+)
 
 User = get_user_model()
 
@@ -1026,6 +1039,63 @@ def get_retailer_customers(request):
             {'error': 'Internal server error'}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def lookup_retailer_customer(request):
+    """
+    Phone lookup: org-scoped customer summary + recent POS and app orders.
+
+    OE-212 / F-0105. Does not change POS typeahead payloads.
+    """
+    from collections import OrderedDict
+
+    org, err = require_retailer_crm_access(request.user)
+    if err is not None:
+        return err
+
+    last_10, phone_err = parse_lookup_phone(request.query_params.get('phone'))
+    if phone_err is not None:
+        return phone_err
+
+    export = is_export_requested(request.query_params)
+    if export:
+        export_err = require_history_export_permission(request.user, org)
+        if export_err is not None:
+            return export_err
+
+    mapping = find_org_customer_mapping(org, last_10)
+    customer = mapping.customer if mapping is not None else None
+    orders_base = org_customer_orders_qs(org, customer=customer, last_10=last_10)
+    history_qs = annotated_history_qs(orders_base)
+
+    if mapping is None:
+        first_order = history_qs.first()
+        if first_order is None:
+            return Response(
+                {'error': 'Customer not found'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        totals = order_totals(orders_base)
+        guest_name = first_order.guest_name or ''
+        payload = customer_summary(None, last_10, totals, guest_name=guest_name)
+    else:
+        totals = order_totals(orders_base)
+        payload = customer_summary(mapping, last_10, totals)
+
+    if export:
+        paginator = StandardResultsSetPagination()
+        page = paginator.paginate_queryset(history_qs, request)
+        rows = [serialize_order_row(order) for order in page]
+        paged = paginator.get_paginated_response(rows)
+        body = OrderedDict(customer=payload)
+        body.update(paged.data)
+        return Response(body, status=status.HTTP_200_OK)
+
+    recent = list(history_qs[:RECENT_ORDERS_LIMIT])
+    payload['recent_orders'] = [serialize_order_row(order) for order in recent]
+    return Response(payload, status=status.HTTP_200_OK)
 
 
 @api_view(['GET'])
