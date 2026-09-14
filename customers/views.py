@@ -3,6 +3,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Count, Sum, Q, Avg, DecimalField, IntegerField, Max, Subquery, OuterRef, F
+from django.http import Http404
 from django.shortcuts import get_object_or_404
 from decimal import Decimal
 from common.pagination import StandardResultsSetPagination
@@ -1375,7 +1376,9 @@ def update_customer_credit_limit(request, customer_id):
             'credit_limit': mapping.credit_limit,
             'credit_due_days': mapping.credit_due_days,
         }, status=status.HTTP_200_OK)
-        
+
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error updating credit limit: {str(e)}")
         return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

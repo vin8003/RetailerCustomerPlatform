@@ -386,7 +386,7 @@ class TestPosCreditLock:
             outstanding_since=timezone.now() - timedelta(days=2),
         )
         api_client.force_authenticate(user=owner)
-        with django_assert_num_queries(52):
+        with django_assert_num_queries(43):
             resp = api_client.post(
                 reverse("create_pos_order"),
                 _pos_credit_payload(product, customer.phone_number, Decimal("50.00")),
