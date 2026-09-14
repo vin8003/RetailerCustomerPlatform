@@ -309,6 +309,7 @@ class OrgAuditLog(models.Model):
     OBJECT_API_KEY = 'api_key'
     OBJECT_MODULE_FLAGS = 'module_flags'
     OBJECT_NOTIFICATION_CONFIG = 'notification_config'
+    OBJECT_CREDIT_OVERRIDE = 'credit_override'
 
     organization = models.ForeignKey(
         Organization,
@@ -889,6 +890,16 @@ class RetailerCustomerMapping(models.Model):
     # Credit Management
     credit_limit = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     current_balance = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'), help_text="Outstanding amount the customer owes to this retailer")
+    credit_due_days = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Days after outstanding opens before new credit sales lock. Null = no due-days lock.",
+    )
+    outstanding_since = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When running khata balance last became positive. Cleared when balance returns to zero.",
+    )
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -900,17 +911,28 @@ class RetailerCustomerMapping(models.Model):
         amount: positive decimal
         """
         from django.db import transaction
+        from django.utils import timezone
         with transaction.atomic():
             # Refresh to get latest balance and lock the row
             mapping = RetailerCustomerMapping.objects.select_for_update().get(pk=self.pk)
-            
+            previous_balance = mapping.current_balance
+
             if transaction_type in ['SALE', 'ADJUSTMENT']:
                 mapping.current_balance += amount
             elif transaction_type in ['PAYMENT', 'RETURN']:
                 mapping.current_balance -= amount
-            
-            mapping.save(update_fields=['current_balance', 'updated_at'])
+
+            update_fields = ['current_balance', 'updated_at']
+            if previous_balance <= 0 and mapping.current_balance > 0:
+                mapping.outstanding_since = timezone.now()
+                update_fields.append('outstanding_since')
+            elif mapping.current_balance <= 0 and mapping.outstanding_since is not None:
+                mapping.outstanding_since = None
+                update_fields.append('outstanding_since')
+
+            mapping.save(update_fields=update_fields)
             self.current_balance = mapping.current_balance # Update local instance
+            self.outstanding_since = mapping.outstanding_since
             
             return CustomerLedger.objects.create(
                 mapping=mapping,

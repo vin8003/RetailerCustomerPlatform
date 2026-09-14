@@ -6,6 +6,11 @@ from rest_framework.response import Response
 from django.utils import timezone
 from rest_framework.decorators import action, api_view, permission_classes
 from django.db import transaction
+from retailers.credit_lock import (
+    CreditOverrideDenied,
+    assert_credit_sale_allowed,
+    record_credit_override_audit,
+)
 from retailers.models import Supplier, RetailerProfile, RetailerCustomerMapping
 from retailers.serializers import SupplierSerializer
 from products.models import PurchaseInvoice, PurchaseItem, SupplierLedger, Product, ProductBatch, ProductInventoryLog
@@ -310,6 +315,22 @@ def create_pos_order(request):
             else:
                 payment_mode = 'cash'
 
+            mapping = None
+            pending_credit_override = None
+            if order_customer:
+                mapping, _created = RetailerCustomerMapping.objects.select_for_update().get_or_create(
+                    retailer=retailer,
+                    customer=order_customer,
+                )
+                if credit_amount > 0:
+                    pending_credit_override = assert_credit_sale_allowed(
+                        mapping,
+                        credit_amount,
+                        data,
+                        user=request.user,
+                        retailer=retailer,
+                    )
+
             order = Order.objects.create(
                 customer=order_customer,
                 guest_name=customer_name if not order_customer else None,
@@ -347,11 +368,7 @@ def create_pos_order(request):
             order.award_loyalty_points()
 
             # CRM Mapping and Credit Ledger Update
-            if order_customer:
-                mapping, created = RetailerCustomerMapping.objects.get_or_create(
-                    retailer=retailer,
-                    customer=order_customer
-                )
+            if order_customer and mapping is not None:
                 if customer_name and not mapping.nickname:
                     mapping.nickname = customer_name
                 
@@ -361,19 +378,13 @@ def create_pos_order(request):
                 
                 # Record Credit Transaction if any
                 if credit_amount > 0:
-                    # Enforce credit limit if set
-                    if mapping.credit_limit > 0:
-                        available_credit = mapping.credit_limit - mapping.current_balance
-                        if credit_amount > available_credit:
-                            # Rollback: delete the order we just created
-                            order.delete()
-                            raise ValueError(
-                                f"Credit limit exceeded. "
-                                f"Limit: ₹{mapping.credit_limit}, "
-                                f"Current balance: ₹{mapping.current_balance}, "
-                                f"Available: ₹{max(available_credit, 0)}"
-                            )
-                    
+                    if pending_credit_override:
+                        record_credit_override_audit(
+                            pending=pending_credit_override,
+                            actor=request.user,
+                            retailer=retailer,
+                            order=order,
+                        )
                     mapping.record_transaction(
                          transaction_type='SALE',
                          amount=credit_amount,
@@ -455,6 +466,8 @@ def create_pos_order(request):
         }
         return Response(response_data, status=status.HTTP_201_CREATED)
 
+    except CreditOverrideDenied as denied:
+        return Response({'error': str(denied)}, status=status.HTTP_403_FORBIDDEN)
     except ValueError as ve:
         return Response({'error': str(ve)}, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
