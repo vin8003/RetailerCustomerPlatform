@@ -1,10 +1,16 @@
 """
 OE-127 / F-0028 — hand-set on-hand quantity gate.
+OE-103 / F-0021 — same perm for parent-child pack link mutations.
 
 Sale/purchase still dual-write Product.quantity + ProductInventoryLog.
-This module only rejects a *changed* product/batch on-hand on update / bulk
+This module rejects a *changed* product/batch on-hand on update / bulk
 unless the caller has ``inventory.adjust``. Echoing the current number
 (typical product-screen PUT/PATCH) does not require the perm.
+
+Pack-link fields (``conversion_factor``, ``parent_bulk_product``,
+``is_parent_bulk``) on product create/update use the same perm when the
+submitted value differs from stored (or is set on create). Bulk update
+does not write those keys.
 """
 import json
 from decimal import Decimal, InvalidOperation
@@ -19,6 +25,10 @@ from retailers.organization import (
 )
 
 PERM_INVENTORY_ADJUST = 'inventory.adjust'
+
+# Parent-child pack link fields on Product create/update (OE-103 / F-0021).
+# Bulk update does not write these keys — see bulk_update_products.
+PACK_LINK_FIELDS = ('conversion_factor', 'parent_bulk_product', 'is_parent_bulk')
 
 
 def _parse_batches(data):
@@ -125,6 +135,77 @@ def bulk_items_would_change_on_hand(items, products_by_id):
             continue
         if product.quantity != new_qty:
             return True
+    return False
+
+
+def _as_bool(raw):
+    if isinstance(raw, bool):
+        return raw
+    if raw in (1, '1', 'true', 'True', 'TRUE'):
+        return True
+    if raw in (0, '0', 'false', 'False', 'FALSE'):
+        return False
+    return bool(raw)
+
+
+def _factor_differs(raw, current):
+    if raw in (None, ''):
+        return current is not None
+    try:
+        submitted = Decimal(str(raw))
+    except (InvalidOperation, TypeError, ValueError):
+        return True
+    if current is None:
+        return True
+    return submitted != Decimal(str(current))
+
+
+def _parent_id_differs(raw, current_id):
+    if raw in (None, ''):
+        return current_id is not None
+    try:
+        submitted = int(raw)
+    except (TypeError, ValueError):
+        return True
+    return submitted != current_id
+
+
+def payload_sets_pack_link(data):
+    """True when the body includes parent-child pack link fields."""
+    if not isinstance(data, dict):
+        return False
+    return any(field in data for field in PACK_LINK_FIELDS)
+
+
+def submitted_pack_link_differs(product, data):
+    """True when submitted pack-link fields would change stored values."""
+    if not isinstance(data, dict) or product is None:
+        return False
+    if 'conversion_factor' in data and _factor_differs(
+        data['conversion_factor'], product.conversion_factor
+    ):
+        return True
+    if 'is_parent_bulk' in data and _as_bool(data['is_parent_bulk']) != bool(
+        product.is_parent_bulk
+    ):
+        return True
+    if 'parent_bulk_product' in data and _parent_id_differs(
+        data['parent_bulk_product'], product.parent_bulk_product_id
+    ):
+        return True
+    return False
+
+
+def create_payload_sets_pack_link(data):
+    """True when create body would set a pack link away from defaults."""
+    if not isinstance(data, dict):
+        return False
+    if 'conversion_factor' in data and data['conversion_factor'] not in (None, ''):
+        return True
+    if 'parent_bulk_product' in data and data['parent_bulk_product'] not in (None, ''):
+        return True
+    if 'is_parent_bulk' in data and _as_bool(data['is_parent_bulk']):
+        return True
     return False
 
 

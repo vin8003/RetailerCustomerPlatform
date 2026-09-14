@@ -40,9 +40,12 @@ from products.inventory_adjust import (
     bulk_items_set_on_hand_quantity,
     bulk_items_would_change_on_hand,
     bulk_write_quantity,
+    create_payload_sets_pack_link,
     payload_sets_on_hand_quantity,
+    payload_sets_pack_link,
     require_inventory_adjust,
     submitted_on_hand_differs,
+    submitted_pack_link_differs,
 )
 
 logger = logging.getLogger(__name__)
@@ -511,12 +514,21 @@ def create_product(request):
             )
 
         try:
-            retailer = RetailerProfile.objects.get(user=request.user)
+            retailer = RetailerProfile.objects.select_related('organization').get(
+                user=request.user
+            )
         except RetailerProfile.DoesNotExist:
             return Response(
                 {'error': 'Retailer profile not found'},
                 status=status.HTTP_404_NOT_FOUND
             )
+
+        if create_payload_sets_pack_link(request.data):
+            adjust_err = require_inventory_adjust(
+                request.user, organization=retailer.organization
+            )
+            if adjust_err is not None:
+                return adjust_err
 
         serializer = ProductCreateSerializer(
             data=request.data,
@@ -634,7 +646,10 @@ def update_product(request, product_id):
             retailer = None
 
         if retailer is None:
-            if payload_sets_on_hand_quantity(request.data):
+            if (
+                payload_sets_on_hand_quantity(request.data)
+                or payload_sets_pack_link(request.data)
+            ):
                 adjust_err = require_inventory_adjust(request.user)
                 if adjust_err is not None:
                     return adjust_err
@@ -655,10 +670,14 @@ def update_product(request, product_id):
                 )
             old_quantity = product.quantity
 
-            if (
+            needs_adjust = (
                 payload_sets_on_hand_quantity(request.data)
                 and submitted_on_hand_differs(product, request.data)
-            ):
+            ) or (
+                payload_sets_pack_link(request.data)
+                and submitted_pack_link_differs(product, request.data)
+            )
+            if needs_adjust:
                 adjust_err = require_inventory_adjust(
                     request.user, organization=retailer.organization
                 )
