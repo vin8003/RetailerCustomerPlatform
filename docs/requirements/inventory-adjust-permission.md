@@ -4,16 +4,16 @@
 - **Implementation:** EXTEND (permission catalog + product update/bulk gate)
 - **Depends on:** [shop-staff-roles.md](shop-staff-roles.md) (`inventory.adjust` in the versioned catalog)
 
-Cashiers must not type a new on-hand number on product update or bulk update. Shop **owners** (implicit full catalog) and anyone granted `inventory.adjust` still can. Sale and purchase continue to change quantity through their existing dual-write paths (`Product.quantity` + `ProductInventoryLog`).
+Cashiers must not type a **new** on-hand number on product update or bulk update. Echoing the current quantity (typical full-object product save) does **not** require the perm. Shop **owners** (implicit full catalog) and anyone granted `inventory.adjust` can still change on-hand. Sale and purchase continue to change quantity through their existing dual-write paths (`Product.quantity` + `ProductInventoryLog`).
 
-There is no `StockMovement` ledger cutover in this slice (OE-263 / OE-185 stay backlog).
+`create_product` and Excel/CSV upload are not gated here (next thin slice). There is no `StockMovement` ledger cutover (OE-263 / OE-185 stay backlog).
 
 ## API
 
 | Method | Path | When the body sets on-hand | Who |
 |--------|------|----------------------------|-----|
-| PUT/PATCH | `/api/products/<id>/update/` | `quantity` or `batches[].quantity` | `inventory.adjust` or **403** |
-| PATCH | `/api/products/bulk-update/` | any `items[].quantity` | `inventory.adjust` or **403** (nothing applied) |
+| PUT/PATCH | `/api/products/<id>/update/` | `quantity` or `batches[].quantity` **differs** from stored | `inventory.adjust` or **403** |
+| PATCH | `/api/products/bulk-update/` | any `items[].quantity` **differs** from stored | `inventory.adjust` or **403** (nothing applied) |
 
 Price, name, and other non-qty fields are unchanged: they do not require `inventory.adjust`.
 

@@ -14,12 +14,14 @@ from products.admin import ProductInventoryLogAdmin
 from products.inventory_adjust import (
     PERM_INVENTORY_ADJUST,
     bulk_items_set_on_hand_quantity,
+    bulk_items_would_change_on_hand,
     payload_sets_on_hand_quantity,
+    submitted_on_hand_differs,
 )
+from retailers.permissions_catalog import ALL_PERMISSION_CODES, ROLE_SLUG_ADMIN, ROLE_SLUG_CASHIER
 from products.models import Product, ProductBatch, ProductCategory, ProductInventoryLog
 from retailers.models import OrgRole, OrgStaffMembership, RetailerProfile
 from retailers.organization import ensure_organization_for_profile
-from retailers.permissions_catalog import ROLE_SLUG_CASHIER
 
 
 def _make_retailer(username, shop_name):
@@ -121,9 +123,63 @@ class TestOnHandPayloadHelpers:
             [{"id": 1, "price": "8.00"}]
         ) is False
 
+    def test_echoed_quantity_is_not_a_change(self):
+        product = type("P", (), {"quantity": Decimal("50.000")})()
+        assert submitted_on_hand_differs(product, {"quantity": 50}) is False
+        assert submitted_on_hand_differs(product, {"quantity": "50.000"}) is False
+        assert submitted_on_hand_differs(product, {"quantity": 51}) is True
+        assert submitted_on_hand_differs(product, {"price": "9.00"}) is False
+
+    def test_bulk_echo_is_not_a_change(self):
+        product = type("P", (), {"quantity": Decimal("15.000")})()
+        assert bulk_items_would_change_on_hand(
+            [{"id": 1, "quantity": 15}], {1: product}
+        ) is False
+        assert bulk_items_would_change_on_hand(
+            [{"id": 1, "quantity": 16}], {1: product}
+        ) is True
+
 
 @pytest.mark.django_db
 class TestInventoryAdjustGate:
+    def test_cashier_with_location_cannot_patch_quantity(self, api_client):
+        owner, shop = _make_retailer("oe127_own_locden", "OE127 Loc Deny Shop")
+        org = shop.organization
+        cashier = _make_staff(org, "oe127_cashier_locden", [])
+        cashier_shop = _make_location_profile(cashier, org, "OE127 Cashier Deny Loc")
+        product = _make_product(cashier_shop, name="Loc Deny Rice", quantity=50)
+
+        api_client.force_authenticate(user=cashier)
+        response = api_client.patch(
+            reverse("update_product", args=[product.id]),
+            {"quantity": 999, "price": "88.00"},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        product.refresh_from_db()
+        assert product.quantity == 50
+        assert product.price == Decimal("90.00")
+
+    def test_cashier_echoing_current_quantity_can_patch_price(self, api_client):
+        owner, shop = _make_retailer("oe127_own_echo", "OE127 Echo Shop")
+        org = shop.organization
+        cashier = _make_staff(org, "oe127_cashier_echo", [])
+        cashier_shop = _make_location_profile(cashier, org, "OE127 Echo Loc")
+        product = _make_product(cashier_shop, name="Echo Rice", quantity=50)
+
+        api_client.force_authenticate(user=cashier)
+        response = api_client.patch(
+            reverse("update_product", args=[product.id]),
+            {"quantity": 50, "price": "88.00"},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        product.refresh_from_db()
+        assert product.quantity == 50
+        assert product.price == Decimal("88.00")
+
     def test_cashier_cannot_patch_quantity(self, api_client):
         owner, shop = _make_retailer("oe127_own_den", "OE127 Deny Shop")
         product = _make_product(shop, quantity=50)
@@ -248,9 +304,43 @@ class TestInventoryAdjustGate:
             format="json",
         )
 
-        assert response.status_code != status.HTTP_200_OK
+        assert response.status_code == status.HTTP_404_NOT_FOUND
         product.refresh_from_db()
         assert product.quantity == 40
+
+    def test_stale_admin_role_can_still_adjust_after_bootstrap(self, api_client):
+        owner, shop = _make_retailer("oe127_own_stale", "OE127 Stale Admin Shop")
+        org = shop.organization
+        admin_role = OrgRole.objects.get(organization=org, slug=ROLE_SLUG_ADMIN)
+        admin_role.permissions = [
+            code for code in ALL_PERMISSION_CODES if code != PERM_INVENTORY_ADJUST
+        ]
+        admin_role.save(update_fields=["permissions", "updated_at"])
+        staff = User.objects.create_user(
+            username="oe127_stale_admin",
+            email="oe127_stale_admin@test.com",
+            password="TestPass123!",
+            user_type="retailer",
+            is_active=True,
+        )
+        OrgStaffMembership.objects.create(
+            organization=org, user=staff, role=admin_role, is_active=True
+        )
+        staff_shop = _make_location_profile(staff, org, "OE127 Stale Loc")
+        product = _make_product(staff_shop, name="Stale Rice", quantity=11)
+
+        api_client.force_authenticate(user=staff)
+        response = api_client.patch(
+            reverse("update_product", args=[product.id]),
+            {"quantity": 14},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        product.refresh_from_db()
+        assert product.quantity == 14
+        admin_role.refresh_from_db()
+        assert PERM_INVENTORY_ADJUST in admin_role.permissions
 
     def test_cashier_cannot_bulk_set_quantity(self, api_client):
         owner, shop = _make_retailer("oe127_own_bulk", "OE127 Bulk Shop")
@@ -270,6 +360,69 @@ class TestInventoryAdjustGate:
         product.refresh_from_db()
         assert product.quantity == 15
         assert not RetailerProfile.objects.filter(user=cashier).exists()
+
+    def test_cashier_location_cannot_bulk_set_quantity(self, api_client):
+        owner, shop = _make_retailer("oe127_own_bulkloc", "OE127 Bulk Loc Shop")
+        org = shop.organization
+        cashier = _make_staff(org, "oe127_cashier_bulkloc", [])
+        cashier_shop = _make_location_profile(cashier, org, "OE127 Bulk Loc")
+        product = _make_product(cashier_shop, name="Bulk Loc Rice", quantity=15)
+
+        api_client.force_authenticate(user=cashier)
+        response = api_client.patch(
+            reverse("bulk_update_products"),
+            {"items": [{"id": product.id, "quantity": 400}]},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        product.refresh_from_db()
+        assert product.quantity == 15
+
+    def test_cashier_bulk_price_only_succeeds(self, api_client):
+        owner, shop = _make_retailer("oe127_own_bprice", "OE127 Bulk Price Shop")
+        org = shop.organization
+        cashier = _make_staff(org, "oe127_cashier_bprice", [])
+        cashier_shop = _make_location_profile(cashier, org, "OE127 Bulk Price Loc")
+        product = _make_product(cashier_shop, name="Bulk Price Rice", quantity=15)
+
+        api_client.force_authenticate(user=cashier)
+        response = api_client.patch(
+            reverse("bulk_update_products"),
+            {"items": [{"id": product.id, "price": "71.00"}]},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        product.refresh_from_db()
+        assert product.price == Decimal("71.00")
+        assert product.quantity == 15
+
+    def test_mixed_bulk_quantity_applies_nothing(self, api_client):
+        owner, shop = _make_retailer("oe127_own_mixed", "OE127 Mixed Bulk Shop")
+        org = shop.organization
+        cashier = _make_staff(org, "oe127_cashier_mixed", [])
+        cashier_shop = _make_location_profile(cashier, org, "OE127 Mixed Loc")
+        priced = _make_product(cashier_shop, name="Mixed Price Rice", quantity=8)
+        qty_item = _make_product(cashier_shop, name="Mixed Qty Rice", quantity=9)
+
+        api_client.force_authenticate(user=cashier)
+        response = api_client.patch(
+            reverse("bulk_update_products"),
+            {
+                "items": [
+                    {"id": priced.id, "price": "60.00"},
+                    {"id": qty_item.id, "quantity": 90},
+                ]
+            },
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        priced.refresh_from_db()
+        qty_item.refresh_from_db()
+        assert priced.price == Decimal("90.00")
+        assert qty_item.quantity == 9
 
     def test_owner_can_bulk_set_quantity(self, api_client):
         owner, shop = _make_retailer("oe127_own_bulkok", "OE127 Bulk OK Shop")
@@ -294,6 +447,8 @@ class TestInventoryAdjustGate:
         product = _make_product(shop, quantity=50)
         api_client.force_authenticate(user=owner)
 
+        # Owner path: profile+org JOIN, select_for_update product, inventory
+        # log insert, offer prefetch, and ProductDetailSerializer reads.
         with django_assert_num_queries(20):
             response = api_client.patch(
                 reverse("update_product", args=[product.id]),
