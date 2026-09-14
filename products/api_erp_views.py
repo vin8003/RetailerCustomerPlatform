@@ -221,6 +221,10 @@ def create_pos_order(request):
         pos_items = []
         for i, item in enumerate(items_data):
             product = Product.objects.get(id=item['product_id'], retailer=retailer)
+            if not product.is_active or not product.is_available:
+                raise ValueError(
+                    f"Product '{product.name}' (id={product.id}) is inactive or unavailable and cannot be sold."
+                )
             batch_id = item.get('batch_id')
             batch = None
             if batch_id:
