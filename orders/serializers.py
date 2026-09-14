@@ -506,6 +506,7 @@ class OrderCreateSerializer(serializers.Serializer):
     payment_mode = serializers.ChoiceField(choices=Order.PAYMENT_MODE_CHOICES)
     special_instructions = serializers.CharField(required=False, allow_blank=True)
     use_reward_points = serializers.BooleanField(required=False, default=False)
+    redeem_otp = serializers.CharField(required=False, allow_blank=True, write_only=True)
     fulfillment_slot_start = serializers.DateTimeField(required=False, allow_null=True)
     
     def validate_retailer_id(self, value):
@@ -671,6 +672,33 @@ class OrderCreateSerializer(serializers.Serializer):
             except FulfillmentSlotError as exc:
                 raise serializers.ValidationError({'fulfillment_slot_start': str(exc)}) from exc
 
+        if data.get('use_reward_points'):
+            from customers.loyalty_redeem import peek_redeem_otp
+            from customers.models import CustomerLoyalty
+            from retailers.models import RetailerRewardConfig
+
+            customer = self.context['customer']
+            try:
+                retailer = RetailerProfile.objects.get(id=data.get('retailer_id'))
+            except RetailerProfile.DoesNotExist:
+                retailer = None
+            if retailer is not None:
+                config = RetailerRewardConfig.objects.filter(retailer=retailer).first()
+                has_points = CustomerLoyalty.objects.filter(
+                    customer=customer, retailer=retailer, points__gt=0
+                ).exists()
+                if (
+                    config
+                    and config.is_active
+                    and config.otp_required_for_redeem
+                    and has_points
+                ):
+                    ok, err = peek_redeem_otp(
+                        customer, retailer, data.get('redeem_otp')
+                    )
+                    if not ok:
+                        raise serializers.ValidationError({'redeem_otp': err})
+
         return data
     
     def create(self, validated_data):
@@ -723,43 +751,21 @@ class OrderCreateSerializer(serializers.Serializer):
         points_to_redeem = 0
         
         if validated_data.get('use_reward_points', False):
-            from retailers.models import RetailerRewardConfig
+            from customers.loyalty_redeem import redeem_points_and_discount
             from customers.models import CustomerLoyalty
+            from retailers.models import RetailerRewardConfig
             
-            # Get retailer config
             config = RetailerRewardConfig.objects.filter(retailer=retailer).first()
-            
-            # Get user points for this retailer
             try:
                 loyalty = CustomerLoyalty.objects.get(customer=customer, retailer=retailer)
                 user_points = loyalty.points
             except CustomerLoyalty.DoesNotExist:
                 user_points = 0
-            
-            if config and config.is_active and user_points > 0:
-                import math
-                
-                # 1. Percentage limit
-                max_by_percent = (total_amount * config.max_reward_usage_percent) / 100
-                
-                # 2. Flat limit
-                max_by_flat = config.max_reward_usage_flat
-                
-                # Max allowed discount (before considering user balance)
-                max_allowed_discount = min(total_amount, max_by_percent, max_by_flat)
-                
-                # Convert max allowed discount into max allowed points (must be whole)
-                max_allowed_points = int(math.floor(max_allowed_discount / config.conversion_rate))
-                
-                # Available points (must be whole)
-                available_whole_points = int(math.floor(user_points))
-                
-                # Actual points to redeem
-                points_to_redeem = min(available_whole_points, max_allowed_points)
-                
-                if points_to_redeem > 0:
-                    discount_from_points = Decimal(str(points_to_redeem)) * config.conversion_rate
-                    total_amount -= discount_from_points
+            points_to_redeem, discount_from_points = redeem_points_and_discount(
+                total_amount, config, user_points
+            )
+            if points_to_redeem > 0:
+                total_amount -= discount_from_points
         
         # Check minimum order amount
         if total_amount < retailer.minimum_order_amount:
@@ -895,23 +901,53 @@ class OrderCreateSerializer(serializers.Serializer):
                 ProductInventoryLog.objects.bulk_create(logs_to_create)
 
             if points_to_redeem > 0:
+                from customers.loyalty_redeem import (
+                    consume_redeem_otp,
+                    redeem_points_and_discount,
+                )
                 from customers.models import CustomerLoyalty, LoyaltyTransaction
-                try:
-                    loyalty = CustomerLoyalty.objects.get(customer=customer, retailer=retailer)
-                    loyalty.points -= points_to_redeem
-                    loyalty.save()
-                    
-                    # Log redemption transaction
-                    LoyaltyTransaction.objects.create(
-                        customer=customer,
-                        retailer=retailer,
-                        amount=points_to_redeem,
-                        transaction_type='redeem',
-                        description=f"Redeemed on order #{order.order_number}"
+                from retailers.models import RetailerRewardConfig as RewardConfig
+
+                # Lock first (same order as staff redeem). Consume OTP only
+                # when the locked wallet can still support a burn.
+                redeem_config = RewardConfig.objects.filter(retailer=retailer).first()
+                loyalty = (
+                    CustomerLoyalty.objects.select_for_update()
+                    .filter(customer=customer, retailer=retailer)
+                    .first()
+                )
+                user_points = loyalty.points if loyalty is not None else Decimal('0')
+                locked_points, _locked_discount = redeem_points_and_discount(
+                    items_total + delivery_fee, redeem_config, user_points
+                )
+                if (
+                    loyalty is None
+                    or locked_points <= 0
+                    or locked_points < points_to_redeem
+                ):
+                    raise serializers.ValidationError(
+                        {'use_reward_points': 'Not enough reward points'}
                     )
-                except CustomerLoyalty.DoesNotExist:
-                    # Should not happen given validation above, but safe handle
-                    pass
+                if (
+                    redeem_config
+                    and redeem_config.is_active
+                    and redeem_config.otp_required_for_redeem
+                ):
+                    ok, err = consume_redeem_otp(
+                        customer, retailer, validated_data.get('redeem_otp')
+                    )
+                    if not ok:
+                        raise serializers.ValidationError({'redeem_otp': err})
+                loyalty.points -= points_to_redeem
+                loyalty.save()
+
+                LoyaltyTransaction.objects.create(
+                    customer=customer,
+                    retailer=retailer,
+                    amount=points_to_redeem,
+                    transaction_type='redeem',
+                    description=f"Redeemed on order #{order.order_number}"
+                )
             
             # Clear cart
             cart.items.all().delete()

@@ -771,6 +771,10 @@ class RetailerRewardConfig(models.Model):
     max_reward_usage_percent = models.DecimalField(max_digits=5, decimal_places=2, default=50.0)
     max_reward_usage_flat = models.DecimalField(max_digits=10, decimal_places=2, default=500.0)
     conversion_rate = models.DecimalField(max_digits=10, decimal_places=2, default=1.0)
+    otp_required_for_redeem = models.BooleanField(
+        default=False,
+        help_text='When true, point burn requires a one-time code on the customer mobile.',
+    )
     
     # Referral settings
     is_referral_enabled = models.BooleanField(default=False)
