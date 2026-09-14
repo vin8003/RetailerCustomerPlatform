@@ -76,6 +76,10 @@ class RetailerProfile(models.Model):
     timezone = models.CharField(max_length=50, default='Asia/Kolkata')
     receipt_footer = models.TextField(blank=True, help_text="Custom message at the bottom of thermal receipts")
     show_gst_on_receipt = models.BooleanField(default=True)
+    print_upi_qr_on_receipt = models.BooleanField(
+        default=False,
+        help_text="Print exact-amount UPI QR code on thermal receipts",
+    )
     printer_size = models.CharField(
         max_length=10,
         choices=[('80mm', '80mm (Standard)'), ('58mm', '58mm (Compact)')],

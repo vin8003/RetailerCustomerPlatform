@@ -514,8 +514,9 @@ class TestOrderDetailPrintFields:
         from retailers.models import RetailerCustomerMapping, CustomerLedger
         from orders.models import Order, OrderItem
         
-        # Configure printer size
+        # Configure printer size and receipt QR toggle
         retailer.printer_size = '58mm'
+        retailer.print_upi_qr_on_receipt = True
         retailer.save()
         
         # Configure product original_price (MRP)
@@ -561,6 +562,7 @@ class TestOrderDetailPrintFields:
         res = api_client.get(url)
         assert res.status_code == status.HTTP_200_OK
         assert res.data['retailer_printer_size'] == '58mm'
+        assert res.data['retailer_print_upi_qr'] is True
         assert res.data['items'][0]['mrp'] == 150.0
         assert res.data['ledger_new_balance'] == 250.0
         assert res.data['ledger_previous_balance'] == 130.0

@@ -243,6 +243,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     retailer_gst_number = serializers.CharField(source='retailer.gst_number', read_only=True)
     retailer_receipt_footer = serializers.CharField(source='retailer.receipt_footer', read_only=True)
     retailer_show_gst = serializers.BooleanField(source='retailer.show_gst_on_receipt', read_only=True)
+    retailer_print_upi_qr = serializers.BooleanField(source='retailer.print_upi_qr_on_receipt', read_only=True)
     retailer_printer_size = serializers.CharField(source='retailer.printer_size', read_only=True)
     ledger_previous_balance = serializers.SerializerMethodField()
     ledger_new_balance = serializers.SerializerMethodField()
@@ -283,7 +284,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'special_instructions', 'cancellation_reason', 'cancelled_by', 
             'payment_reference_id', 'payment_status', 'payment_edit_count', 'is_payment_locked',
             'cash_amount', 'upi_amount', 'card_amount', 'credit_amount',
-            'delivery_address_text', 'retailer_gst_number', 'retailer_receipt_footer', 'retailer_show_gst', 'retailer_printer_size',
+            'delivery_address_text', 'retailer_gst_number', 'retailer_receipt_footer', 'retailer_show_gst', 'retailer_print_upi_qr', 'retailer_printer_size',
             'ledger_previous_balance', 'ledger_new_balance',
             'credit_limit', 'current_balance',
             'delivery_latitude', 'delivery_longitude',
