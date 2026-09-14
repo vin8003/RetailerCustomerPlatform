@@ -46,6 +46,22 @@ def require_retailer_crm_access(user):
     return require_module_enabled(user, 'customers')
 
 
+def is_export_requested(query_params):
+    raw = query_params.get('export', '')
+    if raw is True:
+        return True
+    return str(raw).lower() in ('1', 'true', 'yes')
+
+
+def require_history_export_permission(user, organization):
+    """Full history uses closest catalog code: orders.read."""
+    from retailers.organization import user_has_org_permission
+
+    if user_has_org_permission(user, organization, PERM_HISTORY_EXPORT):
+        return None
+    return _permission_denied_response()
+
+
 def parse_lookup_phone(raw):
     """
     Return last-10 digits or an error Response.

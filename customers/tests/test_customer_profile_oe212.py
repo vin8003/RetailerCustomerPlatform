@@ -14,9 +14,17 @@ from authentication.models import User
 from customers.models import CustomerProfile
 from orders.models import Order, OrderItem
 from products.models import Product, ProductBrand, ProductCategory
-from retailers.models import OrgModuleFlags, RetailerCustomerMapping, RetailerProfile
+from retailers.models import (
+    OrgModuleFlags,
+    OrgRole,
+    OrgStaffMembership,
+    RetailerCustomerMapping,
+    RetailerProfile,
+)
 from retailers.module_flags_catalog import ERROR_CODE_MODULE_DISABLED
 from retailers.organization import ensure_organization_for_profile
+from retailers.permissions_catalog import ROLE_SLUG_CASHIER
+from customers.crm import PERM_HISTORY_EXPORT
 
 
 def _make_retailer(username, shop_name):
@@ -38,6 +46,30 @@ def _make_retailer(username, shop_name):
     )
     ensure_organization_for_profile(profile, name=f"{shop_name} Org")
     return user, profile
+
+
+def _make_staff(org, username, permissions):
+    user = User.objects.create_user(
+        username=username,
+        email=f"{username}@test.com",
+        password="TestPass123!",
+        user_type="retailer",
+        is_active=True,
+    )
+    role = OrgRole.objects.create(
+        organization=org,
+        slug=f"role_{username}",
+        name=f"Role {username}",
+        permissions=list(permissions),
+        is_system=False,
+    )
+    OrgStaffMembership.objects.create(
+        organization=org,
+        user=user,
+        role=role,
+        is_active=True,
+    )
+    return user
 
 
 def _make_customer(username, phone="9988776655"):
@@ -255,7 +287,118 @@ class TestPhoneLookupAuthAndTenancy:
         url = reverse(LOOKUP_URL)
         # Warm org / module-flag rows so the budget is the hot path.
         api_client.get(url, {"phone": "9000002108"})
-        with django_assert_num_queries(6):
+        with django_assert_num_queries(5):
             resp = api_client.get(url, {"phone": "9000002108"})
         assert resp.status_code == status.HTTP_200_OK
         assert len(resp.data["recent_orders"]) == 2
+
+
+@pytest.mark.django_db
+class TestHistoryExportGate:
+    def test_owner_export_returns_paginated_full_history(self, api_client):
+        owner, profile = _make_retailer("oe212_exp_owner", "OE212 Export Shop")
+        customer = _make_customer("oe212_exp_cust", phone="9000002110")
+        product = _product(profile)
+        RetailerCustomerMapping.objects.create(retailer=profile, customer=customer)
+        for _ in range(22):
+            _order(customer, profile, product, source="app")
+        _order(customer, profile, product, source="pos")
+
+        api_client.force_authenticate(user=owner)
+        resp = api_client.get(
+            reverse(LOOKUP_URL),
+            {"phone": "9000002110", "export": "1", "page_size": 20},
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.data["customer"]["customer_id"] == customer.id
+        assert resp.data["count"] == 23
+        assert len(resp.data["results"]) == 20
+        sources = {row["source"] for row in resp.data["results"]}
+        assert "app" in sources
+        page2 = api_client.get(
+            reverse(LOOKUP_URL),
+            {"phone": "9000002110", "export": "1", "page": 2, "page_size": 20},
+        )
+        assert page2.status_code == status.HTTP_200_OK
+        assert len(page2.data["results"]) == 3
+
+    def test_staff_without_orders_read_cannot_export(self, api_client):
+        owner, profile = _make_retailer("oe212_exp_deny_owner", "OE212 Export Deny")
+        customer = _make_customer("oe212_exp_deny_cust", phone="9000002111")
+        product = _product(profile)
+        mapping = RetailerCustomerMapping.objects.create(
+            retailer=profile,
+            customer=customer,
+            current_balance=Decimal("40.00"),
+        )
+        order = _order(customer, profile, product, source="pos")
+        staff = _make_staff(profile.organization, "oe212_exp_cashier", [])
+        cashier_role = OrgRole.objects.get(
+            organization=profile.organization, slug=ROLE_SLUG_CASHIER
+        )
+        assert PERM_HISTORY_EXPORT not in (cashier_role.permissions or [])
+
+        api_client.force_authenticate(user=staff)
+        lookup = api_client.get(reverse(LOOKUP_URL), {"phone": "9000002111"})
+        assert lookup.status_code == status.HTTP_200_OK
+        assert lookup.data["customer_id"] == customer.id
+
+        resp = api_client.get(
+            reverse(LOOKUP_URL), {"phone": "9000002111", "export": "1"}
+        )
+        assert resp.status_code == status.HTTP_403_FORBIDDEN
+        assert "results" not in resp.data
+        assert "customer" not in resp.data
+        mapping.refresh_from_db()
+        assert mapping.current_balance == Decimal("40.00")
+        assert Order.objects.filter(id=order.id).exists()
+
+    def test_staff_with_orders_read_can_export(self, api_client):
+        owner, profile = _make_retailer("oe212_exp_ok_owner", "OE212 Export OK")
+        customer = _make_customer("oe212_exp_ok_cust", phone="9000002112")
+        product = _product(profile)
+        RetailerCustomerMapping.objects.create(retailer=profile, customer=customer)
+        _order(customer, profile, product, source="app")
+        staff = _make_staff(
+            profile.organization, "oe212_exp_reader", [PERM_HISTORY_EXPORT]
+        )
+
+        api_client.force_authenticate(user=staff)
+        resp = api_client.get(
+            reverse(LOOKUP_URL), {"phone": "9000002112", "export": "true"}
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.data["count"] == 1
+        assert resp.data["results"][0]["source"] == "app"
+
+    def test_cross_tenant_export_is_404(self, api_client):
+        owner_a, profile_a = _make_retailer("oe212_exp_a", "OE212 Exp A")
+        owner_b, _profile_b = _make_retailer("oe212_exp_b", "OE212 Exp B")
+        customer = _make_customer("oe212_exp_shared", phone="9000002113")
+        product = _product(profile_a)
+        RetailerCustomerMapping.objects.create(retailer=profile_a, customer=customer)
+        order = _order(customer, profile_a, product, source="app")
+
+        api_client.force_authenticate(user=owner_b)
+        resp = api_client.get(
+            reverse(LOOKUP_URL), {"phone": "9000002113", "export": "1"}
+        )
+        assert resp.status_code == status.HTTP_404_NOT_FOUND
+        assert "results" not in resp.data
+        assert Order.objects.filter(id=order.id, retailer=profile_a).exists()
+
+    def test_export_query_budget(self, api_client, django_assert_num_queries):
+        owner, profile = _make_retailer("oe212_exp_q", "OE212 Exp Query")
+        customer = _make_customer("oe212_exp_q_cust", phone="9000002114")
+        product = _product(profile)
+        RetailerCustomerMapping.objects.create(retailer=profile, customer=customer)
+        _order(customer, profile, product, source="pos")
+        _order(customer, profile, product, source="app")
+
+        api_client.force_authenticate(user=owner)
+        url = reverse(LOOKUP_URL)
+        api_client.get(url, {"phone": "9000002114", "export": "1"})
+        with django_assert_num_queries(6):
+            resp = api_client.get(url, {"phone": "9000002114", "export": "1"})
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.data["count"] == 2
