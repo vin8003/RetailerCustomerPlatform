@@ -52,3 +52,14 @@ def upsert_order_delivery(
         defaults=defaults,
     )
     return delivery
+
+
+def mark_order_delivery_failed(order: Order) -> int:
+    """
+    Set OrderDelivery.delivery_status='failed' when a delivery row exists.
+
+    Shop close-out only (OE-281). No-op when the order has no delivery row.
+    """
+    from orders.models import OrderDelivery
+
+    return OrderDelivery.objects.filter(order=order).update(delivery_status='failed')
