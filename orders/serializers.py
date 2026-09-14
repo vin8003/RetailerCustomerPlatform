@@ -625,13 +625,15 @@ class OrderCreateSerializer(serializers.Serializer):
                     }
                 master_product_demand[master.id]['demand'] += qty_in_parent_units
                 
-        # Check if any master product demand exceeds its available stock
+        # Check if any master product demand exceeds saleable stock
+        # (expired lots are listed on Product.quantity but cannot be sold).
         for m_id, info in master_product_demand.items():
             master = info['master']
             demand = info['demand']
-            if demand > master.quantity:
+            available = master.saleable_quantity()
+            if demand > available:
                 raise serializers.ValidationError(
-                    f"Total combined cart items require {demand} of '{master.name}', but only {master.quantity} is available."
+                    f"Total combined cart items require {demand} of '{master.name}', but only {available} is available."
                 )
 
         slot_start = data.get('fulfillment_slot_start')
@@ -861,8 +863,11 @@ class OrderCreateSerializer(serializers.Serializer):
                 # Reduce product quantity (only if tracked) and log it
                 if cart_item.product.track_inventory:
                     prev_qty = cart_item.product.quantity
-                    cart_item.product.reduce_quantity(quantity)
-                    new_qty = prev_qty - quantity
+                    if not cart_item.product.reduce_quantity(quantity):
+                        raise serializers.ValidationError(
+                            f"Not enough saleable stock for {cart_item.product.name}"
+                        )
+                    new_qty = cart_item.product.quantity
                     
                     from products.models import ProductInventoryLog
                     logs_to_create.append(ProductInventoryLog(
@@ -1254,7 +1259,8 @@ class OrderModificationSerializer(serializers.Serializer):
                                       # Need more
                                       if not item.product.can_order_quantity(diff):
                                           raise serializers.ValidationError(f"Not enough stock for {item.product_name}")
-                                      item.product.reduce_quantity(diff)
+                                      if not item.product.reduce_quantity(diff):
+                                          raise serializers.ValidationError(f"Not enough saleable stock for {item.product_name}")
                                       log_type = 'sold'
                                       change_val = -diff
                                       new_qty = prev_qty - diff
@@ -1300,8 +1306,9 @@ class OrderModificationSerializer(serializers.Serializer):
                     
                     # Reduce stock
                     prev_qty = product.quantity
-                    product.reduce_quantity(quantity)
-                    new_qty = prev_qty - quantity
+                    if not product.reduce_quantity(quantity):
+                        raise serializers.ValidationError(f"Not enough saleable stock for {product.name}")
+                    new_qty = product.quantity
                     
                     logs_to_create.append(ProductInventoryLog(
                         product=product,

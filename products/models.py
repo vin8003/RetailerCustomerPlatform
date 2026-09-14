@@ -510,17 +510,31 @@ class Product(models.Model):
                 return False
             return batch.quantity >= quantity
 
+        return quantity <= self.saleable_quantity()
+
+    def saleable_quantity(self):
+        """On-hand that may be sold under the default expiry policy."""
+        if self.parent_bulk_product:
+            if self.conversion_factor and self.conversion_factor > 0:
+                return (
+                    self.parent_bulk_product.saleable_quantity()
+                    / self.conversion_factor
+                )
+            return Decimal('0')
+        if not self.track_inventory:
+            return self.quantity
         if self.has_batches:
-            eligible = (
+            total = (
                 self.batches.filter(is_active=True)
                 .filter(ProductBatch.saleable_q())
-                .aggregate(total=models.Sum('quantity'))['total'] or 0
+                .aggregate(total=models.Sum('quantity'))['total']
             )
-            return quantity <= eligible
+            return total if total is not None else Decimal('0')
+        return self.quantity
 
-        return quantity <= self.quantity
-    
-    def reduce_quantity(self, quantity, batch=None, allow_negative=False):
+    def reduce_quantity(
+        self, quantity, batch=None, allow_negative=False, forbid_expired=True
+    ):
         """Reduce product quantity, prioritizing a specific batch if provided"""
         if not self.track_inventory:
             return True
@@ -530,7 +544,10 @@ class Product(models.Model):
             if self.conversion_factor and self.conversion_factor > 0:
                 parent_qty_needed = Decimal(str(quantity)) * self.conversion_factor
                 success = self.parent_bulk_product.reduce_quantity(
-                    parent_qty_needed, batch=None, allow_negative=allow_negative
+                    parent_qty_needed,
+                    batch=None,
+                    allow_negative=allow_negative,
+                    forbid_expired=forbid_expired,
                 )
                 if success:
                     self.parent_bulk_product.sync_fractional_inventories()
@@ -539,7 +556,7 @@ class Product(models.Model):
             
         if self.has_batches:
             if batch:
-                if batch.is_expired():
+                if forbid_expired and batch.is_expired():
                     return False
                 if allow_negative or batch.quantity >= quantity:
                     batch.quantity -= quantity
@@ -550,37 +567,45 @@ class Product(models.Model):
                 # FIFO: earliest non-null expiry first among saleable qty>0.
                 # Null-expiry batches stay eligible and sort after dated rows.
                 remaining = quantity
-                batches = list(
-                    self.batches.filter(is_active=True, quantity__gt=0)
-                    .filter(ProductBatch.saleable_q())
-                    .order_by(*ProductBatch.fifo_sale_order())
-                )
+                qs = self.batches.filter(is_active=True, quantity__gt=0)
+                if forbid_expired:
+                    qs = qs.filter(ProductBatch.saleable_q())
+                batches = list(qs.order_by(*ProductBatch.fifo_sale_order()))
 
                 if not allow_negative:
                     available = sum((b.quantity for b in batches), Decimal('0'))
                     if available < quantity:
                         return False
 
+                touched = []
                 for b in batches:
                     if remaining <= 0:
                         break
                     reduction = min(b.quantity, remaining)
                     b.quantity -= reduction
-                    b.save()
+                    touched.append(b)
                     remaining -= reduction
 
-                # allow_negative leftover: only a non-expired batch (never expired).
+                # allow_negative leftover: only a saleable batch when policy forbids expired.
                 if remaining > 0 and allow_negative:
-                    latest_batch = (
-                        self.batches.filter(is_active=True)
-                        .filter(ProductBatch.saleable_q())
-                        .order_by('-created_at')
-                        .first()
-                    )
+                    leftover_qs = self.batches.filter(is_active=True)
+                    if forbid_expired:
+                        leftover_qs = leftover_qs.filter(ProductBatch.saleable_q())
+                    latest_batch = leftover_qs.order_by('-created_at').first()
                     if latest_batch:
-                        latest_batch.quantity -= remaining
-                        latest_batch.save()
+                        already = next(
+                            (row for row in touched if row.pk == latest_batch.pk),
+                            None,
+                        )
+                        if already is not None:
+                            already.quantity -= remaining
+                        else:
+                            latest_batch.quantity -= remaining
+                            touched.append(latest_batch)
                         remaining = 0
+
+                if touched:
+                    ProductBatch.objects.bulk_update(touched, ['quantity'])
 
                 self.sync_inventory_from_batches()
                 return remaining <= 0

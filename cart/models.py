@@ -129,8 +129,12 @@ class Cart(models.Model):
                 if product.conversion_factor:
                     total_required_parent_qty += (qty_to_consider * product.conversion_factor)
                     
-        if total_required_parent_qty > master_product.quantity:
-            return False, f"Total combined cart items require {total_required_parent_qty} of {master_product.name}, but only {master_product.quantity} is available."
+        available = master_product.saleable_quantity()
+        if total_required_parent_qty > available:
+            return False, (
+                f"Total combined cart items require {total_required_parent_qty} of "
+                f"{master_product.name}, but only {available} is available."
+            )
             
         return True, ""
 

@@ -9,6 +9,7 @@ from .models import (
     ProductUploadSession, UploadSessionItem,
     PurchaseInvoice, PurchaseItem, SupplierLedger
 )
+from products.inventory_adjust import UNPARSEABLE_EXPIRY, parse_expiry_date
 import logging
 
 logger = logging.getLogger(__name__)
@@ -832,10 +833,12 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
                     'show_on_app': batch_item.get('show_on_app', True),
                 }
                 if 'expiry_date' in batch_item:
-                    raw_expiry = batch_item.get('expiry_date')
-                    batch_fields['expiry_date'] = (
-                        None if raw_expiry in (None, '') else raw_expiry
-                    )
+                    parsed_expiry = parse_expiry_date(batch_item.get('expiry_date'))
+                    if parsed_expiry is UNPARSEABLE_EXPIRY:
+                        raise serializers.ValidationError(
+                            {'batches': 'Invalid expiry_date'}
+                        )
+                    batch_fields['expiry_date'] = parsed_expiry
                 
                 if batch_id:
                     ProductBatch.objects.filter(id=batch_id, product=instance).update(**batch_fields)
@@ -930,6 +933,23 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
             if track_inv and current_quantity > 0 and min_quantity > current_quantity:
                 raise serializers.ValidationError("Minimum order quantity cannot be greater than available quantity")
         
+        batches_data = self.initial_data.get('batches')
+        if isinstance(batches_data, str):
+            import json
+            try:
+                batches_data = json.loads(batches_data)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                batches_data = None
+        if isinstance(batches_data, list):
+            for batch_item in batches_data:
+                if not isinstance(batch_item, dict) or 'expiry_date' not in batch_item:
+                    continue
+                parsed_expiry = parse_expiry_date(batch_item.get('expiry_date'))
+                if parsed_expiry is UNPARSEABLE_EXPIRY:
+                    raise serializers.ValidationError(
+                        {'batches': 'Invalid expiry_date'}
+                    )
+
         max_quantity = data.get('maximum_order_quantity', self.instance.maximum_order_quantity)
         min_quantity_final = data.get('minimum_order_quantity', self.instance.minimum_order_quantity)
         if max_quantity and max_quantity < min_quantity_final:

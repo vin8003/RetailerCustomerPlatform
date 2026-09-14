@@ -159,35 +159,19 @@ class TestExpiryPayloadHelpers:
         ) is False
         assert payload_sets_batch_expiry({"price": "9.00"}) is False
 
-    def test_echoed_expiry_is_not_a_change(self):
+    @pytest.mark.django_db
+    def test_echoed_expiry_is_not_a_change(self, retailer, category):
+        product = _make_batched_product(retailer, category, name="Helper Milk")
         stored = date(2026, 12, 1)
-        product = type("P", (), {})()
-        product.batches = type("B", (), {
-            "filter": lambda *a, **k: [
-                type("Row", (), {"id": 7, "expiry_date": stored})()
-            ]
-        })()
-        # Real helper hits product.batches.filter; use a tiny stub below.
-        class _QS:
-            def __init__(self, rows):
-                self._rows = rows
-
-            def only(self, *fields):
-                return self._rows
-
-        class _Mgr:
-            def filter(self, **kwargs):
-                return _QS([type("Row", (), {"id": 7, "expiry_date": stored})()])
-
-        product.batches = _Mgr()
+        batch = _make_batch(product, "H1", 4, expiry=stored)
         assert submitted_batch_expiry_differs(
-            product, {"batches": [{"id": 7, "expiry_date": "2026-12-01"}]}
+            product, {"batches": [{"id": batch.id, "expiry_date": "2026-12-01"}]}
         ) is False
         assert submitted_batch_expiry_differs(
-            product, {"batches": [{"id": 7, "expiry_date": "2026-12-02"}]}
+            product, {"batches": [{"id": batch.id, "expiry_date": "2026-12-02"}]}
         ) is True
         assert submitted_batch_expiry_differs(
-            product, {"batches": [{"id": 7, "expiry_date": None}]}
+            product, {"batches": [{"id": batch.id, "expiry_date": None}]}
         ) is True
 
     def test_new_batch_with_date_is_a_change_null_is_not(self):
@@ -277,6 +261,29 @@ class TestExpiryStoredAndFifo:
         expired.refresh_from_db()
         assert expired.quantity == Decimal("10.000")
 
+    def test_same_day_expiry_still_sells(self, retailer, category):
+        product = _make_batched_product(retailer, category, name="Today Milk")
+        today_lot = _make_batch(product, "TODAY", 6, expiry=_today())
+        product.sync_inventory_from_batches()
+        assert product.reduce_quantity(Decimal("2")) is True
+        today_lot.refresh_from_db()
+        assert today_lot.quantity == Decimal("4.000")
+
+    def test_return_path_can_decrement_expired_when_allowed(
+        self, retailer, category
+    ):
+        product = _make_batched_product(retailer, category, name="Return Milk")
+        expired = _make_batch(product, "EXP", 5, expiry=_today() - timedelta(days=2))
+        product.sync_inventory_from_batches()
+        assert product.reduce_quantity(
+            Decimal("2"),
+            batch=expired,
+            allow_negative=True,
+            forbid_expired=False,
+        ) is True
+        expired.refresh_from_db()
+        assert expired.quantity == Decimal("3.000")
+
     def test_allow_negative_does_not_consume_expired(
         self, retailer, category
     ):
@@ -298,7 +305,7 @@ class TestExpiryStoredAndFifo:
         _make_batch(product, "NULL", 5, expiry=None)
         product.sync_inventory_from_batches()
 
-        with django_assert_num_queries(9):
+        with django_assert_num_queries(8):
             assert product.reduce_quantity(Decimal("7")) is True
 
 
@@ -419,6 +426,57 @@ class TestExpiryRbacAndTenancy:
         assert response.status_code == status.HTTP_200_OK
         batch.refresh_from_db()
         assert batch.expiry_date.isoformat() == expiry
+
+    def test_cashier_cannot_create_batch_with_expiry(self, api_client):
+        owner, shop = _make_retailer("oe136_own_new", "OE136 New Batch Shop")
+        org = shop.organization
+        cashier = _make_staff(org, "oe136_cashier_new", [])
+        cashier_shop = _make_location_profile(cashier, org, "OE136 New Loc")
+        category = _make_category(cashier_shop, "OE136 New Cat")
+        product = _make_batched_product(cashier_shop, category, name="New Milk")
+        existing = _make_batch(product, "B1", 4, expiry=None)
+
+        api_client.force_authenticate(user=cashier)
+        response = api_client.patch(
+            reverse("update_product", args=[product.id]),
+            {
+                "has_batches": True,
+                "batches": [
+                    {"id": existing.id, "quantity": 4},
+                    {
+                        "batch_number": "B2",
+                        "quantity": 0,
+                        "expiry_date": (_today() + timedelta(days=8)).isoformat(),
+                    },
+                ],
+            },
+            format="json",
+        )
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        assert not ProductBatch.objects.filter(
+            product=product, batch_number="B2"
+        ).exists()
+        existing.refresh_from_db()
+        assert existing.expiry_date is None
+
+    def test_owner_invalid_expiry_is_400(self, api_client):
+        owner, shop = _make_retailer("oe136_own_bad", "OE136 Bad Date Shop")
+        category = _make_category(shop, "OE136 Bad Cat")
+        product = _make_batched_product(shop, category, name="Bad Milk")
+        batch = _make_batch(product, "B1", 3, expiry=None)
+
+        api_client.force_authenticate(user=owner)
+        response = api_client.patch(
+            reverse("update_product", args=[product.id]),
+            {
+                "has_batches": True,
+                "batches": [{"id": batch.id, "quantity": 3, "expiry_date": "not-a-date"}],
+            },
+            format="json",
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        batch.refresh_from_db()
+        assert batch.expiry_date is None
 
     def test_customer_cannot_mutate_expiry(self, api_client, customer):
         owner, shop = _make_retailer("oe136_own_cust", "OE136 Cust Shop")
@@ -542,9 +600,27 @@ class TestExpirySalePaths:
             _pos_payload(product, Decimal("1"), batch=expired),
             format="json",
         )
-        assert response.status_code != status.HTTP_201_CREATED
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
         expired.refresh_from_db()
         assert expired.quantity == Decimal("10.000")
+        assert not Order.objects.filter(retailer=shop, source="pos").exists()
+
+    def test_pos_expired_only_fifo_is_blocked(self, api_client):
+        owner, shop = _make_retailer("oe136_pos_only", "OE136 POS Only Exp Shop")
+        category = _make_category(shop, "OE136 POS Only Cat")
+        product = _make_batched_product(shop, category, name="POS Only Exp")
+        expired = _make_batch(product, "EXP", 8, expiry=_today() - timedelta(days=4))
+        product.sync_inventory_from_batches()
+
+        api_client.force_authenticate(user=owner)
+        response = api_client.post(
+            reverse("create_pos_order"),
+            _pos_payload(product, Decimal("1")),
+            format="json",
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        expired.refresh_from_db()
+        assert expired.quantity == Decimal("8.000")
         assert not Order.objects.filter(retailer=shop, source="pos").exists()
 
     def test_pos_null_expiry_still_sells(self, api_client):
@@ -621,3 +697,80 @@ class TestExpirySalePaths:
         soon.refresh_from_db()
         assert expired.quantity == Decimal("10.000")
         assert soon.quantity == Decimal("7.000")
+
+    @patch("common.notifications.send_push_notification")
+    @patch("common.notifications.send_silent_update")
+    def test_place_order_rejects_expired_only_stock(
+        self, mock_silent, mock_push, api_client, customer, address
+    ):
+        owner, shop = _make_retailer("oe136_chk_exp", "OE136 Checkout Exp Shop")
+        category = _make_category(shop, "OE136 Checkout Exp Cat")
+        product = _make_batched_product(shop, category, name="Chk Exp Milk")
+        expired = _make_batch(product, "EXP", 10, expiry=_today() - timedelta(days=1))
+        product.sync_inventory_from_batches()
+        customer.is_phone_verified = True
+        customer.save(update_fields=["is_phone_verified"])
+        cart = Cart.objects.create(customer=customer, retailer=shop)
+        CartItem.objects.create(
+            cart=cart,
+            product=product,
+            quantity=Decimal("2.000"),
+            unit_price=product.price,
+        )
+
+        api_client.force_authenticate(user=customer)
+        response = api_client.post(
+            reverse("place_order"),
+            {
+                "retailer_id": shop.id,
+                "delivery_mode": "delivery",
+                "payment_mode": "cash",
+                "address_id": address.id,
+            },
+            format="json",
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        expired.refresh_from_db()
+        assert expired.quantity == Decimal("10.000")
+        assert not Order.objects.filter(retailer=shop).exists()
+
+    @patch("common.notifications.send_push_notification")
+    @patch("common.notifications.send_silent_update")
+    def test_place_order_rejects_when_demand_exceeds_saleable(
+        self, mock_silent, mock_push, api_client, customer, address
+    ):
+        owner, shop = _make_retailer("oe136_chk_mix", "OE136 Checkout Mix Shop")
+        category = _make_category(shop, "OE136 Checkout Mix Cat")
+        product = _make_batched_product(shop, category, name="Chk Mix Milk")
+        expired = _make_batch(product, "EXP", 10, expiry=_today() - timedelta(days=1))
+        fresh = _make_batch(product, "FRESH", 4, expiry=_today() + timedelta(days=5))
+        product.sync_inventory_from_batches()
+        assert product.quantity == Decimal("14.000")
+        assert product.saleable_quantity() == Decimal("4.000")
+        customer.is_phone_verified = True
+        customer.save(update_fields=["is_phone_verified"])
+        cart = Cart.objects.create(customer=customer, retailer=shop)
+        CartItem.objects.create(
+            cart=cart,
+            product=product,
+            quantity=Decimal("8.000"),
+            unit_price=product.price,
+        )
+
+        api_client.force_authenticate(user=customer)
+        response = api_client.post(
+            reverse("place_order"),
+            {
+                "retailer_id": shop.id,
+                "delivery_mode": "delivery",
+                "payment_mode": "cash",
+                "address_id": address.id,
+            },
+            format="json",
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        expired.refresh_from_db()
+        fresh.refresh_from_db()
+        assert expired.quantity == Decimal("10.000")
+        assert fresh.quantity == Decimal("4.000")
+        assert not Order.objects.filter(retailer=shop).exists()

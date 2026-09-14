@@ -216,7 +216,12 @@ def create_payload_sets_pack_link(data):
     return False
 
 
-_UNPARSEABLE_DATE = object()
+UNPARSEABLE_EXPIRY = object()
+_UNPARSEABLE_DATE = UNPARSEABLE_EXPIRY
+
+
+def parse_expiry_date(raw):
+    return _parse_expiry_date(raw)
 
 
 def _parse_expiry_date(raw):
@@ -242,6 +247,19 @@ def _expiry_differs(raw, current):
     if current is None:
         return parsed is not None
     return parsed != current
+
+
+def payload_has_invalid_expiry(data):
+    """True when any batches[].expiry_date cannot be parsed as a date."""
+    batches = _parse_batches(data)
+    if not batches:
+        return False
+    return any(
+        isinstance(batch, dict)
+        and 'expiry_date' in batch
+        and _parse_expiry_date(batch.get('expiry_date')) is UNPARSEABLE_EXPIRY
+        for batch in batches
+    )
 
 
 def payload_sets_batch_expiry(data):

@@ -24,11 +24,11 @@ Batches can store an optional expiry date. At sale/pick, FIFO consumes the earli
 
 POS `create_pos_order` and customer `place_order` already call `Product.reduce_quantity` (specific `batch_id` on POS, FIFO when omitted).
 
-Eligible batch: `is_active`, and (`expiry_date` is null **or** `expiry_date >= local today`). Quantity must be `> 0` for the FIFO walk; `allow_negative` leftover may oversell a **saleable** batch only — never an expired one.
+Eligible batch: `is_active`, and (`expiry_date` is null **or** `expiry_date >= timezone.localdate()` — Django `TIME_ZONE`, currently UTC). Quantity must be `> 0` for the FIFO walk; `allow_negative` leftover may oversell a **saleable** batch only — never an expired one.
 
 Sort: `expiry_date ASC NULLS LAST`, then `created_at ASC`.
 
-`Product.quantity` still sums all **active** batches (expired qty can remain on the product total until written off — E16 / OE-141). `can_order_quantity` uses saleable qty so checkout cannot reserve expired-only stock.
+`Product.quantity` still sums all **active** batches (expired qty can remain on the product total until written off — E16 / OE-141). `Product.saleable_quantity()` / `can_order_quantity` exclude expired lots. Customer `place_order` and cart stock checks use saleable qty; a failed `reduce_quantity` aborts the order. Purchase returns pass `forbid_expired=False` so expired lots can still be sent back to the supplier.
 
 ## API
 

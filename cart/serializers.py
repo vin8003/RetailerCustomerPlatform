@@ -92,9 +92,9 @@ class CartItemSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError("Product is not available")
             
             # Check stock availability
-            if product.track_inventory and quantity > product.quantity:
+            if product.track_inventory and quantity > product.saleable_quantity():
                 raise serializers.ValidationError(
-                    f"Only {product.quantity} items available in stock"
+                    f"Only {product.saleable_quantity()} items available in stock"
                 )
         
         return data
@@ -179,15 +179,15 @@ class AddToCartSerializer(serializers.Serializer):
                 if not is_valid:
                     raise serializers.ValidationError(msg)
             else:
-                if product.track_inventory and quantity > product.quantity:
+                if product.track_inventory and quantity > product.saleable_quantity():
                      raise serializers.ValidationError(
-                        f"Only {product.quantity} items available in stock"
+                        f"Only {product.saleable_quantity()} items available in stock"
                     )
         else:
-            if product.track_inventory and quantity > product.quantity:
+            if product.track_inventory and quantity > product.saleable_quantity():
                  raise serializers.ValidationError(
-                    f"Only {product.quantity} items available in stock"
-                )
+                    f"Only {product.saleable_quantity()} items available in stock"
+                 )
         
         # Check if retailer is accepting orders
         if not product.retailer.offers_delivery and not product.retailer.offers_pickup:
@@ -212,11 +212,12 @@ class AddToCartSerializer(serializers.Serializer):
             # Smart Fulfillment: Use cheapest batches first
             remaining = quantity
             # Get active batches that are allowed on app and have stock
+            from products.models import ProductBatch
             batches = product.batches.filter(
-                is_active=True, 
-                show_on_app=True, 
-                quantity__gt=0
-            ).order_by('price', 'created_at')
+                is_active=True,
+                show_on_app=True,
+                quantity__gt=0,
+            ).filter(ProductBatch.saleable_q()).order_by('price', 'created_at')
             
             for batch in batches:
                 if remaining <= 0: break
@@ -238,7 +239,12 @@ class AddToCartSerializer(serializers.Serializer):
             if remaining > 0:
                 # Fallback to FIFO or just the first available batch even if it's over its limit
                 # (The order validation will stop it later if track_inventory is ON)
-                batch = product.batches.filter(is_active=True).order_by('price').first()
+                batch = (
+                    product.batches.filter(is_active=True)
+                    .filter(ProductBatch.saleable_q())
+                    .order_by('price')
+                    .first()
+                )
                 last_item = cart.add_item(product, remaining, batch)
         else:
             # Standard single-price product

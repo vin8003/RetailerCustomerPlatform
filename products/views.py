@@ -41,6 +41,7 @@ from products.inventory_adjust import (
     bulk_items_would_change_on_hand,
     bulk_write_quantity,
     create_payload_sets_pack_link,
+    payload_has_invalid_expiry,
     payload_sets_batch_expiry,
     payload_sets_on_hand_quantity,
     payload_sets_pack_link,
@@ -672,6 +673,12 @@ def update_product(request, product_id):
                     status=status.HTTP_404_NOT_FOUND,
                 )
             old_quantity = product.quantity
+
+            if payload_has_invalid_expiry(request.data):
+                return Response(
+                    {'error': 'Invalid expiry_date'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
             needs_adjust = (
                 payload_sets_on_hand_quantity(request.data)
