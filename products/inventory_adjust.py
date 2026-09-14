@@ -46,6 +46,17 @@ def _qty_differs(raw, current):
     return submitted != Decimal(str(current))
 
 
+def bulk_write_quantity(raw):
+    """int() on-hand ``bulk_update_products`` would assign, or None if skipped."""
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if value < 0:
+        return None
+    return value
+
+
 def payload_sets_on_hand_quantity(data):
     """True when the body includes product or batch on-hand fields."""
     if not isinstance(data, dict):
@@ -100,14 +111,19 @@ def bulk_items_set_on_hand_quantity(items):
 
 
 def bulk_items_would_change_on_hand(items, products_by_id):
-    """True when any bulk item would change that product's stored quantity."""
+    """True when any bulk item would change stored qty the way bulk writes it."""
     if not isinstance(items, list):
         return False
     for item in items:
         if not isinstance(item, dict) or 'quantity' not in item:
             continue
         product = products_by_id.get(item.get('id'))
-        if product is None or _qty_differs(item['quantity'], product.quantity):
+        if product is None:
+            return True
+        new_qty = bulk_write_quantity(item['quantity'])
+        if new_qty is None:
+            continue
+        if product.quantity != new_qty:
             return True
     return False
 

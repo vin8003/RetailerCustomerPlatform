@@ -13,7 +13,11 @@ Cashiers must not type a **new** on-hand number on product update or bulk update
 | Method | Path | When the body sets on-hand | Who |
 |--------|------|----------------------------|-----|
 | PUT/PATCH | `/api/products/<id>/update/` | `quantity` or `batches[].quantity` **differs** from stored | `inventory.adjust` or **403** |
-| PATCH | `/api/products/bulk-update/` | any `items[].quantity` **differs** from stored | `inventory.adjust` or **403** (nothing applied) |
+| PATCH | `/api/products/bulk-update/` | any `items[].quantity` **differs** from stored after the same `int()` write as apply | `inventory.adjust` or **403** (nothing applied) |
+
+Bulk compare uses the same `int()` normalization as the write (echo `10.750` against stored `10.75` is a change — write would truncate to `10`). That compare runs **after** `select_for_update` so a concurrent sale cannot sneak a stale echo write.
+
+Product update writes `Decimal` via the serializer and compares `Decimal` after the row lock — fractional echo does not truncate.
 
 Price, name, and other non-qty fields are unchanged: they do not require `inventory.adjust`.
 

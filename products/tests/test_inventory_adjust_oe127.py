@@ -139,6 +139,16 @@ class TestOnHandPayloadHelpers:
             [{"id": 1, "quantity": 16}], {1: product}
         ) is True
 
+    def test_bulk_fractional_echo_is_a_change_because_write_truncates(self):
+        """Bulk writes int(qty); Decimal-equal 10.75 vs 10.750 would become 10."""
+        product = type("P", (), {"quantity": Decimal("10.75")})()
+        assert bulk_items_would_change_on_hand(
+            [{"id": 1, "quantity": 10.750}], {1: product}
+        ) is True
+        assert bulk_items_would_change_on_hand(
+            [{"id": 1, "quantity": Decimal("10.750")}], {1: product}
+        ) is True
+
 
 @pytest.mark.django_db
 class TestInventoryAdjustGate:
@@ -439,6 +449,81 @@ class TestInventoryAdjustGate:
         product.refresh_from_db()
         assert product.quantity == 22
         assert product.price == Decimal("81.00")
+
+    def test_cashier_bulk_fractional_echo_cannot_truncate(self, api_client):
+        owner, shop = _make_retailer("oe127_own_frac", "OE127 Frac Bulk Shop")
+        org = shop.organization
+        cashier = _make_staff(org, "oe127_cashier_frac", [])
+        cashier_shop = _make_location_profile(cashier, org, "OE127 Frac Loc")
+        product = _make_product(
+            cashier_shop, name="Frac Rice", quantity=Decimal("10.75")
+        )
+
+        api_client.force_authenticate(user=cashier)
+        response = api_client.patch(
+            reverse("bulk_update_products"),
+            {"items": [{"id": product.id, "quantity": 10.750, "price": "71.00"}]},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        product.refresh_from_db()
+        assert product.quantity == Decimal("10.75")
+        assert product.price == Decimal("90.00")
+
+    def test_cashier_product_update_fractional_echo_keeps_decimal(self, api_client):
+        """Product update writes Decimal; echo 10.750 must not truncate or 403."""
+        owner, shop = _make_retailer("oe127_own_fracupd", "OE127 Frac Upd Shop")
+        org = shop.organization
+        cashier = _make_staff(org, "oe127_cashier_fracupd", [])
+        cashier_shop = _make_location_profile(cashier, org, "OE127 Frac Upd Loc")
+        product = _make_product(
+            cashier_shop, name="Frac Upd Rice", quantity=Decimal("10.75")
+        )
+
+        api_client.force_authenticate(user=cashier)
+        response = api_client.patch(
+            reverse("update_product", args=[product.id]),
+            {"quantity": 10.750, "price": "71.00"},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        product.refresh_from_db()
+        assert product.quantity == Decimal("10.75")
+        assert product.price == Decimal("71.00")
+
+    def test_bulk_stale_echo_blocked_after_sale_under_lock(
+        self, api_client, monkeypatch
+    ):
+        """Sale that lands before the row lock must 403 a stale qty echo."""
+        owner, shop = _make_retailer("oe127_own_staleq", "OE127 Stale Qty Shop")
+        org = shop.organization
+        cashier = _make_staff(org, "oe127_cashier_staleq", [])
+        cashier_shop = _make_location_profile(cashier, org, "OE127 Stale Qty Loc")
+        product = _make_product(cashier_shop, name="Stale Qty Rice", quantity=10)
+
+        real_sfu = Product.objects.select_for_update
+
+        def select_for_update_after_sale(*args, **kwargs):
+            Product.objects.filter(pk=product.pk).update(quantity=Decimal("8"))
+            return real_sfu(*args, **kwargs)
+
+        monkeypatch.setattr(
+            Product.objects, "select_for_update", select_for_update_after_sale
+        )
+
+        api_client.force_authenticate(user=cashier)
+        response = api_client.patch(
+            reverse("bulk_update_products"),
+            {"items": [{"id": product.id, "quantity": 10, "price": "71.00"}]},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        product.refresh_from_db()
+        assert product.quantity == Decimal("8")
+        assert product.price == Decimal("90.00")
 
     def test_owner_quantity_patch_query_budget(
         self, api_client, django_assert_num_queries

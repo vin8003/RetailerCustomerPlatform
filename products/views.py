@@ -39,6 +39,7 @@ from common.permissions import IsRetailerOwner
 from products.inventory_adjust import (
     bulk_items_set_on_hand_quantity,
     bulk_items_would_change_on_hand,
+    bulk_write_quantity,
     payload_sets_on_hand_quantity,
     require_inventory_adjust,
     submitted_on_hand_differs,
@@ -787,20 +788,6 @@ def bulk_update_products(request):
                 if adjust_err is not None:
                     return adjust_err
                 retailer, _ = RetailerProfile.objects.get_or_create(user=request.user)
-            else:
-                product_ids = [item.get('id') for item in items if item.get('id')]
-                products_by_id = {
-                    product.id: product
-                    for product in Product.objects.filter(
-                        id__in=product_ids, retailer=retailer
-                    )
-                }
-                if bulk_items_would_change_on_hand(items, products_by_id):
-                    adjust_err = require_inventory_adjust(
-                        request.user, organization=retailer.organization
-                    )
-                    if adjust_err is not None:
-                        return adjust_err
         else:
             retailer, _ = RetailerProfile.objects.get_or_create(user=request.user)
 
@@ -816,6 +803,16 @@ def bulk_update_products(request):
         with transaction.atomic():
             products = Product.objects.select_for_update().filter(id__in=product_ids, retailer=retailer)
             product_dict = {p.id: p for p in products}
+            # Compare after lock so a concurrent sale cannot sneak a stale echo.
+            if (
+                bulk_items_set_on_hand_quantity(items)
+                and bulk_items_would_change_on_hand(items, product_dict)
+            ):
+                adjust_err = require_inventory_adjust(
+                    request.user, organization=retailer.organization
+                )
+                if adjust_err is not None:
+                    return adjust_err
             logs_to_create = []
             
             from collections import defaultdict
@@ -845,8 +842,8 @@ def bulk_update_products(request):
                         
                 if 'quantity' in item:
                     try:
-                        new_quantity = int(item['quantity'])
-                        if new_quantity >= 0:
+                        new_quantity = bulk_write_quantity(item['quantity'])
+                        if new_quantity is not None:
                             product.quantity = new_quantity
                             changed = True
                             
