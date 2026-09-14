@@ -48,8 +48,9 @@ Cashiers cannot type a **new** stock number on the product screen (saving other 
 
 For items bought at different costs or expiry dates:
 
-- Each **batch** has its own quantity and purchase price
-- Sales consume stock FIFO (oldest batch first) by default
+- Each **batch** has its own quantity, purchase price, and optional expiry date
+- Sales consume stock FIFO (earliest expiry first; batches without expiry stay valid and sell after dated lots)
+- Expired batches cannot be sold. Cashiers cannot set expiry; owners and staff with inventory-adjust permission can
 - Useful for groceries with expiry or varying wholesale rates
 
 ![Inventory and batches](../../docs/visuals/inventory-and-batches.jpg)
