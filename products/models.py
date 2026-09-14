@@ -1,5 +1,6 @@
 from django.db import models
-from django.db.models import F
+from django.db.models import DecimalField, F, OuterRef, Subquery, Sum
+from django.db.models.functions import Coalesce
 from django.conf import settings
 from django.core.validators import MinValueValidator, MaxValueValidator
 from decimal import Decimal
@@ -512,6 +513,65 @@ class Product(models.Model):
 
         return quantity <= self.saleable_quantity()
 
+    @staticmethod
+    def saleable_quantity_annotation():
+        """SUM of active, non-expired batch qty (null expiry stays saleable)."""
+        batch_sum = (
+            ProductBatch.objects.filter(
+                product_id=OuterRef('pk'),
+                is_active=True,
+            )
+            .filter(ProductBatch.saleable_q())
+            .values('product_id')
+            .annotate(total=Sum('quantity'))
+            .values('total')[:1]
+        )
+        return Coalesce(
+            Subquery(
+                batch_sum,
+                output_field=DecimalField(max_digits=12, decimal_places=3),
+            ),
+            Decimal('0'),
+            output_field=DecimalField(max_digits=12, decimal_places=3),
+        )
+
+    @classmethod
+    def cache_saleable_quantities(cls, products):
+        """Stamp saleable_quantity_annotated on Product instances (one query)."""
+        instances = []
+        seen = set()
+        ids = set()
+        for product in products:
+            if product is None:
+                continue
+            if id(product) not in seen:
+                instances.append(product)
+                seen.add(id(product))
+            ids.add(product.pk)
+            if product.parent_bulk_product_id:
+                ids.add(product.parent_bulk_product_id)
+                parent = product.parent_bulk_product
+                if parent is not None and id(parent) not in seen:
+                    instances.append(parent)
+                    seen.add(id(parent))
+        if not ids:
+            return
+        if instances and all(
+            hasattr(product, 'saleable_quantity_annotated')
+            for product in instances
+        ):
+            return
+        annotated = {
+            pk: qty
+            for pk, qty in cls.objects.filter(pk__in=ids).annotate(
+                saleable_quantity_annotated=cls.saleable_quantity_annotation()
+            ).values_list('pk', 'saleable_quantity_annotated')
+        }
+        for product in instances:
+            product.saleable_quantity_annotated = annotated.get(
+                product.pk, Decimal('0')
+            )
+
     def saleable_quantity(self):
         """On-hand that may be sold under the default expiry policy."""
         if self.parent_bulk_product:
@@ -524,6 +584,19 @@ class Product(models.Model):
         if not self.track_inventory:
             return self.quantity
         if self.has_batches:
+            annotated = getattr(self, 'saleable_quantity_annotated', None)
+            if annotated is not None:
+                return annotated
+            prefetched = getattr(self, '_prefetched_objects_cache', {}).get('batches')
+            if prefetched is not None:
+                on_date = timezone.localdate()
+                total = Decimal('0')
+                for batch in prefetched:
+                    if not batch.is_active:
+                        continue
+                    if batch.expiry_date is None or batch.expiry_date >= on_date:
+                        total += batch.quantity
+                return total
             total = (
                 self.batches.filter(is_active=True)
                 .filter(ProductBatch.saleable_q())

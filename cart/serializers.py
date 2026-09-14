@@ -132,6 +132,11 @@ class CartSerializer(serializers.ModelSerializer):
     def get_minimum_order_amount(self, obj):
         return float(obj.retailer.minimum_order_amount)
 
+    def to_representation(self, instance):
+        items = instance.items.all()
+        Product.cache_saleable_quantities([item.product for item in items])
+        return super().to_representation(instance)
+
 
 class AddToCartSerializer(serializers.Serializer):
     """

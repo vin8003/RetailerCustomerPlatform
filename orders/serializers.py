@@ -581,9 +581,16 @@ class OrderCreateSerializer(serializers.Serializer):
         except Cart.DoesNotExist:
             raise serializers.ValidationError("Cart is empty")
 
-        cart_items = cart.items.select_related('product').all()
-        if not cart_items.exists():
+        cart_items = list(
+            cart.items.select_related(
+                'product', 'product__parent_bulk_product'
+            ).all()
+        )
+        if not cart_items:
             raise serializers.ValidationError("Cart is empty")
+        Product.cache_saleable_quantities(
+            [cart_item.product for cart_item in cart_items]
+        )
 
         # Calculate offers using Engine to get total display quantities for stock validation
         from offers.engine import OfferEngine

@@ -104,8 +104,18 @@ class Cart(models.Model):
         
         total_required_parent_qty = Decimal('0.000')
         product_found_in_cart = False
+
+        from products.models import Product
+        items = list(
+            self.items.select_related(
+                'product', 'product__parent_bulk_product'
+            ).all()
+        )
+        Product.cache_saleable_quantities(
+            [item.product for item in items] + [product, master_product]
+        )
         
-        for item in self.items.select_related('product').all():
+        for item in items:
             item_prod = item.product
             qty_to_consider = item.quantity
             

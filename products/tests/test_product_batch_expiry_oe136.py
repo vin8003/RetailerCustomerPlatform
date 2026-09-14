@@ -10,6 +10,8 @@ from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import status
@@ -774,3 +776,143 @@ class TestExpirySalePaths:
         assert expired.quantity == Decimal("10.000")
         assert fresh.quantity == Decimal("4.000")
         assert not Order.objects.filter(retailer=shop).exists()
+
+
+def _per_product_saleable_sum_sql(queries):
+    """Standalone SUM(quantity) fired by Product.saleable_quantity() per product."""
+    hits = []
+    for query in queries:
+        sql = query["sql"]
+        lowered = sql.lower()
+        if "sum(" not in lowered or "product_batch" not in lowered:
+            continue
+        if "expiry_date" not in lowered:
+            continue
+        if "saleable_quantity_annotated" in lowered:
+            continue
+        if ' as "total"' in lowered or " as total" in lowered:
+            hits.append(sql)
+    return hits
+
+
+def _multiline_batched_cart(customer, shop, category, line_count=5):
+    cart = Cart.objects.create(customer=customer, retailer=shop)
+    products = []
+    for i in range(line_count):
+        product = _make_batched_product(
+            shop, category, name=f"QBudget Milk {i + 1}"
+        )
+        _make_batch(
+            product,
+            f"FRESH{i + 1}",
+            10,
+            expiry=_today() + timedelta(days=5 + i),
+        )
+        _make_batch(
+            product,
+            f"NULL{i + 1}",
+            2,
+            expiry=None,
+        )
+        product.sync_inventory_from_batches()
+        CartItem.objects.create(
+            cart=cart,
+            product=product,
+            quantity=Decimal("1.000"),
+            unit_price=product.price,
+        )
+        products.append(product)
+    return cart, products
+
+
+def _count_saleable_annotations(queries):
+    return sum(
+        1
+        for query in queries
+        if "saleable_quantity_annotated" in query["sql"]
+    )
+
+
+@pytest.mark.django_db
+class TestSaleableHotPathQueryBudget:
+    def test_cached_saleable_excludes_expired_without_requery(
+        self, retailer, category, django_assert_num_queries
+    ):
+        product = _make_batched_product(retailer, category, name="Annot Milk")
+        _make_batch(product, "EXP", 10, expiry=_today() - timedelta(days=1))
+        _make_batch(product, "FRESH", 4, expiry=_today() + timedelta(days=5))
+        _make_batch(product, "NULL", 2, expiry=None)
+        product.sync_inventory_from_batches()
+        Product.cache_saleable_quantities([product])
+        with django_assert_num_queries(0):
+            assert product.saleable_quantity() == Decimal("6.000")
+
+    def test_cart_get_multiline_query_budget(
+        self, api_client, customer, django_assert_num_queries
+    ):
+        owner, shop = _make_retailer("oe136_cart_q", "OE136 Cart Q Shop")
+        category = _make_category(shop, "OE136 Cart Q Cat")
+        _multiline_batched_cart(customer, shop, category, line_count=1)
+        api_client.force_authenticate(user=customer)
+        with django_assert_num_queries(9), CaptureQueriesContext(connection) as one:
+            one_res = api_client.get(reverse("get_cart"), {"retailer_id": shop.id})
+        assert one_res.status_code == status.HTTP_200_OK
+        assert _per_product_saleable_sum_sql(one.captured_queries) == []
+        assert _count_saleable_annotations(one.captured_queries) == 1
+
+        shop_5 = _make_retailer("oe136_cart_q5", "OE136 Cart Q5 Shop")[1]
+        category_5 = _make_category(shop_5, "OE136 Cart Q5 Cat")
+        customer_5 = User.objects.create_user(
+            username="oe136_cart_q5_cust",
+            email="oe136_cart_q5@test.com",
+            password="TestPass123!",
+            user_type="customer",
+            is_active=True,
+        )
+        _multiline_batched_cart(customer_5, shop_5, category_5, line_count=5)
+        api_client.force_authenticate(user=customer_5)
+        with django_assert_num_queries(9), CaptureQueriesContext(connection) as five:
+            five_res = api_client.get(
+                reverse("get_cart"), {"retailer_id": shop_5.id}
+            )
+        assert five_res.status_code == status.HTTP_200_OK
+        assert len(five_res.data["items"]) == 5
+        assert all(item["is_available"] for item in five_res.data["items"])
+        assert _per_product_saleable_sum_sql(five.captured_queries) == []
+        assert _count_saleable_annotations(five.captured_queries) == 1
+        assert len(five.captured_queries) == len(one.captured_queries)
+
+    @patch("common.notifications.send_push_notification")
+    @patch("common.notifications.send_silent_update")
+    def test_place_order_multiline_query_budget(
+        self,
+        mock_silent,
+        mock_push,
+        api_client,
+        customer,
+        address,
+        django_assert_num_queries,
+    ):
+        owner, shop = _make_retailer("oe136_po_q", "OE136 Place Q Shop")
+        category = _make_category(shop, "OE136 Place Q Cat")
+        _multiline_batched_cart(customer, shop, category, line_count=5)
+        customer.is_phone_verified = True
+        customer.save(update_fields=["is_phone_verified"])
+
+        api_client.force_authenticate(user=customer)
+        with django_assert_num_queries(85), CaptureQueriesContext(connection) as ctx:
+            response = api_client.post(
+                reverse("place_order"),
+                {
+                    "retailer_id": shop.id,
+                    "delivery_mode": "delivery",
+                    "payment_mode": "cash",
+                    "address_id": address.id,
+                },
+                format="json",
+            )
+
+        assert response.status_code == status.HTTP_201_CREATED
+        assert _per_product_saleable_sum_sql(ctx.captured_queries) == []
+        assert _count_saleable_annotations(ctx.captured_queries) == 1
+        assert Order.objects.filter(retailer=shop).count() == 1
