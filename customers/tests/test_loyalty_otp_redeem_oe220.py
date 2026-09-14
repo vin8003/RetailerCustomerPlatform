@@ -274,6 +274,59 @@ class TestCheckoutRedeemRequiresOtp:
         assert order.discount_from_points == Decimal("50.00")
         assert loyalty.points == Decimal("30.00")
 
+    def test_absent_wallet_does_not_consume_otp_or_discount(self):
+        _owner, retailer = _make_retailer("oe220_chk_nowallet", "OE220 No Wallet Shop")
+        local = _product(retailer, price=Decimal("100.00"))
+        customer = _make_customer("oe220_chk_nowallet_cust", "9000002206")
+        _reward_config(retailer)
+        otp = _issue_otp(customer, retailer, "101010")
+
+        serializer = self._checkout(customer, retailer, local, otp="101010")
+        assert serializer.is_valid(), serializer.errors
+        order = serializer.save()
+        otp.refresh_from_db()
+        assert otp.is_used is False
+        assert order.discount_from_points == Decimal("0.00")
+        assert order.points_redeemed == Decimal("0.00")
+        assert CustomerLoyalty.objects.filter(
+            customer=customer, retailer=retailer
+        ).count() == 0
+
+    def test_missing_wallet_on_lock_does_not_consume_otp_or_discount(self):
+        """Unlocked compute can see points; locked get must not consume OTP or keep discount."""
+        _owner, retailer = _make_retailer("oe220_chk_race", "OE220 Race Shop")
+        local = _product(retailer, price=Decimal("100.00"))
+        customer = _make_customer("oe220_chk_race_cust", "9000002207")
+        _reward_config(retailer)
+        loyalty = CustomerLoyalty.objects.create(
+            customer=customer, retailer=retailer, points=Decimal("80.00")
+        )
+        otp = _issue_otp(customer, retailer, "202020")
+
+        serializer = self._checkout(customer, retailer, local, otp="202020")
+        assert serializer.is_valid(), serializer.errors
+
+        def missing_wallet(*args, **kwargs):
+            return CustomerLoyalty.objects.none()
+
+        with patch.object(
+            CustomerLoyalty.objects, "select_for_update", missing_wallet
+        ):
+            try:
+                order = serializer.save()
+            except Exception:
+                order = None
+
+        loyalty.refresh_from_db()
+        otp.refresh_from_db()
+        assert loyalty.points == Decimal("80.00")
+        assert otp.is_used is False
+        if order is not None:
+            assert order.discount_from_points == Decimal("0.00")
+            assert order.points_redeemed == Decimal("0.00")
+        else:
+            assert Order.objects.filter(customer=customer, retailer=retailer).count() == 0
+
 
 @pytest.mark.django_db
 class TestStaffRedeemEndpoint:
