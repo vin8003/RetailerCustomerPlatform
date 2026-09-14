@@ -21,7 +21,7 @@ PERMISSION_DEFINITIONS = {
     'orders.create': 'Create orders from POS and staff APIs',
     'orders.update': 'Update order status and retailer-side order mutations',
     'fulfillment.manage': 'Configure fulfillment slot capacity for shop locations',
-    'inventory.adjust': 'Hand-set on-hand quantity on product update or bulk update',
+    'inventory.adjust': 'Hand-set on-hand quantity on product update or bulk update; change parent-child pack links on product create or update',
 }
 
 ALL_PERMISSION_CODES = frozenset(PERMISSION_DEFINITIONS.keys())

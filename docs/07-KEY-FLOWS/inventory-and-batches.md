@@ -23,8 +23,9 @@ When an order or POS sale reduces stock:
 ### 3. Fractional / Child Products
 
 - A **Parent Bulk Product** can have one or more **Fractional Child Products**.
-- Conversion factor defines the relationship (e.g. 1 box = 10 pieces).
-- Stock deductions on a child product are converted and deducted from the parent.
+- Conversion factor defines the relationship (e.g. 1 box = 10 pieces, or `0.10` of a 50kg bag). Factor must be **> 0**.
+- Stock deductions on a child product are converted and deducted from the parent (`EXISTING` on `Product.reduce_quantity`; POS and customer checkout already call it).
+- Changing `conversion_factor` / `parent_bulk_product` / `is_parent_bulk` requires `inventory.adjust` (`EXTEND`, OE-103). `parent_bulk_product` cycles are rejected.
 
 ## Flow Diagram
 
