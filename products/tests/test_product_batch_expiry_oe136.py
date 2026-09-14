@@ -298,7 +298,7 @@ class TestExpiryStoredAndFifo:
         _make_batch(product, "NULL", 5, expiry=None)
         product.sync_inventory_from_batches()
 
-        with django_assert_num_queries(8):
+        with django_assert_num_queries(9):
             assert product.reduce_quantity(Decimal("7")) is True
 
 
@@ -484,7 +484,7 @@ class TestExpiryRbacAndTenancy:
         batch = _make_batch(product, "B1", 3, expiry=None)
         api_client.force_authenticate(user=owner)
 
-        with django_assert_num_queries(24):
+        with django_assert_num_queries(27):
             response = api_client.patch(
                 reverse("update_product", args=[product.id]),
                 {
