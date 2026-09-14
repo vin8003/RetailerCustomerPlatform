@@ -63,8 +63,9 @@ class ProductBatchSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProductBatch
         fields = [
-            'id', 'batch_number', 'barcode', 'purchase_price', 
-            'price', 'original_price', 'quantity', 'is_active', 'show_on_app'
+            'id', 'batch_number', 'barcode', 'purchase_price',
+            'price', 'original_price', 'quantity', 'is_active', 'show_on_app',
+            'expiry_date',
         ]
 
 
@@ -830,6 +831,11 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
                     'is_active': batch_item.get('is_active', True),
                     'show_on_app': batch_item.get('show_on_app', True),
                 }
+                if 'expiry_date' in batch_item:
+                    raw_expiry = batch_item.get('expiry_date')
+                    batch_fields['expiry_date'] = (
+                        None if raw_expiry in (None, '') else raw_expiry
+                    )
                 
                 if batch_id:
                     ProductBatch.objects.filter(id=batch_id, product=instance).update(**batch_fields)

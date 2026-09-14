@@ -153,8 +153,8 @@ class ProductUploadAdmin(admin.ModelAdmin):
 
 @admin.register(ProductBatch)
 class ProductBatchAdmin(admin.ModelAdmin):
-    list_display = ['product', 'batch_number', 'original_price', 'price', 'quantity', 'created_at']
-    list_filter = ['created_at']
+    list_display = ['product', 'batch_number', 'original_price', 'price', 'quantity', 'expiry_date', 'created_at']
+    list_filter = ['created_at', 'expiry_date']
     search_fields = ['product__name', 'batch_number']
 
 

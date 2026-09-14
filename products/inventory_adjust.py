@@ -1,6 +1,7 @@
 """
 OE-127 / F-0028 — hand-set on-hand quantity gate.
 OE-103 / F-0021 — same perm for parent-child pack link mutations.
+OE-136 / F-0030 — same perm for ProductBatch.expiry_date mutations.
 
 Sale/purchase still dual-write Product.quantity + ProductInventoryLog.
 This module rejects a *changed* product/batch on-hand on update / bulk
@@ -11,8 +12,14 @@ Pack-link fields (``conversion_factor``, ``parent_bulk_product``,
 ``is_parent_bulk``) on product create/update use the same perm when the
 submitted value differs from stored (or is set on create). Bulk update
 does not write those keys.
+
+Batch ``expiry_date`` on product update uses the same perm when the
+submitted date differs from stored (or a new batch is created with a
+date). Echoing the current expiry (including null) does not require
+the perm. Bulk update does not write expiry.
 """
 import json
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
 from rest_framework import status
@@ -206,6 +213,83 @@ def create_payload_sets_pack_link(data):
         return True
     if 'is_parent_bulk' in data and _as_bool(data['is_parent_bulk']):
         return True
+    return False
+
+
+_UNPARSEABLE_DATE = object()
+
+
+def _parse_expiry_date(raw):
+    if raw in (None, ''):
+        return None
+    if isinstance(raw, datetime):
+        return raw.date()
+    if isinstance(raw, date):
+        return raw
+    text = str(raw).strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        return _UNPARSEABLE_DATE
+
+
+def _expiry_differs(raw, current):
+    parsed = _parse_expiry_date(raw)
+    if parsed is _UNPARSEABLE_DATE:
+        return True
+    if current is None:
+        return parsed is not None
+    return parsed != current
+
+
+def payload_sets_batch_expiry(data):
+    """True when any batches[].expiry_date key is present."""
+    batches = _parse_batches(data)
+    if not batches:
+        return False
+    return any(
+        isinstance(batch, dict) and 'expiry_date' in batch
+        for batch in batches
+    )
+
+
+def submitted_batch_expiry_differs(product, data):
+    """True when submitted batch expiry would change stored values."""
+    batches = _parse_batches(data)
+    if not batches or product is None:
+        return False
+    batch_ids = [
+        batch.get('id')
+        for batch in batches
+        if isinstance(batch, dict) and 'expiry_date' in batch and batch.get('id')
+    ]
+    existing = {}
+    if batch_ids:
+        existing = {
+            row.id: row.expiry_date
+            for row in product.batches.filter(id__in=batch_ids).only(
+                'id', 'expiry_date'
+            )
+        }
+    for batch in batches:
+        if not isinstance(batch, dict) or 'expiry_date' not in batch:
+            continue
+        batch_id = batch.get('id')
+        if not batch_id:
+            parsed = _parse_expiry_date(batch.get('expiry_date'))
+            if parsed is _UNPARSEABLE_DATE or parsed is not None:
+                return True
+            continue
+        try:
+            batch_id = int(batch_id)
+        except (TypeError, ValueError):
+            return True
+        if batch_id not in existing:
+            return True
+        if _expiry_differs(batch.get('expiry_date'), existing[batch_id]):
+            return True
     return False
 
 

@@ -1,9 +1,11 @@
 from django.db import models
+from django.db.models import F
 from django.conf import settings
 from django.core.validators import MinValueValidator, MaxValueValidator
 from decimal import Decimal
 from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVector
+from django.utils import timezone
 from common.utils import generate_upload_path, resize_image
 
 
@@ -182,7 +184,9 @@ class ProductBatch(models.Model):
     is_active = models.BooleanField(default=True)
     show_on_app = models.BooleanField(default=True)
     additional_barcodes = models.JSONField(default=list, blank=True)
-    
+    # Optional until filled. Null-expiry batches stay saleable (OE-136 / F-0030).
+    expiry_date = models.DateField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -190,6 +194,10 @@ class ProductBatch(models.Model):
         db_table = 'product_batch'
         indexes = [
             models.Index(fields=['product', 'is_active']),
+            models.Index(
+                fields=['product', 'is_active', 'expiry_date'],
+                name='product_bat_product_exp_idx',
+            ),
             models.Index(fields=['retailer', 'barcode']),
             models.Index(fields=['created_at']),
         ]
@@ -197,6 +205,29 @@ class ProductBatch(models.Model):
 
     def __str__(self):
         return f"{self.product.name} - Batch {self.batch_number or self.id} (MRP: {self.original_price})"
+
+    def is_expired(self, on_date=None):
+        """True when expiry_date is set and is before today. Null expiry is never expired."""
+        if self.expiry_date is None:
+            return False
+        if on_date is None:
+            on_date = timezone.localdate()
+        return self.expiry_date < on_date
+
+    @classmethod
+    def saleable_q(cls, on_date=None):
+        """
+        Default sale policy: forbid expired (expiry_date < today).
+        Null-expiry batches remain eligible.
+        """
+        if on_date is None:
+            on_date = timezone.localdate()
+        return models.Q(expiry_date__isnull=True) | models.Q(expiry_date__gte=on_date)
+
+    @classmethod
+    def fifo_sale_order(cls):
+        """Earliest dated expiry first; null expiry last; then oldest created_at."""
+        return (F('expiry_date').asc(nulls_last=True), 'created_at')
 
 
 class Product(models.Model):
@@ -475,8 +506,18 @@ class Product(models.Model):
             return self.is_available
             
         if self.has_batches and batch:
+            if batch.is_expired():
+                return False
             return batch.quantity >= quantity
-            
+
+        if self.has_batches:
+            eligible = (
+                self.batches.filter(is_active=True)
+                .filter(ProductBatch.saleable_q())
+                .aggregate(total=models.Sum('quantity'))['total'] or 0
+            )
+            return quantity <= eligible
+
         return quantity <= self.quantity
     
     def reduce_quantity(self, quantity, batch=None, allow_negative=False):
@@ -498,29 +539,44 @@ class Product(models.Model):
             
         if self.has_batches:
             if batch:
+                if batch.is_expired():
+                    return False
                 if allow_negative or batch.quantity >= quantity:
                     batch.quantity -= quantity
                     batch.save()
                     self.sync_inventory_from_batches()
                     return True
             else:
-                # FIFO: Reduce from oldest active batches with stock
+                # FIFO: earliest non-null expiry first among saleable qty>0.
+                # Null-expiry batches stay eligible and sort after dated rows.
                 remaining = quantity
-                batches = self.batches.filter(is_active=True, quantity__gt=0).order_by('created_at')
-                
-                if not allow_negative and self.quantity < quantity:
-                    return False
-                    
+                batches = list(
+                    self.batches.filter(is_active=True, quantity__gt=0)
+                    .filter(ProductBatch.saleable_q())
+                    .order_by(*ProductBatch.fifo_sale_order())
+                )
+
+                if not allow_negative:
+                    available = sum((b.quantity for b in batches), Decimal('0'))
+                    if available < quantity:
+                        return False
+
                 for b in batches:
-                    if remaining <= 0: break
+                    if remaining <= 0:
+                        break
                     reduction = min(b.quantity, remaining)
                     b.quantity -= reduction
                     b.save()
                     remaining -= reduction
-                
-                # If still remaining and allow_negative is True, take from the latest batch
+
+                # allow_negative leftover: only a non-expired batch (never expired).
                 if remaining > 0 and allow_negative:
-                    latest_batch = self.batches.filter(is_active=True).order_by('-created_at').first()
+                    latest_batch = (
+                        self.batches.filter(is_active=True)
+                        .filter(ProductBatch.saleable_q())
+                        .order_by('-created_at')
+                        .first()
+                    )
                     if latest_batch:
                         latest_batch.quantity -= remaining
                         latest_batch.save()
