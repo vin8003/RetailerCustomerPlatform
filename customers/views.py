@@ -3,6 +3,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Count, Sum, Q, Avg, DecimalField, IntegerField, Max, Subquery, OuterRef, F
+from django.http import Http404
 from django.shortcuts import get_object_or_404
 from decimal import Decimal
 from common.pagination import StandardResultsSetPagination
@@ -1118,6 +1119,7 @@ def get_customer_details_for_retailer(request, customer_id):
             'is_phone_verified': user.is_phone_verified,
             'credit_limit': mapping.credit_limit,
             'current_balance': mapping.current_balance,
+            'credit_due_days': mapping.credit_due_days,
             'recent_orders': recent_orders_data,
             'reward_history': reward_history,
             'retailer_ratings': my_ratings
@@ -1315,36 +1317,68 @@ def record_customer_payment(request):
 @permission_classes([permissions.IsAuthenticated])
 def update_customer_credit_limit(request, customer_id):
     """
-    Update credit limit for a customer
+    Update credit limit and/or credit due days for a customer.
     """
     try:
         if request.user.user_type != 'retailer':
             return Response({'error': 'Only retailers can manage credit limits'}, status=status.HTTP_403_FORBIDDEN)
             
-        credit_limit = request.data.get('credit_limit')
-        if credit_limit is None:
-            return Response({'error': 'Credit limit is required'}, status=status.HTTP_400_BAD_REQUEST)
-            
+        has_limit = 'credit_limit' in request.data
+        has_due_days = 'credit_due_days' in request.data
+        if not has_limit and not has_due_days:
+            return Response(
+                {'error': 'Credit limit or credit due days is required'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         from decimal import Decimal
-        try:
-            credit_limit = Decimal(str(credit_limit))
-            if credit_limit < 0:
-                return Response({'error': 'Credit limit cannot be negative'}, status=status.HTTP_400_BAD_REQUEST)
-        except:
-            return Response({'error': 'Invalid credit limit'}, status=status.HTTP_400_BAD_REQUEST)
-            
+        update_fields = ['updated_at']
+        credit_limit = None
+        if has_limit:
+            credit_limit = request.data.get('credit_limit')
+            try:
+                credit_limit = Decimal(str(credit_limit))
+                if credit_limit < 0:
+                    return Response({'error': 'Credit limit cannot be negative'}, status=status.HTTP_400_BAD_REQUEST)
+            except Exception:
+                return Response({'error': 'Invalid credit limit'}, status=status.HTTP_400_BAD_REQUEST)
+
+        credit_due_days = None
+        if has_due_days:
+            raw_due = request.data.get('credit_due_days')
+            if raw_due is None or raw_due == '':
+                credit_due_days = None
+            else:
+                try:
+                    credit_due_days = int(raw_due)
+                    if credit_due_days < 0:
+                        return Response(
+                            {'error': 'Credit due days cannot be negative'},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                except (TypeError, ValueError):
+                    return Response({'error': 'Invalid credit due days'}, status=status.HTTP_400_BAD_REQUEST)
+
         retailer = get_object_or_404(RetailerProfile, user=request.user)
         user = get_object_or_404(User, id=customer_id)
         mapping = get_object_or_404(RetailerCustomerMapping, retailer=retailer, customer=user)
-        
-        mapping.credit_limit = credit_limit
-        mapping.save(update_fields=['credit_limit', 'updated_at'])
+
+        if has_limit:
+            mapping.credit_limit = credit_limit
+            update_fields.append('credit_limit')
+        if has_due_days:
+            mapping.credit_due_days = credit_due_days
+            update_fields.append('credit_due_days')
+        mapping.save(update_fields=update_fields)
         
         return Response({
             'message': 'Credit limit updated successfully',
-            'credit_limit': mapping.credit_limit
+            'credit_limit': mapping.credit_limit,
+            'credit_due_days': mapping.credit_due_days,
         }, status=status.HTTP_200_OK)
-        
+
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error updating credit limit: {str(e)}")
         return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

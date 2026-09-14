@@ -209,6 +209,7 @@ class RetailerCustomerDetailSerializer(serializers.Serializer):
     notes = serializers.CharField(allow_null=True)
     credit_limit = serializers.DecimalField(max_digits=12, decimal_places=2)
     current_balance = serializers.DecimalField(max_digits=12, decimal_places=2)
+    credit_due_days = serializers.IntegerField(allow_null=True, required=False)
     
     # Additional detail fields
     recent_orders = serializers.ListField()

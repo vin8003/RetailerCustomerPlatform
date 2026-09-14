@@ -177,7 +177,7 @@ class SupplierAdmin(admin.ModelAdmin):
 
 @admin.register(RetailerCustomerMapping)
 class RetailerCustomerMappingAdmin(admin.ModelAdmin):
-    list_display = ['retailer', 'customer', 'nickname', 'customer_type', 'current_balance', 'credit_limit', 'total_orders', 'total_spent']
+    list_display = ['retailer', 'customer', 'nickname', 'customer_type', 'current_balance', 'credit_limit', 'credit_due_days', 'total_orders', 'total_spent']
     list_filter = ['customer_type', 'created_at']
     search_fields = ['retailer__shop_name', 'customer__username', 'customer__phone_number', 'nickname', 'tags']
     readonly_fields = ['total_orders', 'total_spent', 'last_order_date', 'created_at', 'updated_at']

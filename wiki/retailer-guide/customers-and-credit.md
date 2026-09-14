@@ -41,7 +41,7 @@ Trusted regulars often buy **on credit** and settle later — classic kirana kha
 
 ### Credit limit
 
-You can set a **maximum credit** per customer. POS blocks new credit sales above limit (unless you change policy).
+You can set a **maximum credit** and optional **due days** per customer. POS blocks new **credit** sales above the limit, or when an unpaid balance has been open longer than the due days. A permitted role can override; that override is recorded. Customers can still **pay** outstanding while credit sales are locked. Cash or UPI at the counter is not blocked.
 
 ### Recording payment
 
