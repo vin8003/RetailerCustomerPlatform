@@ -458,11 +458,14 @@ def _batch_identity_q(keys):
 
 
 def load_shop_product_index(retailer, keys=()):
-    """Load products that can match ``keys``, capped at ``MAX_MATCH_PRODUCTS``.
+    """Load products that can match ``keys``.
 
-    Key-scoped: does not scan the full shop catalog. Prefetches ``batches``
-    so batch barcodes of a matched SKU stay in the index. Does not prefetch
-    ``additional_images`` (unused here; ``is_primary`` is an UPDATE).
+    Key-scoped: import keys are capped at ``MAX_MATCH_PRODUCTS`` (same as
+    ``MAX_ROWS``). The queryset is **not** sliced — a shared barcode must
+    still load every partner so the row can fail ``ambiguous SKU``.
+    Prefetches ``batches`` so batch barcodes of a matched SKU stay in the
+    index. Does not prefetch ``additional_images`` (unused here;
+    ``is_primary`` is an UPDATE).
     """
     keys = _unique_import_keys(keys)
     if not keys:
@@ -473,13 +476,13 @@ def load_shop_product_index(retailer, keys=()):
         ProductBatch.objects.filter(retailer=retailer)
         .annotate(additional_barcodes_text=extra_text)
         .filter(_batch_identity_q(keys))
-        .values('product_id')[:MAX_MATCH_PRODUCTS]
+        .values('product_id')
     )
     products = list(
         Product.objects.filter(retailer=retailer)
         .annotate(additional_barcodes_text=extra_text)
         .filter(_product_identity_q(keys) | Q(pk__in=Subquery(batch_product_ids)))
-        .prefetch_related('batches')[:MAX_MATCH_PRODUCTS]
+        .prefetch_related('batches')
     )
     by_id = {}
     by_code = {}

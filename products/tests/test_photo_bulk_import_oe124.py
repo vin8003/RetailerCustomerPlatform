@@ -362,6 +362,26 @@ class TestPhotoImportService:
         assert 'product_image' not in sql
         assert len(ctx.captured_queries) == 2
 
+    def test_ambiguous_barcode_fails_row_and_does_not_attach(self):
+        owner, shop = _make_retailer('oe124_svc_amb', 'OE124 Ambiguous')
+        first = _make_product(shop, 'Amb One', barcode='AMB124')
+        second = _make_product(shop, 'Amb Two', barcode='AMB124')
+
+        report = import_product_photos_for_retailer(
+            retailer=shop,
+            actor=owner,
+            organization=shop.organization,
+            archive=_zip_upload('amb.zip', {'AMB124.gif': MINIMAL_GIF}),
+        )
+
+        assert report['successful_rows'] == 0
+        assert report['failed_rows'] == 1
+        assert report['results'][0]['error'] == 'ambiguous SKU'
+        first.refresh_from_db()
+        second.refresh_from_db()
+        assert not first.image
+        assert not second.image
+
     def test_zip_without_csv_ignores_dotted_junk_and_same_stem_last_wins(self):
         owner, shop = _make_retailer('oe124_svc_junk', 'OE124 Zip Junk')
         product = _make_product(shop, 'Junk Rice', barcode='890124210')
@@ -379,7 +399,7 @@ class TestPhotoImportService:
                     'notes.md': b'# notes',
                     'folder_b/890124210.gif': MINIMAL_GIF,
                     '.hidden.gif': MINIMAL_GIF,
-                    '__MACOSX/890124210.gif': MINIMAL_GIF,
+                    '__MACOSX/zzz.gif': MINIMAL_GIF,
                 },
             ),
         )
@@ -389,6 +409,30 @@ class TestPhotoImportService:
         assert report['failed_rows'] == 0
         product.refresh_from_db()
         assert product.image
+
+    def test_zip_same_stem_last_win_invalid_leaves_product_unchanged(self):
+        owner, shop = _make_retailer('oe124_svc_lw', 'OE124 Last Win')
+        product = _make_product(shop, 'Last Win Rice', barcode='890124211')
+
+        report = import_product_photos_for_retailer(
+            retailer=shop,
+            actor=owner,
+            organization=shop.organization,
+            archive=_zip_upload(
+                'lw.zip',
+                {
+                    'folder_a/890124211.gif': MINIMAL_GIF,
+                    'folder_b/890124211.gif': b'not-an-image',
+                },
+            ),
+        )
+
+        assert report['total_rows'] == 1
+        assert report['successful_rows'] == 0
+        assert report['failed_rows'] == 1
+        assert report['results'][0]['error'] == 'bad file'
+        product.refresh_from_db()
+        assert not product.image
 
     def test_csv_same_basename_last_win(self):
         first = SimpleUploadedFile('dir_a/oil.gif', b'aaa', content_type='image/gif')
