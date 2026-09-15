@@ -27,6 +27,7 @@ urlpatterns = [
     path('stats/', views.get_product_stats, name='get_product_stats'),
     path('demand-insights/', views.get_demand_insights, name='get_demand_insights'),
     path('master/search/', views.search_master_product, name='search_master_product'), # NEW
+    path('upload/images/', views.import_product_photos, name='import_product_photos'),
     path('upload/check/', views.check_bulk_upload, name='check_bulk_upload'),
     path('upload/complete/', views.complete_bulk_upload, name='complete_bulk_upload'),
     

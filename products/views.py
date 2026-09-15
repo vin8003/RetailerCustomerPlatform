@@ -1,5 +1,5 @@
 from rest_framework import status, permissions
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, parser_classes, permission_classes
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Q, Avg, Count, Sum, Max
@@ -59,6 +59,10 @@ from products.inventory_adjust import (
     submitted_batch_expiry_differs,
     submitted_on_hand_differs,
     submitted_pack_link_differs,
+)
+from products.photo_import import (
+    import_product_photos_for_retailer,
+    require_catalog_image,
 )
 from products.write_off import (
     WriteOffError,
@@ -1701,6 +1705,67 @@ def upload_products_excel(request):
             {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+@api_view(['POST'])
+@parser_classes([MultiPartParser, FormParser])
+@permission_classes([permissions.IsAuthenticated])
+def import_product_photos(request):
+    """
+    OE-124: attach zip/csv+files images to matching shop SKUs.
+    Failed rows are reported; they do not abort the rest.
+    """
+    if request.user.user_type != 'retailer':
+        return Response(
+            {'error': 'Only retailers can import product photos'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    try:
+        retailer = RetailerProfile.objects.select_related('organization').get(
+            user=request.user
+        )
+    except RetailerProfile.DoesNotExist:
+        return Response(
+            {'error': 'Retailer profile not found'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    denied = require_catalog_image(
+        request.user, organization=retailer.organization
+    )
+    if denied is not None:
+        return denied
+
+    archive = request.FILES.get('archive') or request.FILES.get('file')
+    csv_file = request.FILES.get('csv')
+    uploaded_files = []
+    uploaded_files.extend(request.FILES.getlist('images'))
+    uploaded_files.extend(request.FILES.getlist('image'))
+    if archive is not None:
+        archive_name = (archive.name or '').lower()
+        if archive_name.endswith('.csv') and csv_file is None:
+            csv_file = archive
+            archive = None
+        elif not archive_name.endswith('.zip'):
+            return Response(
+                {'error': 'Archive must be a zip file'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    try:
+        report = import_product_photos_for_retailer(
+            retailer=retailer,
+            actor=request.user,
+            organization=retailer.organization,
+            archive=archive,
+            csv_file=csv_file,
+            uploaded_files=uploaded_files,
+        )
+    except ValueError as exc:
+        return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    return Response(report, status=status.HTTP_200_OK)
 
 
 @api_view(['GET'])
