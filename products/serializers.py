@@ -14,7 +14,13 @@ from products.inventory_service import (
     apply_stock_increase,
     log_inventory_change,
 )
-from products.tax_service import GST_RATES
+from products.tax_service import (
+    GST_RATES,
+    quantize_2,
+    resolve_tax_type,
+    round_rupee,
+    split_inclusive_line,
+)
 from .customer_stock import filter_in_stock_for_customer
 import logging
 
@@ -1086,6 +1092,42 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
             'supplier': 'This supplier is inactive and cannot be used for new purchases.'
         })
 
+    def _apply_tax_snapshots(self, items_data, retailer, supplier):
+        tax_type = resolve_tax_type(
+            retailer.gst_number,
+            supplier.gst_number if supplier else '',
+        )
+        taxable_amount = Decimal('0.00')
+        tax_amount = Decimal('0.00')
+        line_total_amount = Decimal('0.00')
+
+        for item_data in items_data:
+            product = item_data.get('product')
+            line_total = quantize_2(
+                Decimal(str(item_data['quantity']))
+                * Decimal(str(item_data['purchase_price']))
+            )
+            gst_rate = product.gst_rate if product else Decimal('0.00')
+            split = split_inclusive_line(line_total, gst_rate)
+
+            item_data.update({
+                'total': line_total,
+                'taxable_value': split['taxable_value'],
+                'tax_amount': split['tax_amount'],
+                'gst_rate': gst_rate,
+                'hsn_code': product.hsn_code if product else '',
+                'tax_type': tax_type,
+            })
+            taxable_amount += split['taxable_value']
+            tax_amount += split['tax_amount']
+            line_total_amount += line_total
+
+        return {
+            'taxable_amount': quantize_2(taxable_amount),
+            'tax_amount': quantize_2(tax_amount),
+            'total_amount': round_rupee(line_total_amount),
+        }
+
     def create(self, validated_data):
         items_data = validated_data.pop('items', [])
         retailer = validated_data.get('retailer')
@@ -1095,8 +1137,9 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
         self._validate_supplier_active_for_purchase(supplier)
         
         with transaction.atomic():
-            # Calculate total from items to ensure accuracy
-            calculated_total = sum(Decimal(str(item['quantity'])) * Decimal(str(item['purchase_price'])) for item in items_data)
+            validated_data.update(
+                self._apply_tax_snapshots(items_data, retailer, supplier)
+            )
             
             # Auto-generate invoice_number if missing
             invoice_num = validated_data.get('invoice_number', '') or ''
@@ -1106,8 +1149,7 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
                 hasher = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
                 validated_data['invoice_number'] = f"INV-{now().strftime('%y%m%d')}-{hasher}"
 
-            # 1. Create Invoice (overwrite total_amount with calculated value)
-            validated_data['total_amount'] = calculated_total
+            # 1. Create Invoice with authoritative tax and total calculations
             invoice = PurchaseInvoice.objects.create(**validated_data)
             
             for item_data in items_data:
@@ -1218,9 +1260,10 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
 
             # --- 2. APPLY NEW CHANGES ---
             
-            # Recalculate New Total
-            new_total = sum(Decimal(str(item['quantity'])) * Decimal(str(item['purchase_price'])) for item in items_data)
-            validated_data['total_amount'] = new_total
+            # Recalculate tax snapshots and authoritative totals
+            validated_data.update(
+                self._apply_tax_snapshots(items_data, retailer, new_supplier)
+            )
             
             # Update Invoice Instance
             for attr, value in validated_data.items():
