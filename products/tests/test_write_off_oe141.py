@@ -125,6 +125,14 @@ class TestWriteOffHelpers:
         assert parse_write_off_quantity("-1") is None
         assert parse_write_off_quantity("nope") is None
 
+    def test_parse_batch_id_omitted_or_invalid(self):
+        from products.write_off import parse_write_off_batch_id
+
+        assert parse_write_off_batch_id(None) is None
+        assert parse_write_off_batch_id("") is None
+        assert parse_write_off_batch_id("12") == 12
+        assert parse_write_off_batch_id("x") is False
+
 
 @pytest.mark.django_db
 class TestWriteOffStock:
@@ -332,3 +340,152 @@ class TestWriteOffStock:
                 batch_id=batch.id,
                 created_by=owner,
             )
+
+
+def _write_off_url(product_id):
+    return reverse("write_off_product", args=[product_id])
+
+
+@pytest.mark.django_db
+class TestWriteOffApi:
+    def test_owner_can_write_off_damage(self, api_client):
+        owner, shop = _make_retailer("oe141_api_own", "OE141 API Owner Shop")
+        product = _make_product(shop, has_batches=True, quantity=0)
+        batch = _make_batch(product, "API1", Decimal("10.000"))
+        product.sync_inventory_from_batches()
+
+        api_client.force_authenticate(user=owner)
+        response = api_client.post(
+            _write_off_url(product.id),
+            {"quantity": "4.000", "reason": REASON_DAMAGE, "batch_id": batch.id},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_201_CREATED
+        assert response.data["reason"] == REASON_DAMAGE
+        assert response.data["log_type"] == "damaged"
+        batch.refresh_from_db()
+        product.refresh_from_db()
+        assert batch.quantity == Decimal("6.000")
+        assert product.quantity == Decimal("6.000")
+
+    def test_expiry_write_off_rejects_fresh_batch(self, api_client):
+        owner, shop = _make_retailer("oe141_api_fresh", "OE141 API Fresh Shop")
+        product = _make_product(shop, has_batches=True, quantity=0)
+        batch = _make_batch(
+            product, "FRESH", Decimal("8.000"), expiry=_today() + timedelta(days=2)
+        )
+        product.sync_inventory_from_batches()
+
+        api_client.force_authenticate(user=owner)
+        response = api_client.post(
+            _write_off_url(product.id),
+            {"quantity": "1", "reason": REASON_EXPIRY, "batch_id": batch.id},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "non-expired" in response.data["error"].lower()
+        batch.refresh_from_db()
+        assert batch.quantity == Decimal("8.000")
+
+    def test_cashier_without_adjust_gets_403(self, api_client):
+        owner, shop = _make_retailer("oe141_api_den", "OE141 API Deny Shop")
+        org = shop.organization
+        cashier = _make_staff(org, "oe141_cashier_den", [])
+        cashier_shop = _make_location_profile(cashier, org, "OE141 Cashier Deny Loc")
+        product = _make_product(cashier_shop, quantity=Decimal("12.000"))
+
+        api_client.force_authenticate(user=cashier)
+        response = api_client.post(
+            _write_off_url(product.id),
+            {"quantity": "1", "reason": REASON_DAMAGE},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        product.refresh_from_db()
+        assert product.quantity == Decimal("12.000")
+        assert not ProductInventoryLog.objects.filter(product=product).exists()
+
+    def test_staff_with_inventory_adjust_can_write_off(self, api_client):
+        owner, shop = _make_retailer("oe141_api_staff", "OE141 API Staff Shop")
+        org = shop.organization
+        staff = _make_staff(org, "oe141_adj_staff", [PERM_INVENTORY_ADJUST])
+        staff_shop = _make_location_profile(staff, org, "OE141 Staff Loc")
+        product = _make_product(staff_shop, quantity=Decimal("9.000"))
+
+        api_client.force_authenticate(user=staff)
+        response = api_client.post(
+            _write_off_url(product.id),
+            {"quantity": "2", "reason": REASON_SPOILAGE},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_201_CREATED
+        product.refresh_from_db()
+        assert product.quantity == Decimal("7.000")
+
+    def test_customer_is_forbidden(self, api_client, customer):
+        owner, shop = _make_retailer("oe141_api_cust", "OE141 API Cust Shop")
+        product = _make_product(shop, quantity=Decimal("5.000"))
+
+        api_client.force_authenticate(user=customer)
+        response = api_client.post(
+            _write_off_url(product.id),
+            {"quantity": "1", "reason": REASON_DAMAGE},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        product.refresh_from_db()
+        assert product.quantity == Decimal("5.000")
+
+    def test_unauthenticated_is_401(self, api_client):
+        owner, shop = _make_retailer("oe141_api_anon", "OE141 API Anon Shop")
+        product = _make_product(shop, quantity=Decimal("5.000"))
+
+        response = api_client.post(
+            _write_off_url(product.id),
+            {"quantity": "1", "reason": REASON_DAMAGE},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+    def test_cross_tenant_write_off_is_404(self, api_client):
+        owner_a, shop_a = _make_retailer("oe141_api_ten_a", "OE141 API Tenant A")
+        product = _make_product(shop_a, quantity=Decimal("11.000"))
+        owner_b, _shop_b = _make_retailer("oe141_api_ten_b", "OE141 API Tenant B")
+
+        api_client.force_authenticate(user=owner_b)
+        response = api_client.post(
+            _write_off_url(product.id),
+            {"quantity": "1", "reason": REASON_DAMAGE},
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        product.refresh_from_db()
+        assert product.quantity == Decimal("11.000")
+
+    def test_owner_write_off_query_budget(self, api_client, django_assert_num_queries):
+        owner, shop = _make_retailer("oe141_api_q", "OE141 API Queries Shop")
+        product = _make_product(shop, has_batches=True, quantity=0)
+        batch = _make_batch(product, "AQ1", Decimal("6.000"))
+        product.sync_inventory_from_batches()
+
+        api_client.force_authenticate(user=owner)
+        # Profile+org JOIN; owner perm is implicit; write_off_stock is 7
+        # including savepoints.
+        with django_assert_num_queries(8):
+            response = api_client.post(
+                _write_off_url(product.id),
+                {
+                    "quantity": "1.000",
+                    "reason": REASON_DAMAGE,
+                    "batch_id": batch.id,
+                },
+                format="json",
+            )
+        assert response.status_code == status.HTTP_201_CREATED

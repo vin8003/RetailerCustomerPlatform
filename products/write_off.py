@@ -52,6 +52,16 @@ def parse_write_off_quantity(raw):
     return value
 
 
+def parse_write_off_batch_id(raw):
+    """Return int batch id, None when omitted, or False when unparseable."""
+    if raw in (None, ''):
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return False
+
+
 def write_off_stock(
     *,
     product_id,
