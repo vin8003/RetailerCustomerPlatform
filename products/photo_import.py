@@ -13,11 +13,13 @@ from types import SimpleNamespace
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import transaction
+from django.db.models import Q, Subquery, TextField
+from django.db.models.functions import Cast
 from PIL import Image, UnidentifiedImageError
 from rest_framework import status
 from rest_framework.response import Response
 
-from products.models import Product
+from products.models import Product, ProductBatch
 from retailers.models import OrgAuditLog
 from retailers.organization import (
     ensure_org_rbac_bootstrap,
@@ -32,6 +34,9 @@ MANIFEST_BASENAMES = frozenset({'manifest.csv', 'images.csv', 'mapping.csv'})
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_ARCHIVE_BYTES = 20 * 1024 * 1024
 MAX_ROWS = 200
+# Catalog match is keyed to import rows — never load the full shop.
+MAX_MATCH_PRODUCTS = MAX_ROWS
+_JUNK_BASENAMES = frozenset({'thumbs.db', 'desktop.ini'})
 
 _AMBIGUOUS = object()
 
@@ -92,6 +97,8 @@ def _is_hidden_or_junk(name):
     if not parts:
         return True
     if any(part.startswith('.') or part == '__MACOSX' for part in parts):
+        return True
+    if _basename(path).lower() in _JUNK_BASENAMES:
         return True
     return False
 
@@ -250,7 +257,12 @@ def _parse_csv_mapping(file_obj):
 
 
 def _index_files(files_by_name):
-    """Exact path, lowercase basename, and unique stem → file."""
+    """Exact path, lowercase basename, and unique stem → file.
+
+    Same path or basename last-wins (later zip member / later upload).
+    Same stem with two different names is ambiguous (CSV stem lookup
+    returns no file) so a later exact-basename hit can still resolve.
+    """
     by_path = {}
     by_base = {}
     stems = {}
@@ -258,7 +270,7 @@ def _index_files(files_by_name):
         path_key = name.replace('\\', '/').lower()
         by_path[path_key] = (name, file_obj)
         base = _basename(name).lower()
-        by_base[base] = (name, file_obj)
+        by_base[base] = (name, file_obj)  # last-win
         stem = _stem(name).lower()
         if stem in stems and stems[stem][0].lower() != name.lower():
             stems[stem] = None
@@ -374,12 +386,13 @@ def collect_import_rows(*, archive=None, csv_file=None, uploaded_files=None):
             })
         return rows, None
 
-    image_items = [
-        (name, file_obj)
-        for name, file_obj in files_by_name.items()
-        if _extension(name) in ALLOWED_IMAGE_EXTENSIONS
-        or _extension(name)
-    ]
+    # No CSV: ignore dotted junk (readme.txt, Thumbs.db). Same stem last-wins.
+    by_stem = {}
+    for name, file_obj in files_by_name.items():
+        if _extension(name) not in ALLOWED_IMAGE_EXTENSIONS:
+            continue
+        by_stem[_stem(name).lower()] = (name, file_obj)
+    image_items = list(by_stem.values())
     if not image_items:
         return [], 'No image files to import'
     if len(image_items) > MAX_ROWS:
@@ -395,13 +408,81 @@ def collect_import_rows(*, archive=None, csv_file=None, uploaded_files=None):
     return rows, None
 
 
-def load_shop_product_index(retailer):
-    """One query (+ prefetch) of shop products keyed by id and barcode."""
+def _unique_import_keys(keys):
+    seen = []
+    seen_lower = set()
+    for key in keys or ():
+        raw = str(key or '').strip()
+        if not raw:
+            continue
+        marker = raw.lower()
+        if marker in seen_lower:
+            continue
+        seen_lower.add(marker)
+        seen.append(raw)
+        if len(seen) >= MAX_MATCH_PRODUCTS:
+            break
+    return seen
+
+
+def _extra_barcode_text_q(keys):
+    """Match JSON-list barcodes without JSON ``contains`` (SQLite + Postgres)."""
+    q = Q()
+    for key in keys:
+        needle = key.replace('\\', '\\\\').replace('"', '\\"')
+        q |= Q(additional_barcodes_text__icontains=f'"{needle}"')
+    return q
+
+
+def _product_identity_q(keys):
+    numeric_ids = [int(key) for key in keys if key.isdigit()]
+    q = Q()
+    if numeric_ids:
+        q |= Q(pk__in=numeric_ids)
+    for key in keys:
+        q |= Q(barcode__iexact=key)
+    extra = _extra_barcode_text_q(keys)
+    if extra:
+        q |= extra
+    return q
+
+
+def _batch_identity_q(keys):
+    q = Q()
+    for key in keys:
+        q |= Q(barcode__iexact=key)
+    extra = _extra_barcode_text_q(keys)
+    if extra:
+        q |= extra
+    return q
+
+
+def load_shop_product_index(retailer, keys=()):
+    """Load products that can match ``keys``.
+
+    Key-scoped: import keys are capped at ``MAX_MATCH_PRODUCTS`` (same as
+    ``MAX_ROWS``). The queryset is **not** sliced — a shared barcode must
+    still load every partner so the row can fail ``ambiguous SKU``.
+    Prefetches ``batches`` so batch barcodes of a matched SKU stay in the
+    index. Does not prefetch ``additional_images`` (unused here;
+    ``is_primary`` is an UPDATE).
+    """
+    keys = _unique_import_keys(keys)
+    if not keys:
+        return {}, {}
+
+    extra_text = Cast('additional_barcodes', TextField())
+    batch_product_ids = (
+        ProductBatch.objects.filter(retailer=retailer)
+        .annotate(additional_barcodes_text=extra_text)
+        .filter(_batch_identity_q(keys))
+        .values('product_id')
+    )
     products = list(
-        Product.objects.filter(retailer=retailer).prefetch_related(
-            'additional_images',
-            'batches',
-        )
+        Product.objects.filter(retailer=retailer)
+        .annotate(additional_barcodes_text=extra_text)
+        .filter(_product_identity_q(keys) | Q(pk__in=Subquery(batch_product_ids)))
+        .prefetch_related('batches')
     )
     by_id = {}
     by_code = {}
@@ -476,7 +557,10 @@ def import_product_photos_for_retailer(
         raise ValueError(error)
 
     org = organization if organization is not None else getattr(retailer, 'organization', None)
-    by_id, by_code = load_shop_product_index(retailer)
+    by_id, by_code = load_shop_product_index(
+        retailer,
+        [item.get('key') or '' for item in rows],
+    )
     results = []
     successful = 0
     failed = 0

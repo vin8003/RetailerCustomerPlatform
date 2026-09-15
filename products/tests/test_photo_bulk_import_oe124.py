@@ -10,14 +10,21 @@ from decimal import Decimal
 
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from rest_framework import status
 
 from authentication.models import User
 from products.models import Product, ProductBatch, ProductCategory, ProductImage
 from products.photo_import import (
+    MAX_MATCH_PRODUCTS,
+    MAX_ROWS,
     PERM_CATALOG_IMAGE,
+    _index_files,
+    _lookup_file,
     import_product_photos_for_retailer,
+    load_shop_product_index,
     replace_product_default_image,
 )
 from retailers.models import OrgAuditLog, OrgRole, OrgStaffMembership, RetailerProfile
@@ -331,6 +338,112 @@ class TestPhotoImportService:
         assert all(row['error'] == 'missing SKU' for row in report['results'])
         product_a.refresh_from_db()
         assert 'keep' in product_a.image.name or product_a.image
+
+    def test_match_index_caps_and_stays_key_scoped(self, django_assert_num_queries):
+        owner, shop = _make_retailer('oe124_svc_cap', 'OE124 Match Cap')
+        target = _make_product(shop, 'Cap Target', barcode='890124200')
+        ProductImage.objects.create(product=target, image=_gif('gallery.gif'))
+        for i in range(8):
+            decoy = _make_product(shop, f'Cap Decoy {i}', barcode=f'DECOY124{i}')
+            ProductImage.objects.create(product=decoy, image=_gif(f'decoy-{i}.gif'))
+
+        assert MAX_MATCH_PRODUCTS == MAX_ROWS == 200
+        with django_assert_num_queries(2):
+            by_id, by_code = load_shop_product_index(shop, ['890124200'])
+
+        assert list(by_id) == [target.id]
+        assert by_code['890124200'].id == target.id
+        assert 'decoy1240' not in by_code
+
+        # Dead additional_images prefetch would SELECT product_image.
+        with CaptureQueriesContext(connection) as ctx:
+            load_shop_product_index(shop, ['890124200'])
+        sql = ' '.join(q['sql'].lower() for q in ctx.captured_queries)
+        assert 'product_image' not in sql
+        assert len(ctx.captured_queries) == 2
+
+    def test_ambiguous_barcode_fails_row_and_does_not_attach(self):
+        owner, shop = _make_retailer('oe124_svc_amb', 'OE124 Ambiguous')
+        first = _make_product(shop, 'Amb One', barcode='AMB124')
+        second = _make_product(shop, 'Amb Two', barcode='AMB124')
+
+        report = import_product_photos_for_retailer(
+            retailer=shop,
+            actor=owner,
+            organization=shop.organization,
+            archive=_zip_upload('amb.zip', {'AMB124.gif': MINIMAL_GIF}),
+        )
+
+        assert report['successful_rows'] == 0
+        assert report['failed_rows'] == 1
+        assert report['results'][0]['error'] == 'ambiguous SKU'
+        first.refresh_from_db()
+        second.refresh_from_db()
+        assert not first.image
+        assert not second.image
+
+    def test_zip_without_csv_ignores_dotted_junk_and_same_stem_last_wins(self):
+        owner, shop = _make_retailer('oe124_svc_junk', 'OE124 Zip Junk')
+        product = _make_product(shop, 'Junk Rice', barcode='890124210')
+
+        report = import_product_photos_for_retailer(
+            retailer=shop,
+            actor=owner,
+            organization=shop.organization,
+            archive=_zip_upload(
+                'junk.zip',
+                {
+                    'folder_a/890124210.gif': b'not-an-image',
+                    'readme.txt': b'ignore me',
+                    'Thumbs.db': b'junk',
+                    'notes.md': b'# notes',
+                    'folder_b/890124210.gif': MINIMAL_GIF,
+                    '.hidden.gif': MINIMAL_GIF,
+                    '__MACOSX/zzz.gif': MINIMAL_GIF,
+                },
+            ),
+        )
+
+        assert report['total_rows'] == 1
+        assert report['successful_rows'] == 1
+        assert report['failed_rows'] == 0
+        product.refresh_from_db()
+        assert product.image
+
+    def test_zip_same_stem_last_win_invalid_leaves_product_unchanged(self):
+        owner, shop = _make_retailer('oe124_svc_lw', 'OE124 Last Win')
+        product = _make_product(shop, 'Last Win Rice', barcode='890124211')
+
+        report = import_product_photos_for_retailer(
+            retailer=shop,
+            actor=owner,
+            organization=shop.organization,
+            archive=_zip_upload(
+                'lw.zip',
+                {
+                    'folder_a/890124211.gif': MINIMAL_GIF,
+                    'folder_b/890124211.gif': b'not-an-image',
+                },
+            ),
+        )
+
+        assert report['total_rows'] == 1
+        assert report['successful_rows'] == 0
+        assert report['failed_rows'] == 1
+        assert report['results'][0]['error'] == 'bad file'
+        product.refresh_from_db()
+        assert not product.image
+
+    def test_csv_same_basename_last_win(self):
+        first = SimpleUploadedFile('dir_a/oil.gif', b'aaa', content_type='image/gif')
+        second = SimpleUploadedFile('dir_b/oil.gif', MINIMAL_GIF, content_type='image/gif')
+        index = _index_files({
+            'dir_a/oil.gif': first,
+            'dir_b/oil.gif': second,
+        })
+        name, found = _lookup_file(index, 'oil.gif')
+        assert name == 'dir_b/oil.gif'
+        assert found is second
 
 
 @pytest.mark.django_db
