@@ -53,6 +53,7 @@ flowchart LR
 - `PurchaseInvoice` increases the amount owed to the supplier.
 - Payments to the supplier decrease the balance.
 - Tracked via `SupplierLedger`.
+- Vendor master is `retailers.Supplier` (OE-100 / F-0041): optional GSTIN, org-scoped duplicate GSTIN flag, `payment_terms` gated by `purchasing.terms`. Inactive suppliers cannot be selected on new purchase invoices. PO/GRN create is OE-102 and must reuse the same inactive gate — see [suppliers.md](../requirements/suppliers.md).
 
 ## Key Rules
 
