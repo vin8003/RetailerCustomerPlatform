@@ -34,8 +34,18 @@ from .serializers import (
     ProductUploadSessionSerializer, UploadSessionItemSerializer,
     ProductSearchSerializer
 )
-from retailers.models import RetailerProfile
+from retailers.models import OrgAuditLog, RetailerProfile
 from common.permissions import IsRetailerOwner
+from products.channel_price import (
+    app_price_summary,
+    bulk_items_set_app_price,
+    bulk_items_would_change_app_price,
+    create_payload_sets_app_price,
+    payload_sets_app_price,
+    record_channel_price_audit,
+    require_catalog_price,
+    submitted_app_price_differs,
+)
 from products.inventory_adjust import (
     bulk_items_set_on_hand_quantity,
     bulk_items_would_change_on_hand,
@@ -378,6 +388,7 @@ def get_retailer_products(request):
                     'id': p.id,
                     'name': p.name,
                     'price': p.price,
+                    'app_price': p.app_price,
                     'discounted_price': p.discounted_price or p.price,
                     'original_price': p.original_price,
                     'quantity': p.quantity,
@@ -495,7 +506,9 @@ def search_products(request):
         limit = int(request.query_params.get('limit', 50))
         products = products[:limit]
 
-        serializer = ProductSearchSerializer(products, many=True)
+        serializer = ProductSearchSerializer(
+            products, many=True, context={'request': request}
+        )
         return Response({
             'results': serializer.data,
             'facets': facets
@@ -539,6 +552,13 @@ def create_product(request):
             if adjust_err is not None:
                 return adjust_err
 
+        if create_payload_sets_app_price(request.data):
+            price_err = require_catalog_price(
+                request.user, organization=retailer.organization
+            )
+            if price_err is not None:
+                return price_err
+
         serializer = ProductCreateSerializer(
             data=request.data,
             context={'retailer': retailer}
@@ -568,6 +588,17 @@ def create_product(request):
             ).filter(
                 Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
             ).order_by('-priority').prefetch_related('targets'))
+
+            if product.app_price is not None:
+                record_channel_price_audit(
+                    product=product,
+                    actor=request.user,
+                    organization=retailer.organization,
+                    location=retailer,
+                    summary_before=app_price_summary(product, app_price=None),
+                    summary_after=app_price_summary(product),
+                    action=OrgAuditLog.ACTION_CREATE,
+                )
 
             response_serializer = ProductDetailSerializer(product, context={'request': request, 'active_offers': active_offers})
             logger.info(f"Product created: {product.name} by {retailer.shop_name}")
@@ -655,6 +686,10 @@ def update_product(request, product_id):
             retailer = None
 
         if retailer is None:
+            if payload_sets_app_price(request.data):
+                price_err = require_catalog_price(request.user)
+                if price_err is not None:
+                    return price_err
             if (
                 payload_sets_on_hand_quantity(request.data)
                 or payload_sets_pack_link(request.data)
@@ -679,6 +714,7 @@ def update_product(request, product_id):
                     status=status.HTTP_404_NOT_FOUND,
                 )
             old_quantity = product.quantity
+            old_app_price = product.app_price
 
             if payload_has_invalid_expiry(request.data):
                 return Response(
@@ -702,6 +738,16 @@ def update_product(request, product_id):
                 )
                 if adjust_err is not None:
                     return adjust_err
+
+            if (
+                payload_sets_app_price(request.data)
+                and submitted_app_price_differs(product, request.data)
+            ):
+                price_err = require_catalog_price(
+                    request.user, organization=retailer.organization
+                )
+                if price_err is not None:
+                    return price_err
 
             serializer = ProductUpdateSerializer(
                 product,
@@ -738,6 +784,18 @@ def update_product(request, product_id):
                 ).filter(
                     Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
                 ).order_by('-priority').prefetch_related('targets'))
+
+                if old_app_price != product.app_price:
+                    record_channel_price_audit(
+                        product=product,
+                        actor=request.user,
+                        organization=retailer.organization,
+                        location=retailer,
+                        summary_before=app_price_summary(
+                            product, app_price=old_app_price
+                        ),
+                        summary_after=app_price_summary(product),
+                    )
 
                 response_serializer = ProductDetailSerializer(product, context={'request': request, 'active_offers': active_offers, 'include_inactive_batches': True})
                 logger.info(f"Product updated: {product.name} by {retailer.shop_name}")
@@ -889,15 +947,20 @@ def bulk_update_products(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        if bulk_items_set_on_hand_quantity(items):
+        if bulk_items_set_on_hand_quantity(items) or bulk_items_set_app_price(items):
             try:
                 retailer = RetailerProfile.objects.select_related('organization').get(
                     user=request.user
                 )
             except RetailerProfile.DoesNotExist:
-                adjust_err = require_inventory_adjust(request.user)
-                if adjust_err is not None:
-                    return adjust_err
+                if bulk_items_set_on_hand_quantity(items):
+                    adjust_err = require_inventory_adjust(request.user)
+                    if adjust_err is not None:
+                        return adjust_err
+                if bulk_items_set_app_price(items):
+                    price_err = require_catalog_price(request.user)
+                    if price_err is not None:
+                        return price_err
                 retailer, _ = RetailerProfile.objects.get_or_create(user=request.user)
         else:
             retailer, _ = RetailerProfile.objects.get_or_create(user=request.user)
@@ -924,6 +987,15 @@ def bulk_update_products(request):
                 )
                 if adjust_err is not None:
                     return adjust_err
+            if (
+                bulk_items_set_app_price(items)
+                and bulk_items_would_change_app_price(items, product_dict)
+            ):
+                price_err = require_catalog_price(
+                    request.user, organization=retailer.organization
+                )
+                if price_err is not None:
+                    return price_err
             logs_to_create = []
             
             from collections import defaultdict
@@ -943,6 +1015,7 @@ def bulk_update_products(request):
                 
                 changed = False
                 old_quantity = product.quantity
+                old_app_price = product.app_price
                 
                 if 'price' in item:
                     try:
@@ -1000,6 +1073,18 @@ def bulk_update_products(request):
                     except Exception:
                         pass
                 
+                if 'app_price' in item:
+                    raw_app = item.get('app_price')
+                    if raw_app in (None, ''):
+                        product.app_price = None
+                        changed = True
+                    else:
+                        try:
+                            product.app_price = Decimal(str(raw_app))
+                            changed = True
+                        except Exception:
+                            pass
+
                 if 'original_price' in item:
                     try:
                         product.original_price = Decimal(str(item['original_price']))
@@ -1022,6 +1107,17 @@ def bulk_update_products(request):
 
                 if changed:
                     product.save()
+                    if old_app_price != product.app_price:
+                        record_channel_price_audit(
+                            product=product,
+                            actor=request.user,
+                            organization=retailer.organization,
+                            location=retailer,
+                            summary_before=app_price_summary(
+                                product, app_price=old_app_price
+                            ),
+                            summary_after=app_price_summary(product),
+                        )
                     
                     # Keep the first batch in sync with product fields if multi-batch is OFF
                     if not product.has_batches:
