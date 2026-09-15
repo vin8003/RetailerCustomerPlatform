@@ -1,0 +1,171 @@
+"""
+OE-100 / F-0041: inactive supplier cannot be selected on new purchase invoices.
+
+No PurchaseOrder model exists yet (OE-102). This is the current inward path.
+OE-102 PO create should call assert_supplier_selectable_for_new_purchase.
+"""
+from decimal import Decimal
+
+import pytest
+from django.urls import reverse
+from rest_framework import status
+from rest_framework.exceptions import ValidationError
+
+from products.models import PurchaseInvoice
+from retailers.models import Supplier
+from retailers.suppliers import (
+    INACTIVE_SUPPLIER_MESSAGE,
+    assert_supplier_selectable_for_new_purchase,
+)
+
+
+def _invoice_payload(supplier, product, invoice_number="INV-OE100"):
+    return {
+        "supplier": supplier.id,
+        "invoice_number": invoice_number,
+        "invoice_date": "2026-09-15",
+        "total_amount": "100.00",
+        "paid_amount": "0.00",
+        "payment_status": "UNPAID",
+        "items": [
+            {
+                "product": product.id,
+                "quantity": 10,
+                "purchase_price": "10.00",
+                "total": "100.00",
+            }
+        ],
+    }
+
+
+@pytest.mark.django_db
+class TestInactiveSupplierPurchaseInvoiceGate:
+    @pytest.fixture
+    def active_supplier(self, retailer):
+        return Supplier.objects.create(
+            retailer=retailer, company_name="Active Vendor", is_active=True
+        )
+
+    @pytest.fixture
+    def inactive_supplier(self, retailer):
+        return Supplier.objects.create(
+            retailer=retailer, company_name="Inactive Vendor", is_active=False
+        )
+
+    def test_helper_rejects_inactive(self, inactive_supplier):
+        with pytest.raises(ValidationError) as exc:
+            assert_supplier_selectable_for_new_purchase(inactive_supplier)
+        assert INACTIVE_SUPPLIER_MESSAGE in str(exc.value.detail)
+
+    def test_helper_allows_active(self, active_supplier):
+        assert_supplier_selectable_for_new_purchase(active_supplier)
+
+    def test_create_rejects_inactive_supplier(
+        self, api_client, retailer_user, retailer, inactive_supplier, product
+    ):
+        api_client.force_authenticate(user=retailer_user)
+        resp = api_client.post(
+            reverse("erp-purchase-invoice-list"),
+            _invoice_payload(inactive_supplier, product, "INV-INACTIVE"),
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST, resp.data
+        assert INACTIVE_SUPPLIER_MESSAGE in str(resp.data.get("supplier"))
+        assert not PurchaseInvoice.objects.filter(invoice_number="INV-INACTIVE").exists()
+        product.refresh_from_db()
+        assert product.quantity == Decimal("50")
+
+    def test_create_allows_active_supplier(
+        self, api_client, retailer_user, retailer, active_supplier, product
+    ):
+        api_client.force_authenticate(user=retailer_user)
+        resp = api_client.post(
+            reverse("erp-purchase-invoice-list"),
+            _invoice_payload(active_supplier, product, "INV-ACTIVE"),
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_201_CREATED, resp.data
+        assert resp.data["supplier"] == active_supplier.id
+
+    def test_existing_invoice_keeps_inactive_supplier_on_scalar_patch(
+        self, api_client, retailer_user, retailer, active_supplier, product
+    ):
+        api_client.force_authenticate(user=retailer_user)
+        created = api_client.post(
+            reverse("erp-purchase-invoice-list"),
+            _invoice_payload(active_supplier, product, "INV-THEN-INACTIVE"),
+            format="json",
+        )
+        assert created.status_code == status.HTTP_201_CREATED, created.data
+        invoice_id = created.data["id"]
+        active_supplier.is_active = False
+        active_supplier.save(update_fields=["is_active"])
+
+        patched = api_client.patch(
+            reverse("erp-purchase-invoice-detail", args=[invoice_id]),
+            {"notes": "keep existing supplier"},
+            format="json",
+        )
+        assert patched.status_code == status.HTTP_200_OK, patched.data
+        invoice = PurchaseInvoice.objects.get(id=invoice_id)
+        assert invoice.supplier_id == active_supplier.id
+        assert invoice.notes == "keep existing supplier"
+
+    def test_cannot_change_existing_invoice_to_inactive_supplier(
+        self, api_client, retailer_user, retailer, active_supplier, inactive_supplier, product
+    ):
+        api_client.force_authenticate(user=retailer_user)
+        created = api_client.post(
+            reverse("erp-purchase-invoice-list"),
+            _invoice_payload(active_supplier, product, "INV-SWITCH"),
+            format="json",
+        )
+        assert created.status_code == status.HTTP_201_CREATED, created.data
+        invoice_id = created.data["id"]
+
+        switched = api_client.patch(
+            reverse("erp-purchase-invoice-detail", args=[invoice_id]),
+            {"supplier": inactive_supplier.id},
+            format="json",
+        )
+        assert switched.status_code == status.HTTP_400_BAD_REQUEST, switched.data
+        assert INACTIVE_SUPPLIER_MESSAGE in str(switched.data.get("supplier"))
+        invoice = PurchaseInvoice.objects.get(id=invoice_id)
+        assert invoice.supplier_id == active_supplier.id
+
+    def test_cross_org_supplier_rejected_on_create(
+        self, api_client, retailer_user, retailer, product
+    ):
+        from authentication.models import User
+        from retailers.models import RetailerProfile
+        from retailers.organization import ensure_organization_for_profile
+
+        other_user = User.objects.create_user(
+            username="oe100_other",
+            email="oe100_other@test.com",
+            password="TestPass123!",
+            user_type="retailer",
+            is_active=True,
+        )
+        other_shop = RetailerProfile.objects.create(
+            user=other_user,
+            shop_name="Other Org Shop",
+            address_line1="9 Side",
+            city="City",
+            state="State",
+            pincode="110009",
+            is_active=True,
+        )
+        ensure_organization_for_profile(other_shop, name="Other Org")
+        foreign = Supplier.objects.create(
+            retailer=other_shop, company_name="Foreign Vendor", is_active=True
+        )
+
+        api_client.force_authenticate(user=retailer_user)
+        resp = api_client.post(
+            reverse("erp-purchase-invoice-list"),
+            _invoice_payload(foreign, product, "INV-FOREIGN"),
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST, resp.data
+        assert not PurchaseInvoice.objects.filter(invoice_number="INV-FOREIGN").exists()

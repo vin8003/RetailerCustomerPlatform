@@ -1124,6 +1124,37 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
                 )
             })
 
+    def validate_supplier(self, supplier):
+        """
+        Inactive suppliers cannot be selected on new purchase invoices.
+
+        Existing invoices may keep an inactive supplier (not a new selection).
+        Changing the supplier on an existing invoice is treated as a new pick.
+        OE-102 PO create should call the same helper.
+        """
+        from retailers.suppliers import (
+            assert_supplier_in_org,
+            assert_supplier_selectable_for_new_purchase,
+        )
+
+        if supplier is None:
+            return supplier
+
+        is_create = self.instance is None
+        changing = (
+            self.instance is not None
+            and self.instance.supplier_id != supplier.id
+        )
+        if is_create or changing:
+            assert_supplier_selectable_for_new_purchase(supplier)
+
+        retailer = self.context.get('retailer')
+        if retailer is None and self.instance is not None:
+            retailer = self.instance.retailer
+        if retailer is not None:
+            assert_supplier_in_org(supplier, retailer)
+        return supplier
+
     def create(self, validated_data):
         items_data = validated_data.pop('items', [])
         retailer = validated_data.get('retailer')
