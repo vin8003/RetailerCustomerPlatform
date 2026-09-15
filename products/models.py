@@ -278,6 +278,13 @@ class Product(models.Model):
         default=0,
         validators=[MinValueValidator(0), MaxValueValidator(100)]
     )
+    hsn_code = models.CharField(max_length=8, blank=True, default='')
+    gst_rate = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        choices=[(Decimal(x), f'{x}%') for x in ('0', '3', '5', '18', '40')],
+    )
     
     # Inventory
     quantity = models.DecimalField(max_digits=12, decimal_places=3, default=0)
@@ -841,6 +848,8 @@ class PurchaseInvoice(models.Model):
     invoice_date = models.DateField()
     
     total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    taxable_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    tax_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     paid_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     payment_status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='UNPAID')
     notes = models.TextField(blank=True)
@@ -883,6 +892,15 @@ class PurchaseItem(models.Model):
     quantity = models.DecimalField(max_digits=12, decimal_places=3)
     purchase_price = models.DecimalField(max_digits=10, decimal_places=2)  # Rate per unit
     total = models.DecimalField(max_digits=12, decimal_places=2)  # Qty * Rate
+    hsn_code = models.CharField(max_length=8, blank=True, default='')
+    gst_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
+    taxable_value = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    tax_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    tax_type = models.CharField(
+        max_length=4,
+        choices=[('GST', 'GST'), ('IGST', 'IGST')],
+        default='GST',
+    )
     
     # Store whether this invoice updated the master product MRP/Price
     mrp_updated = models.BooleanField(default=False)
