@@ -112,3 +112,64 @@ class TestSalesReturns:
         assert response.status_code == status.HTTP_200_OK
         assert len(response.data) == 1
         assert response.data[0]["id"] == setup_order.id
+
+    def test_sales_return_reverses_inclusive_tax_from_order_item_snapshot(
+        self, api_client, retailer_user, setup_order, product
+    ):
+        api_client.force_authenticate(user=retailer_user)
+        order_item = setup_order.items.first()
+        order_item.hsn_code = "09011111"
+        order_item.gst_rate = Decimal("18.00")
+        order_item.tax_type = "IGST"
+        order_item.unit_price = Decimal("118.00")
+        order_item.save()
+        product.hsn_code = "DIFFERENT"
+        product.gst_rate = Decimal("5.00")
+        product.save()
+
+        response = api_client.post(
+            reverse("sales-return-list"),
+            {
+                "order_id": setup_order.id,
+                "refund_payment_mode": "cash",
+                "items": [{
+                    "product_id": product.id,
+                    "order_item_id": order_item.id,
+                    "quantity": 2,
+                    "refund_unit_price": "118.00",
+                }],
+            },
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_201_CREATED
+        sales_return = SalesReturn.objects.get()
+        return_item = sales_return.items.get()
+        assert sales_return.refund_amount == Decimal("236.00")
+        assert sales_return.taxable_amount == Decimal("200.00")
+        assert sales_return.tax_amount == Decimal("36.00")
+        assert return_item.hsn_code == "09011111"
+        assert return_item.gst_rate == Decimal("18.00")
+        assert return_item.tax_type == "IGST"
+        assert return_item.taxable_value == Decimal("200.00")
+        assert return_item.tax_amount == Decimal("36.00")
+
+    def test_search_order_exposes_tax_snapshot(
+        self, api_client, retailer_user, setup_order
+    ):
+        api_client.force_authenticate(user=retailer_user)
+        order_item = setup_order.items.first()
+        order_item.hsn_code = "09011111"
+        order_item.gst_rate = Decimal("18.00")
+        order_item.tax_type = "GST"
+        order_item.save()
+
+        response = api_client.get(
+            reverse("sales-return-search-order"),
+            {"query": setup_order.order_number},
+        )
+
+        item = response.data[0]["items"][0]
+        assert item["hsn_code"] == "09011111"
+        assert Decimal(item["gst_rate"]) == Decimal("18.00")
+        assert item["tax_type"] == "GST"

@@ -56,6 +56,9 @@ class SalesReturnViewSet(viewsets.ModelViewSet):
                     'available_qty': max(0, item.quantity - returned_qty),
                     'unit_price': item.unit_price,
                     'batch_id': item.batch_id,
+                    'hsn_code': item.hsn_code,
+                    'gst_rate': item.gst_rate,
+                    'tax_type': item.tax_type,
                 })
 
             results.append({
@@ -159,6 +162,9 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
                 'available_qty': max(0, item.quantity - returned_qty),
                 'purchase_price': item.purchase_price,
                 'batch_id': item.batch_id if hasattr(item, 'batch_id') else None,
+                'hsn_code': item.hsn_code,
+                'gst_rate': item.gst_rate,
+                'tax_type': item.tax_type,
             })
             
         return Response(items_data)
