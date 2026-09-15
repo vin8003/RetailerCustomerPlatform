@@ -9,6 +9,7 @@ from products.models import Product
 from cart.models import Cart, CartItem
 from returns.models import SalesReturnItem
 from django.db.models import Sum
+from products.tax_service import quantize_2, split_inclusive_line
 
 
 class OrderItemSerializer(serializers.ModelSerializer):
@@ -617,7 +618,7 @@ class OrderCreateSerializer(serializers.Serializer):
                  # Default logic if not set (or 0 means free)
                  delivery_fee = 0
         
-        total_amount = items_total + delivery_fee
+        total_amount = quantize_2(items_total + delivery_fee)
         
         # Calculate discount from points
         discount_from_points = 0
@@ -660,7 +661,7 @@ class OrderCreateSerializer(serializers.Serializer):
                 
                 if points_to_redeem > 0:
                     discount_from_points = Decimal(str(points_to_redeem)) * config.conversion_rate
-                    total_amount -= discount_from_points
+                    total_amount = quantize_2(total_amount - discount_from_points)
         
         # Check minimum order amount
         if total_amount < retailer.minimum_order_amount:
@@ -733,6 +734,8 @@ class OrderCreateSerializer(serializers.Serializer):
             
             # Get item discounts map
             item_discounts = offer_results.get('item_discounts', {})
+            taxable_amount = Decimal('0.00')
+            tax_amount = Decimal('0.00')
 
             for cart_item in cart_items:
                 # Calculate final prices based on offers
@@ -744,7 +747,13 @@ class OrderCreateSerializer(serializers.Serializer):
                     unit_price = info['final_price']
                     quantity = info.get('total_display_quantity', cart_item.quantity)
                 
-                total_price = unit_price * quantity
+                total_price = quantize_2(unit_price * quantity)
+                tax_split = split_inclusive_line(
+                    total_price,
+                    cart_item.product.gst_rate,
+                )
+                taxable_amount += tax_split['taxable_value']
+                tax_amount += tax_split['tax_amount']
                 
                 order_items.append(OrderItem(
                     order=order,
@@ -754,7 +763,12 @@ class OrderCreateSerializer(serializers.Serializer):
                     product_unit=cart_item.product.unit,
                     quantity=quantity,
                     unit_price=unit_price,
-                    total_price=total_price
+                    total_price=total_price,
+                    hsn_code=cart_item.product.hsn_code,
+                    gst_rate=cart_item.product.gst_rate,
+                    taxable_value=tax_split['taxable_value'],
+                    tax_amount=tax_split['tax_amount'],
+                    tax_type='GST',
                 ))
                 
                 # Reduce product quantity (only if tracked) and log it
@@ -776,6 +790,9 @@ class OrderCreateSerializer(serializers.Serializer):
 
             # Bulk create items
             OrderItem.objects.bulk_create(order_items)
+            order.taxable_amount = quantize_2(taxable_amount)
+            order.tax_amount = quantize_2(tax_amount)
+            order.save(update_fields=['taxable_amount', 'tax_amount'])
             
             if logs_to_create:
                 from products.models import ProductInventoryLog
@@ -1021,6 +1038,8 @@ class OrderModificationSerializer(serializers.Serializer):
 
     def update(self, instance, validated_data):
         """Update order items and details"""
+        from products.models import ProductInventoryLog
+
         items_data = validated_data.get('items', [])
         delivery_mode = validated_data.get('delivery_mode')
         discount_amount = validated_data.get('discount_amount')
@@ -1099,7 +1118,7 @@ class OrderModificationSerializer(serializers.Serializer):
                         
                         # Update price if provided
                         if 'unit_price' in item_data:
-                            item.unit_price = item_data['unit_price']
+                            item.unit_price = Decimal(str(item_data['unit_price']))
                         
                         # Recalculate item total and save
                         item.save() # save() method in model calculates total_price
@@ -1151,8 +1170,36 @@ class OrderModificationSerializer(serializers.Serializer):
             
             # Recalculate order subtotal from scratch to be safe
             # (In case some items were not in the update list but still exist)
-            subtotal = sum(item.total_price for item in instance.items.all())
+            taxable_amount = Decimal('0.00')
+            tax_amount = Decimal('0.00')
+            current_items = list(instance.items.select_related('product').all())
+            for item in current_items:
+                tax_split = split_inclusive_line(
+                    item.total_price,
+                    item.product.gst_rate,
+                )
+                item.hsn_code = item.product.hsn_code
+                item.gst_rate = item.product.gst_rate
+                item.taxable_value = tax_split['taxable_value']
+                item.tax_amount = tax_split['tax_amount']
+                item.tax_type = 'GST'
+                item.save(update_fields=[
+                    'hsn_code',
+                    'gst_rate',
+                    'taxable_value',
+                    'tax_amount',
+                    'tax_type',
+                ])
+                taxable_amount += tax_split['taxable_value']
+                tax_amount += tax_split['tax_amount']
+
+            subtotal = sum(
+                (item.total_price for item in current_items),
+                Decimal('0.00'),
+            )
             instance.subtotal = subtotal
+            instance.taxable_amount = quantize_2(taxable_amount)
+            instance.tax_amount = quantize_2(tax_amount)
             
             # Update delivery mode
             if delivery_mode:
