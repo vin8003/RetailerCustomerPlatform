@@ -45,6 +45,7 @@ They are **not** automatically durable knowledge. Many pages are builder briefs,
 | [OE-127.md](OE-127.md) | durable | [inventory-adjust-permission](../requirements/inventory-adjust-permission.md) |
 | [OE-103.md](OE-103.md) | durable | [parent-child-pack-skus](../requirements/parent-child-pack-skus.md) |
 | [OE-136.md](OE-136.md) | durable | [product-batch-expiry](../requirements/product-batch-expiry.md) |
+| [OE-141.md](OE-141.md) | durable | [damage-expiry-write-off](../requirements/damage-expiry-write-off.md) |
 | [OE-143.md](OE-143.md) | durable | [khata-credit-lock](../requirements/khata-credit-lock.md) |
 | [OE-212.md](OE-212.md) | durable | [customer-profile-order-history](../requirements/customer-profile-order-history.md) |
 | [OE-220.md](OE-220.md) | durable | [shop-rewards-otp-redeem](../requirements/shop-rewards-otp-redeem.md) |

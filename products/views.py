@@ -50,6 +50,12 @@ from products.inventory_adjust import (
     submitted_on_hand_differs,
     submitted_pack_link_differs,
 )
+from products.write_off import (
+    WriteOffError,
+    parse_write_off_batch_id,
+    parse_write_off_quantity,
+    write_off_stock,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -745,6 +751,79 @@ def update_product(request, product_id):
             {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def write_off_product(request, product_id):
+    """
+    OE-141 / F-0032 — decrease on-hand for damage / expiry / spoilage.
+    Requires inventory.adjust. Tenancy is retailer-scoped (404 deny).
+    """
+    if request.user.user_type != 'retailer':
+        return Response(
+            {'error': 'Only retailers can write off stock'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    try:
+        retailer = RetailerProfile.objects.select_related('organization').get(
+            user=request.user
+        )
+    except RetailerProfile.DoesNotExist:
+        adjust_err = require_inventory_adjust(request.user)
+        if adjust_err is not None:
+            return adjust_err
+        return Response(
+            {'error': 'Retailer profile not found'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    adjust_err = require_inventory_adjust(
+        request.user, organization=retailer.organization
+    )
+    if adjust_err is not None:
+        return adjust_err
+
+    data = request.data if isinstance(request.data, dict) else {}
+    quantity = parse_write_off_quantity(data.get('quantity'))
+    if quantity is None:
+        return Response(
+            {'error': 'quantity must be greater than 0'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    batch_id = parse_write_off_batch_id(data.get('batch_id'))
+    if batch_id is False:
+        return Response(
+            {'error': 'Invalid batch_id'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        log = write_off_stock(
+            product_id=product_id,
+            retailer=retailer,
+            quantity=quantity,
+            reason=data.get('reason'),
+            batch_id=batch_id,
+            created_by=request.user,
+        )
+    except WriteOffError as exc:
+        return Response({'error': exc.message}, status=exc.status_code)
+
+    return Response(
+        {
+            'id': log.id,
+            'product_id': log.product_id,
+            'batch_id': log.batch_id,
+            'reason': log.reason,
+            'log_type': log.log_type,
+            'quantity_change': str(log.quantity_change),
+            'previous_quantity': str(log.previous_quantity),
+            'new_quantity': str(log.new_quantity),
+        },
+        status=status.HTTP_201_CREATED,
+    )
 
 
 @api_view(['DELETE'])
