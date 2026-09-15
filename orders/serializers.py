@@ -5,7 +5,7 @@ from django.utils import timezone
 from .models import Order, OrderItem, OrderStatusLog, OrderDelivery, OrderFeedback, OrderReturn, OrderChatMessage, RetailerRating
 from .domain.status_policy import ensure_transition_allowed, InvalidStatusTransitionError
 from customers.models import CustomerAddress
-from products.models import Product
+from products.models import Product, ProductInventoryLog
 from cart.models import Cart, CartItem
 from returns.models import SalesReturnItem
 from django.db.models import Sum
@@ -777,7 +777,6 @@ class OrderCreateSerializer(serializers.Serializer):
                     cart_item.product.reduce_quantity(quantity)
                     new_qty = prev_qty - quantity
                     
-                    from products.models import ProductInventoryLog
                     logs_to_create.append(ProductInventoryLog(
                         product=cart_item.product,
                         log_type='sold',
@@ -795,7 +794,6 @@ class OrderCreateSerializer(serializers.Serializer):
             order.save(update_fields=['taxable_amount', 'tax_amount'])
             
             if logs_to_create:
-                from products.models import ProductInventoryLog
                 ProductInventoryLog.objects.bulk_create(logs_to_create)
 
             if points_to_redeem > 0:
@@ -1072,7 +1070,6 @@ class OrderModificationSerializer(serializers.Serializer):
                                 item.product.increase_quantity(item.quantity)
                                 new_qty = prev_qty + item.quantity
                                 
-                                from products.models import ProductInventoryLog
                                 logs_to_create.append(ProductInventoryLog(
                                     product=item.product,
                                     log_type='returned',
@@ -1169,7 +1166,6 @@ class OrderModificationSerializer(serializers.Serializer):
                     )
             
             if logs_to_create:
-                from products.models import ProductInventoryLog
                 ProductInventoryLog.objects.bulk_create(logs_to_create)
             
             # Recalculate order subtotal from scratch to be safe

@@ -162,7 +162,11 @@ def modify_order(request, order_id):
         if order.status != 'pending':
             return Response({'error': 'Only pending orders can be modified'}, status=status.HTTP_400_BAD_REQUEST)
         with transaction.atomic():
-            serializer = OrderModificationSerializer(order, data=request.data, context={'user': request.user})
+            serializer = OrderModificationSerializer(
+                order,
+                data=request.data,
+                context={'user': request.user, 'request': request},
+            )
             if serializer.is_valid():
                 order = serializer.save()
                 if order.points_redeemed > 0:
