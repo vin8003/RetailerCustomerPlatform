@@ -29,7 +29,7 @@ Record shrinkage against on-hand with a reason code. This is not a second stock 
 | `spoilage` | `spoiled` | Batch required when `has_batches` |
 | `expiry` | `expired` | Batch required; `expiry_date < today` (null expiry is not expired) |
 
-Quantity is a positive `Decimal`. It cannot exceed the target batch (or product) on-hand. Fractional children are rejected — write off the parent bulk product.
+Quantity is a positive `Decimal`. It cannot exceed the target batch (or product) on-hand. Inactive batches and fractional children are rejected — write off an active lot, or the parent bulk product.
 
 ## API
 

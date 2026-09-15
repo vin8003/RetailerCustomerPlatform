@@ -271,6 +271,31 @@ class TestWriteOffStock:
         assert exc.value.status_code == 400
         assert "batch" in exc.value.message.lower()
 
+    def test_inactive_batch_is_rejected(self):
+        owner, shop = _make_retailer("oe141_own_inact", "OE141 Inactive Shop")
+        product = _make_product(shop, has_batches=True, quantity=0)
+        batch = _make_batch(product, "OFF", Decimal("4.000"))
+        batch.is_active = False
+        batch.save(update_fields=["is_active"])
+        product.sync_inventory_from_batches()
+        product_qty = product.quantity
+
+        with pytest.raises(WriteOffError) as exc:
+            write_off_stock(
+                product_id=product.id,
+                retailer=shop,
+                quantity=Decimal("1.000"),
+                reason=REASON_DAMAGE,
+                batch_id=batch.id,
+                created_by=owner,
+            )
+
+        assert exc.value.status_code == 400
+        batch.refresh_from_db()
+        product.refresh_from_db()
+        assert batch.quantity == Decimal("4.000")
+        assert product.quantity == product_qty
+
     def test_quantity_over_on_hand_is_rejected(self):
         owner, shop = _make_retailer("oe141_own_over", "OE141 Over Shop")
         product = _make_product(shop, quantity=Decimal("2.000"))

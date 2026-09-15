@@ -30,6 +30,7 @@ ERR_NON_EXPIRED = 'Expiry write-off cannot target a non-expired batch'
 ERR_INSUFFICIENT = 'quantity exceeds on-hand'
 ERR_PRODUCT_NOT_FOUND = 'Product not found'
 ERR_BATCH_NOT_FOUND = 'Batch not found'
+ERR_BATCH_INACTIVE = 'Batch is not active'
 ERR_PARENT_CHILD = 'Write off the parent bulk product'
 ERR_NOT_TRACKED = 'Product does not track inventory'
 
@@ -103,6 +104,8 @@ def write_off_stock(
                 )
             except ProductBatch.DoesNotExist as exc:
                 raise WriteOffError(ERR_BATCH_NOT_FOUND, 404) from exc
+            if not batch.is_active:
+                raise WriteOffError(ERR_BATCH_INACTIVE, 400)
         elif product.has_batches:
             raise WriteOffError(ERR_BATCH_REQUIRED, 400)
 
