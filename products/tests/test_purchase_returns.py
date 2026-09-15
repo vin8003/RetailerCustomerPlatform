@@ -170,6 +170,43 @@ class TestPurchaseReturns:
         ).latest("id")
         assert ledger.amount == Decimal("210.00")
 
+    def test_purchase_return_falls_back_to_product_tax_when_purchase_item_missing(
+        self, api_client, retailer_user, supplier, purchase_invoice, product
+    ):
+        api_client.force_authenticate(user=retailer_user)
+        purchase_item = purchase_invoice.items.first()
+        purchase_item.hsn_code = "10063010"
+        purchase_item.gst_rate = Decimal("5.00")
+        purchase_item.save()
+        product.hsn_code = "22021000"
+        product.gst_rate = Decimal("18.00")
+        product.save()
+
+        response = api_client.post(
+            reverse("purchase-return-list"),
+            {
+                "supplier_id": supplier.id,
+                "invoice_id": purchase_invoice.id,
+                "items": [{
+                    "product_id": product.id,
+                    "quantity": 2,
+                    "purchase_price": "118.00",
+                }],
+            },
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_201_CREATED
+        purchase_return = PurchaseReturn.objects.get()
+        return_item = purchase_return.items.get()
+        assert purchase_return.total_amount == Decimal("236.00")
+        assert purchase_return.taxable_amount == Decimal("200.00")
+        assert purchase_return.tax_amount == Decimal("36.00")
+        assert return_item.hsn_code == "22021000"
+        assert return_item.gst_rate == Decimal("18.00")
+        assert return_item.tax_type == "GST"
+        assert return_item.purchase_item is None
+
     def test_get_invoice_items_exposes_tax_snapshot(
         self, api_client, retailer_user, purchase_invoice
     ):

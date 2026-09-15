@@ -58,6 +58,7 @@ class SalesReturnViewSet(viewsets.ModelViewSet):
                     'batch_id': item.batch_id,
                     'hsn_code': item.hsn_code,
                     'gst_rate': item.gst_rate,
+                    'product_gst_rate': item.product.gst_rate,
                     'tax_type': item.tax_type,
                 })
 
@@ -164,6 +165,7 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
                 'batch_id': item.batch_id if hasattr(item, 'batch_id') else None,
                 'hsn_code': item.hsn_code,
                 'gst_rate': item.gst_rate,
+                'product_gst_rate': item.product.gst_rate if item.product else None,
                 'tax_type': item.tax_type,
             })
             

@@ -154,6 +154,43 @@ class TestSalesReturns:
         assert return_item.taxable_value == Decimal("200.00")
         assert return_item.tax_amount == Decimal("36.00")
 
+    def test_sales_return_falls_back_to_product_tax_when_order_item_missing(
+        self, api_client, retailer_user, setup_order, product
+    ):
+        api_client.force_authenticate(user=retailer_user)
+        order_item = setup_order.items.first()
+        order_item.hsn_code = "09011111"
+        order_item.gst_rate = Decimal("18.00")
+        order_item.save()
+        product.hsn_code = "22021000"
+        product.gst_rate = Decimal("5.00")
+        product.save()
+
+        response = api_client.post(
+            reverse("sales-return-list"),
+            {
+                "order_id": setup_order.id,
+                "refund_payment_mode": "cash",
+                "items": [{
+                    "product_id": product.id,
+                    "quantity": 2,
+                    "refund_unit_price": "105.00",
+                }],
+            },
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_201_CREATED
+        sales_return = SalesReturn.objects.get()
+        return_item = sales_return.items.get()
+        assert sales_return.refund_amount == Decimal("210.00")
+        assert sales_return.taxable_amount == Decimal("200.00")
+        assert sales_return.tax_amount == Decimal("10.00")
+        assert return_item.hsn_code == "22021000"
+        assert return_item.gst_rate == Decimal("5.00")
+        assert return_item.tax_type == "GST"
+        assert return_item.order_item is None
+
     def test_search_order_exposes_tax_snapshot(
         self, api_client, retailer_user, setup_order
     ):
