@@ -4,6 +4,7 @@ OE-100 / F-0041 thin EXTEND: supplier GSTIN, payment-terms gate, tenancy.
 from unittest.mock import MagicMock
 
 import pytest
+from django.db import IntegrityError
 from django.urls import reverse
 from rest_framework import status
 
@@ -14,8 +15,11 @@ from retailers.permissions_catalog import ALL_PERMISSION_CODES
 from retailers.serializers import SupplierSerializer
 from retailers.suppliers import (
     DUPLICATE_GSTIN_MESSAGE,
+    PAYMENT_TERMS_WHITESPACE_MESSAGE,
     PERM_PURCHASING_TERMS,
+    UNIQ_ORG_SUPPLIER_GSTIN,
     active_suppliers_for_org,
+    assert_payment_terms_not_whitespace_only,
     gstin_exists_in_org,
     normalize_gstin,
     payment_terms_would_change,
@@ -79,13 +83,15 @@ def _gstin_duplicate_flagged(payload):
         return False
     if isinstance(flag, (list, tuple)) and flag:
         return str(flag[0]).lower() in ("true", "1")
-    return False
+    return str(flag).lower() in ("true", "1")
 
 
 @pytest.mark.django_db
 class TestSupplierHelperUnits:
     def test_normalize_gstin_optional_and_uppercase(self):
         assert normalize_gstin("") == ""
+        assert normalize_gstin(None) == ""
+        assert normalize_gstin("   ") == ""
         assert normalize_gstin("  22aaaaa0000a1z5  ") == GSTIN_A
 
     def test_normalize_gstin_rejects_invalid(self):
@@ -98,10 +104,20 @@ class TestSupplierHelperUnits:
         instance = type("S", (), {"payment_terms": "Net 30"})()
         assert payment_terms_would_change(instance, {"company_name": "X"}) is False
         assert payment_terms_would_change(instance, {"payment_terms": "Net 30"}) is False
+        assert payment_terms_would_change(instance, {"payment_terms": "  Net 30  "}) is False
         assert payment_terms_would_change(instance, {"payment_terms": "COD"}) is True
         assert payment_terms_would_change(None, {"company_name": "X"}) is False
         assert payment_terms_would_change(None, {"payment_terms": "COD"}) is True
         assert payment_terms_would_change(None, {"payment_terms": ""}) is False
+
+    def test_payment_terms_whitespace_only_is_rejected(self):
+        from rest_framework.exceptions import ValidationError
+
+        instance = type("S", (), {"payment_terms": "Net 30"})()
+        assert payment_terms_would_change(instance, {"payment_terms": "   "}) is True
+        with pytest.raises(ValidationError) as exc_info:
+            assert_payment_terms_not_whitespace_only({"payment_terms": "   "})
+        assert PAYMENT_TERMS_WHITESPACE_MESSAGE in str(exc_info.value.detail)
 
     def test_gstin_exists_scoped_to_org(self):
         _owner_a, shop_a = _make_retailer("gst_org_a", "Shop A")
@@ -123,6 +139,135 @@ class TestSupplierHelperUnits:
             )
         )
         assert names == {"Live"}
+
+
+def _second_shop_same_org(org, username, shop_name):
+    user = User.objects.create_user(
+        username=username,
+        email=f"{username}@test.com",
+        password="TestPass123!",
+        user_type="retailer",
+        is_active=True,
+    )
+    return RetailerProfile.objects.create(
+        user=user,
+        organization=org,
+        shop_name=shop_name,
+        address_line1="2 Main",
+        city="City",
+        state="State",
+        pincode="110002",
+        is_active=True,
+    )
+
+
+@pytest.mark.django_db
+class TestSupplierGstinDbConstraint:
+    def test_orm_null_gstin_stored_as_blank(self):
+        _owner, shop = _make_retailer("gst_orm_null", "ORM Null GST Shop")
+        row = Supplier.objects.create(
+            retailer=shop, company_name="Null GST", gst_number=None
+        )
+        row.refresh_from_db()
+        assert row.gst_number == ""
+
+    def test_db_rejects_duplicate_gstin_same_org(self):
+        _owner, shop = _make_retailer("gst_db_dup", "DB Dup GST Shop")
+        Supplier.objects.create(
+            retailer=shop, company_name="First", gst_number=GSTIN_A
+        )
+        with pytest.raises(IntegrityError):
+            Supplier.objects.create(
+                retailer=shop, company_name="Second", gst_number=GSTIN_A
+            )
+
+    def test_db_rejects_duplicate_gstin_across_shops_same_org(self):
+        _owner, shop_a = _make_retailer("gst_db_multi", "DB Multi A")
+        shop_b = _second_shop_same_org(
+            shop_a.organization, "gst_db_multi_b", "DB Multi B"
+        )
+        Supplier.objects.create(
+            retailer=shop_a, company_name="Loc A", gst_number=GSTIN_A
+        )
+        with pytest.raises(IntegrityError):
+            Supplier.objects.create(
+                retailer=shop_b, company_name="Loc B", gst_number=GSTIN_A
+            )
+
+    def test_db_allows_same_gstin_other_org_and_blank_repeat(self):
+        _owner_a, shop_a = _make_retailer("gst_db_a", "DB Org A")
+        _owner_b, shop_b = _make_retailer("gst_db_b", "DB Org B")
+        Supplier.objects.create(
+            retailer=shop_a, company_name="A Vendor", gst_number=GSTIN_A
+        )
+        other = Supplier.objects.create(
+            retailer=shop_b, company_name="B Vendor", gst_number=GSTIN_A
+        )
+        assert other.gst_number == GSTIN_A
+        Supplier.objects.create(retailer=shop_a, company_name="Blank 1", gst_number="")
+        Supplier.objects.create(retailer=shop_a, company_name="Blank 2", gst_number=None)
+        assert (
+            Supplier.objects.filter(retailer=shop_a, gst_number="").count() == 2
+        )
+
+    def test_integrity_error_maps_to_duplicate_flag(self, api_client, monkeypatch):
+        owner, shop = _make_retailer("gst_db_race", "DB Race Shop")
+        Supplier.objects.create(
+            retailer=shop, company_name="First", gst_number=GSTIN_A
+        )
+        monkeypatch.setattr(
+            "retailers.suppliers.gstin_exists_in_org", lambda *args, **kwargs: False
+        )
+        api_client.force_authenticate(user=owner)
+        resp = api_client.post(
+            reverse("erp-supplier-list"),
+            {"company_name": "Racy", "gst_number": GSTIN_A},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST, resp.data
+        assert _gstin_duplicate_flagged(resp.data) is True
+        assert DUPLICATE_GSTIN_MESSAGE in str(resp.data.get("gst_number"))
+        assert Supplier.objects.filter(retailer=shop).count() == 1
+        assert any(
+            getattr(constraint, "name", "") == UNIQ_ORG_SUPPLIER_GSTIN
+            for constraint in Supplier._meta.constraints
+        )
+
+    def test_integrity_error_maps_to_duplicate_flag_on_update(
+        self, api_client, monkeypatch
+    ):
+        owner, shop = _make_retailer("gst_db_race_upd", "DB Race Upd Shop")
+        Supplier.objects.create(
+            retailer=shop, company_name="First", gst_number=GSTIN_A
+        )
+        other = Supplier.objects.create(
+            retailer=shop, company_name="Second", gst_number=GSTIN_B
+        )
+        monkeypatch.setattr(
+            "retailers.suppliers.gstin_exists_in_org", lambda *args, **kwargs: False
+        )
+        api_client.force_authenticate(user=owner)
+        resp = api_client.patch(
+            reverse("erp-supplier-detail", args=[other.id]),
+            {"gst_number": GSTIN_A},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST, resp.data
+        assert _gstin_duplicate_flagged(resp.data) is True
+        other.refresh_from_db()
+        assert other.gst_number == GSTIN_B
+
+    def test_update_fields_still_stamps_organization(self):
+        _owner, shop = _make_retailer("gst_stamp_upd", "Stamp Org Shop")
+        row = Supplier.objects.create(retailer=shop, company_name="Stamp Me")
+        Supplier.objects.filter(pk=row.pk).update(organization=None)
+        row.refresh_from_db()
+        assert row.organization_id is None
+        row.is_active = False
+        row.save(update_fields=["is_active"])
+        row.refresh_from_db()
+        assert row.organization_id == shop.organization_id
+        assert row.is_active is False
 
 
 @pytest.mark.django_db
@@ -179,6 +324,24 @@ class TestSupplierCreateGstin:
         )
         assert resp.status_code == status.HTTP_201_CREATED, resp.data
         assert Supplier.objects.filter(retailer=shop).count() == 2
+
+    def test_null_and_blank_gstin_normalize_and_may_repeat(self, api_client):
+        owner, shop = _make_retailer("sup_null_gst", "Null GST Shop")
+        api_client.force_authenticate(user=owner)
+        created = []
+        for name, body in (
+            ("Null Vendor", {"company_name": "Null Vendor", "gst_number": None}),
+            ("Empty Vendor", {"company_name": "Empty Vendor", "gst_number": ""}),
+            ("Omitted Vendor", {"company_name": "Omitted Vendor"}),
+        ):
+            resp = api_client.post(reverse("erp-supplier-list"), body, format="json")
+            assert resp.status_code == status.HTTP_201_CREATED, (name, resp.data)
+            assert resp.data["gst_number"] == ""
+            created.append(resp.data["id"])
+        stored = list(
+            Supplier.objects.filter(pk__in=created).values_list("gst_number", flat=True)
+        )
+        assert stored == ["", "", ""]
 
     def test_same_gstin_allowed_across_orgs(self, api_client):
         owner_a, shop_a = _make_retailer("sup_gst_a", "Org A Shop")
@@ -301,6 +464,53 @@ class TestSupplierPaymentTermsGate:
     def test_purchasing_terms_in_catalog(self):
         assert PERM_PURCHASING_TERMS in ALL_PERMISSION_CODES
 
+    def test_whitespace_only_payment_terms_rejected_on_change(self, api_client):
+        owner, shop = _make_retailer("terms_ws_owner", "WS Terms Shop")
+        supplier = Supplier.objects.create(
+            retailer=shop, company_name="WS Vendor", payment_terms="Net 15"
+        )
+        api_client.force_authenticate(user=owner)
+        resp = api_client.patch(
+            reverse("erp-supplier-detail", args=[supplier.id]),
+            {"payment_terms": "   "},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST, resp.data
+        assert PAYMENT_TERMS_WHITESPACE_MESSAGE in str(resp.data)
+        supplier.refresh_from_db()
+        assert supplier.payment_terms == "Net 15"
+
+    def test_payment_terms_are_trimmed(self, api_client):
+        owner, _shop = _make_retailer("terms_trim_owner", "Trim Terms Shop")
+        api_client.force_authenticate(user=owner)
+        create = api_client.post(
+            reverse("erp-supplier-list"),
+            {"company_name": "Trim Vendor", "payment_terms": "  Net 30  "},
+            format="json",
+        )
+        assert create.status_code == status.HTTP_201_CREATED, create.data
+        assert create.data["payment_terms"] == "Net 30"
+        sid = create.data["id"]
+        echo = api_client.patch(
+            reverse("erp-supplier-detail", args=[sid]),
+            {"payment_terms": "  Net 30  "},
+            format="json",
+        )
+        assert echo.status_code == status.HTTP_200_OK, echo.data
+        assert echo.data["payment_terms"] == "Net 30"
+
+    def test_whitespace_only_payment_terms_rejected_on_create(self, api_client):
+        owner, shop = _make_retailer("terms_ws_create", "WS Create Shop")
+        api_client.force_authenticate(user=owner)
+        resp = api_client.post(
+            reverse("erp-supplier-list"),
+            {"company_name": "WS Create Vendor", "payment_terms": " \t "},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST, resp.data
+        assert PAYMENT_TERMS_WHITESPACE_MESSAGE in str(resp.data)
+        assert not Supplier.objects.filter(retailer=shop).exists()
+
 
 @pytest.mark.django_db
 class TestSupplierTenancy:
@@ -376,3 +586,39 @@ class TestSupplierTenancy:
         assert resp.status_code == status.HTTP_200_OK
         ids = [row["id"] for row in resp.data["results"]]
         assert ids == [live.id]
+
+
+@pytest.mark.django_db
+class TestSupplierQueryBudget:
+    """List + create must stay bounded (no N+1, tenant-scoped queryset)."""
+
+    def test_list_query_count(self, api_client, django_assert_num_queries):
+        owner, shop = _make_retailer("sup_q_list", "Query List Shop")
+        Supplier.objects.create(retailer=shop, company_name="Vendor 1")
+        api_client.force_authenticate(user=owner)
+        with django_assert_num_queries(4):
+            resp = api_client.get(reverse("erp-supplier-list"))
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.data["count"] == 1
+
+    def test_list_scales_with_rows(self, api_client, django_assert_num_queries):
+        owner, shop = _make_retailer("sup_q_scale", "Query Scale Shop")
+        for i in range(8):
+            Supplier.objects.create(retailer=shop, company_name=f"Vendor {i}")
+        api_client.force_authenticate(user=owner)
+        with django_assert_num_queries(4):
+            resp = api_client.get(reverse("erp-supplier-list"))
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.data["count"] == 8
+
+    def test_create_query_count(self, api_client, django_assert_num_queries):
+        owner, _shop = _make_retailer("sup_q_create", "Query Create Shop")
+        api_client.force_authenticate(user=owner)
+        with django_assert_num_queries(8):
+            resp = api_client.post(
+                reverse("erp-supplier-list"),
+                {"company_name": "Budget Vendor", "gst_number": GSTIN_A},
+                format="json",
+            )
+        assert resp.status_code == status.HTTP_201_CREATED, resp.data
+        assert resp.data["gst_number"] == GSTIN_A

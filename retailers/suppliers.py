@@ -12,7 +12,7 @@ from rest_framework import status
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
-from retailers.models import OrgAuditLog, RetailerProfile, Supplier
+from retailers.models import OrgAuditLog, RetailerProfile, Supplier, UNIQ_ORG_SUPPLIER_GSTIN
 from retailers.organization import (
     ensure_org_rbac_bootstrap,
     get_organization_for_user,
@@ -29,6 +29,9 @@ GSTIN_FORMAT_MESSAGE = (
 )
 DUPLICATE_GSTIN_MESSAGE = (
     'GSTIN already used by another supplier in this organization.'
+)
+PAYMENT_TERMS_WHITESPACE_MESSAGE = (
+    'Payment terms cannot be whitespace-only.'
 )
 INACTIVE_SUPPLIER_MESSAGE = (
     'Inactive suppliers cannot be selected on new purchase documents.'
@@ -79,6 +82,52 @@ def duplicate_gstin_error():
         'gst_number': [DUPLICATE_GSTIN_MESSAGE],
         'gstin_duplicate': True,
     })
+
+
+def map_gstin_integrity_error(exc):
+    """Map the org GSTIN unique constraint to the same 400 the app check uses."""
+    text = str(exc)
+    lowered = text.lower()
+    if UNIQ_ORG_SUPPLIER_GSTIN in text:
+        raise duplicate_gstin_error() from exc
+    if (
+        'unique' in lowered
+        and 'gst_number' in lowered
+        and 'organization' in lowered
+    ):
+        raise duplicate_gstin_error() from exc
+    raise exc
+
+
+def normalize_payment_terms(value):
+    """
+    Trim payment terms. None/empty stays empty.
+
+    Whitespace-only is invalid when the field is being set.
+    """
+    if value is None:
+        return ''
+    text = str(value)
+    stripped = text.strip()
+    if text and not stripped:
+        raise ValidationError(PAYMENT_TERMS_WHITESPACE_MESSAGE)
+    return stripped
+
+
+def payment_terms_are_whitespace_only(data):
+    if not isinstance(data, dict) or 'payment_terms' not in data:
+        return False
+    raw = data.get('payment_terms')
+    if raw is None:
+        return False
+    text = str(raw)
+    return bool(text) and not text.strip()
+
+
+def assert_payment_terms_not_whitespace_only(data):
+    """Raise 400 when payment_terms is present and whitespace-only."""
+    if payment_terms_are_whitespace_only(data):
+        raise ValidationError({'payment_terms': [PAYMENT_TERMS_WHITESPACE_MESSAGE]})
 
 
 def resolve_supplier_home_retailer(user):
