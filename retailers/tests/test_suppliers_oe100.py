@@ -19,6 +19,7 @@ from retailers.suppliers import (
     PERM_PURCHASING_TERMS,
     UNIQ_ORG_SUPPLIER_GSTIN,
     active_suppliers_for_org,
+    assert_payment_terms_not_whitespace_only,
     gstin_exists_in_org,
     normalize_gstin,
     payment_terms_would_change,
@@ -113,8 +114,9 @@ class TestSupplierHelperUnits:
         from rest_framework.exceptions import ValidationError
 
         instance = type("S", (), {"payment_terms": "Net 30"})()
+        assert payment_terms_would_change(instance, {"payment_terms": "   "}) is True
         with pytest.raises(ValidationError) as exc_info:
-            payment_terms_would_change(instance, {"payment_terms": "   "})
+            assert_payment_terms_not_whitespace_only({"payment_terms": "   "})
         assert PAYMENT_TERMS_WHITESPACE_MESSAGE in str(exc_info.value.detail)
 
     def test_gstin_exists_scoped_to_org(self):
@@ -230,6 +232,42 @@ class TestSupplierGstinDbConstraint:
             getattr(constraint, "name", "") == UNIQ_ORG_SUPPLIER_GSTIN
             for constraint in Supplier._meta.constraints
         )
+
+    def test_integrity_error_maps_to_duplicate_flag_on_update(
+        self, api_client, monkeypatch
+    ):
+        owner, shop = _make_retailer("gst_db_race_upd", "DB Race Upd Shop")
+        Supplier.objects.create(
+            retailer=shop, company_name="First", gst_number=GSTIN_A
+        )
+        other = Supplier.objects.create(
+            retailer=shop, company_name="Second", gst_number=GSTIN_B
+        )
+        monkeypatch.setattr(
+            "retailers.suppliers.gstin_exists_in_org", lambda *args, **kwargs: False
+        )
+        api_client.force_authenticate(user=owner)
+        resp = api_client.patch(
+            reverse("erp-supplier-detail", args=[other.id]),
+            {"gst_number": GSTIN_A},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST, resp.data
+        assert _gstin_duplicate_flagged(resp.data) is True
+        other.refresh_from_db()
+        assert other.gst_number == GSTIN_B
+
+    def test_update_fields_still_stamps_organization(self):
+        _owner, shop = _make_retailer("gst_stamp_upd", "Stamp Org Shop")
+        row = Supplier.objects.create(retailer=shop, company_name="Stamp Me")
+        Supplier.objects.filter(pk=row.pk).update(organization=None)
+        row.refresh_from_db()
+        assert row.organization_id is None
+        row.is_active = False
+        row.save(update_fields=["is_active"])
+        row.refresh_from_db()
+        assert row.organization_id == shop.organization_id
+        assert row.is_active is False
 
 
 @pytest.mark.django_db

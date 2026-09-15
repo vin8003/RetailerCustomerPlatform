@@ -28,8 +28,8 @@ One vendor master. Do not invent a second supplier / vendor table. Ledger rows s
 
 | Method | Path | Behavior |
 |--------|------|----------|
-| POST | `/api/products/erp/suppliers/` | Create. `gst_number` optional (`null` / `""` / omitted all store blank). Blank GSTIN may repeat. Duplicate non-blank GSTIN in the same org → **400** + `gstin_duplicate` (app check and DB unique). Non-empty `payment_terms` requires `purchasing.terms`. Whitespace-only `payment_terms` → **400**. Terms are trimmed. Create query budget: **8**. |
-| GET | `/api/products/erp/suppliers/` | Same-org suppliers. `?is_active=true` hides inactive (picker). List query budget: **4**. |
+| POST | `/api/products/erp/suppliers/` | Create. `gst_number` optional (`null` / `""` / omitted all store blank). Blank GSTIN may repeat. Duplicate non-blank GSTIN in the same org → **400** + `gstin_duplicate` (app check and DB unique). Non-empty `payment_terms` requires `purchasing.terms`. Whitespace-only `payment_terms` → **400**. Terms are trimmed. |
+| GET | `/api/products/erp/suppliers/` | Same-org suppliers. `?is_active=true` hides inactive (picker). |
 | PATCH | `/api/products/erp/suppliers/<id>/` | Echoing current `payment_terms` (after trim) is allowed. Changing terms without `purchasing.terms` → **403**, row unchanged. Whitespace-only `payment_terms` → **400**, row unchanged. |
 | POST | `/api/products/erp/purchase-invoices/` | Inactive `supplier` → **400**. Cross-org supplier → **400**. Existing invoice may keep a supplier later marked inactive. |
 

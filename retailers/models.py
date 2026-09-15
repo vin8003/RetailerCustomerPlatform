@@ -841,7 +841,7 @@ class Supplier(models.Model):
     )
     organization = models.ForeignKey(
         Organization,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name='suppliers',
         null=True,
         blank=True,
@@ -853,7 +853,7 @@ class Supplier(models.Model):
     gst_number = models.CharField(
         max_length=15,
         blank=True,
-        help_text='GSTIN. Optional. Duplicate non-blank values are flagged per organization.',
+        help_text='GSTIN. Optional. Non-blank values are unique per organization.',
     )
     payment_terms = models.CharField(
         max_length=80,
@@ -904,6 +904,11 @@ class Supplier(models.Model):
             self.payment_terms = ''
         else:
             self.payment_terms = str(self.payment_terms).strip()
+        update_fields = kwargs.get('update_fields')
+        if update_fields is not None:
+            kwargs['update_fields'] = list(
+                set(update_fields) | {'organization', 'gst_number', 'payment_terms'}
+            )
         return super().save(*args, **kwargs)
 
     def __str__(self):

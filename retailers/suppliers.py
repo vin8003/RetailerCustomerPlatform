@@ -87,7 +87,14 @@ def duplicate_gstin_error():
 def map_gstin_integrity_error(exc):
     """Map the org GSTIN unique constraint to the same 400 the app check uses."""
     text = str(exc)
-    if UNIQ_ORG_SUPPLIER_GSTIN in text or 'gst_number' in text:
+    lowered = text.lower()
+    if UNIQ_ORG_SUPPLIER_GSTIN in text:
+        raise duplicate_gstin_error() from exc
+    if (
+        'unique' in lowered
+        and 'gst_number' in lowered
+        and 'organization' in lowered
+    ):
         raise duplicate_gstin_error() from exc
     raise exc
 
@@ -105,6 +112,22 @@ def normalize_payment_terms(value):
     if text and not stripped:
         raise ValidationError(PAYMENT_TERMS_WHITESPACE_MESSAGE)
     return stripped
+
+
+def payment_terms_are_whitespace_only(data):
+    if not isinstance(data, dict) or 'payment_terms' not in data:
+        return False
+    raw = data.get('payment_terms')
+    if raw is None:
+        return False
+    text = str(raw)
+    return bool(text) and not text.strip()
+
+
+def assert_payment_terms_not_whitespace_only(data):
+    """Raise 400 when payment_terms is present and whitespace-only."""
+    if payment_terms_are_whitespace_only(data):
+        raise ValidationError({'payment_terms': [PAYMENT_TERMS_WHITESPACE_MESSAGE]})
 
 
 def resolve_supplier_home_retailer(user):
@@ -136,7 +159,10 @@ def resolve_supplier_home_retailer(user):
 def submitted_payment_terms(data):
     if not isinstance(data, dict) or 'payment_terms' not in data:
         return _MISSING
-    return normalize_payment_terms(data.get('payment_terms'))
+    raw = data.get('payment_terms')
+    if raw is None:
+        return ''
+    return str(raw).strip()
 
 
 def payment_terms_would_change(instance, data):

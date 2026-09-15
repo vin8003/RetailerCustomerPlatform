@@ -15,6 +15,7 @@ from retailers.models import Supplier, RetailerProfile, RetailerCustomerMapping
 from retailers.organization import get_organization_for_user
 from retailers.serializers import SupplierSerializer
 from retailers.suppliers import (
+    assert_payment_terms_not_whitespace_only,
     map_gstin_integrity_error,
     org_suppliers_queryset,
     payment_terms_would_change,
@@ -57,6 +58,7 @@ class SupplierViewSet(viewsets.ModelViewSet):
         denied = self._deny_if_not_tenant()
         if denied is not None:
             return denied
+        assert_payment_terms_not_whitespace_only(self.request.data)
         return require_purchasing_terms(
             self.request.user,
             organization=self._caller_org(),
@@ -96,6 +98,7 @@ class SupplierViewSet(viewsets.ModelViewSet):
         if denied is not None:
             return denied
         instance = self.get_object()
+        assert_payment_terms_not_whitespace_only(request.data)
         terms_denied = require_purchasing_terms(
             request.user,
             organization=self._caller_org(),
@@ -110,6 +113,7 @@ class SupplierViewSet(viewsets.ModelViewSet):
         if denied is not None:
             return denied
         instance = self.get_object()
+        assert_payment_terms_not_whitespace_only(request.data)
         terms_denied = require_purchasing_terms(
             request.user,
             organization=self._caller_org(),

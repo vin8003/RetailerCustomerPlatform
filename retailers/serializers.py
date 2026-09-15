@@ -869,8 +869,6 @@ class SupplierSerializer(serializers.ModelSerializer):
             normalize_gstin,
         )
 
-        if 'gst_number' in attrs:
-            attrs['gst_number'] = normalize_gstin(attrs.get('gst_number'))
         gst = attrs.get('gst_number')
         if gst is None:
             gst = getattr(self.instance, 'gst_number', '') if self.instance else ''
