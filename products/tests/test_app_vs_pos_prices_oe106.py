@@ -14,9 +14,9 @@ from rest_framework import status
 
 from authentication.models import User
 from cart.models import Cart, CartItem
-from products.channel_price import CHANNEL_APP, CHANNEL_STORE
+from products.channel_price import CHANNEL_APP, CHANNEL_STORE, PERM_CATALOG_PRICE
 from products.models import Product, ProductCategory
-from retailers.models import RetailerProfile
+from retailers.models import OrgAuditLog, OrgRole, OrgStaffMembership, RetailerProfile
 from retailers.organization import ensure_organization_for_profile
 
 
@@ -41,6 +41,45 @@ def _make_retailer(username, shop_name):
     )
     ensure_organization_for_profile(profile, name=f"{shop_name} Org")
     return user, profile
+
+
+def _make_staff(org, username, permissions):
+    user = User.objects.create_user(
+        username=username,
+        email=f"{username}@test.com",
+        password="TestPass123!",
+        user_type="retailer",
+        is_active=True,
+    )
+    role = OrgRole.objects.create(
+        organization=org,
+        slug=f"role_{username}",
+        name=f"Role {username}",
+        permissions=list(permissions),
+        is_system=False,
+    )
+    OrgStaffMembership.objects.create(
+        organization=org,
+        user=user,
+        role=role,
+        is_active=True,
+    )
+    return user
+
+
+def _make_location_profile(user, org, shop_name):
+    return RetailerProfile.objects.create(
+        user=user,
+        organization=org,
+        shop_name=shop_name,
+        address_line1="2 Side",
+        city="City",
+        state="State",
+        pincode="110002",
+        is_active=True,
+        offers_delivery=True,
+        offers_pickup=True,
+    )
 
 
 def _make_customer(username):
@@ -207,3 +246,171 @@ class TestChannelPriceReads:
         )
         assert product.quantity == Decimal("9")
         assert Cart.objects.count() == 0
+
+
+@pytest.mark.django_db
+class TestChannelPriceWrites:
+    def test_owner_sets_app_price_and_is_audited(self, api_client):
+        owner, shop = _make_retailer("oe106_own_set", "OE106 Owner Set")
+        product = _make_product(shop)
+        api_client.force_authenticate(user=owner)
+
+        resp = api_client.patch(
+            reverse("update_product", args=[product.id]),
+            {"app_price": "33.00"},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        product.refresh_from_db()
+        assert product.app_price == Decimal("33.00")
+        assert product.price == Decimal("40.00")
+        row = OrgAuditLog.objects.get(
+            organization=shop.organization,
+            object_type=OrgAuditLog.OBJECT_CHANNEL_PRICE,
+            object_id=str(product.id),
+        )
+        assert row.action == OrgAuditLog.ACTION_UPDATE
+        assert row.summary_before["app_price"] is None
+        assert row.summary_after["app_price"] == "33.00"
+
+    def test_cashier_cannot_change_app_price(self, api_client):
+        owner, shop = _make_retailer("oe106_csh_deny", "OE106 Cashier Deny")
+        cashier = _make_staff(shop.organization, "oe106_csh_deny_u", [])
+        loc = _make_location_profile(cashier, shop.organization, "OE106 Cashier Loc")
+        product = _make_product(loc, name="Cashier Rice", app="33.00")
+        api_client.force_authenticate(user=cashier)
+
+        resp = api_client.patch(
+            reverse("update_product", args=[product.id]),
+            {"app_price": "31.00"},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_403_FORBIDDEN
+        assert "Catalog price" in resp.data["error"]
+        product.refresh_from_db()
+        assert product.app_price == Decimal("33.00")
+        assert not OrgAuditLog.objects.filter(
+            object_type=OrgAuditLog.OBJECT_CHANNEL_PRICE
+        ).exists()
+
+    def test_cashier_echo_app_price_can_patch_name(self, api_client):
+        owner, shop = _make_retailer("oe106_csh_echo", "OE106 Cashier Echo")
+        cashier = _make_staff(shop.organization, "oe106_csh_echo_u", [])
+        loc = _make_location_profile(cashier, shop.organization, "OE106 Echo Loc")
+        product = _make_product(loc, name="Echo Rice", app="33.00")
+        api_client.force_authenticate(user=cashier)
+
+        resp = api_client.patch(
+            reverse("update_product", args=[product.id]),
+            {"app_price": "33.00", "name": "Echo Rice Renamed"},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        product.refresh_from_db()
+        assert product.name == "Echo Rice Renamed"
+        assert product.app_price == Decimal("33.00")
+
+    def test_staff_with_catalog_price_can_set_app_price(self, api_client):
+        owner, shop = _make_retailer("oe106_staff_ok", "OE106 Staff Price")
+        staff = _make_staff(
+            shop.organization, "oe106_staff_ok_u", [PERM_CATALOG_PRICE]
+        )
+        loc = _make_location_profile(staff, shop.organization, "OE106 Staff Loc")
+        product = _make_product(loc, name="Staff Rice")
+        api_client.force_authenticate(user=staff)
+
+        resp = api_client.patch(
+            reverse("update_product", args=[product.id]),
+            {"app_price": "29.50"},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        product.refresh_from_db()
+        assert product.app_price == Decimal("29.50")
+
+    def test_cross_tenant_app_price_patch_is_404(self, api_client):
+        owner_a, shop_a = _make_retailer("oe106_ten_a", "OE106 Tenant A")
+        product = _make_product(shop_a, app="33.00")
+        owner_b, shop_b = _make_retailer("oe106_ten_b", "OE106 Tenant B")
+        api_client.force_authenticate(user=owner_b)
+
+        resp = api_client.patch(
+            reverse("update_product", args=[product.id]),
+            {"app_price": "1.00"},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_404_NOT_FOUND
+        product.refresh_from_db()
+        assert product.app_price == Decimal("33.00")
+
+    def test_cashier_cannot_bulk_set_app_price(self, api_client):
+        owner, shop = _make_retailer("oe106_bulk_csh", "OE106 Bulk Cashier")
+        cashier = _make_staff(shop.organization, "oe106_bulk_csh_u", [])
+        loc = _make_location_profile(cashier, shop.organization, "OE106 Bulk Loc")
+        product = _make_product(loc, name="Bulk Rice")
+        api_client.force_authenticate(user=cashier)
+
+        resp = api_client.patch(
+            reverse("bulk_update_products"),
+            {"items": [{"id": product.id, "app_price": "22.00"}]},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_403_FORBIDDEN
+        product.refresh_from_db()
+        assert product.app_price is None
+
+    def test_owner_bulk_sets_app_price_and_is_audited(self, api_client):
+        owner, shop = _make_retailer("oe106_bulk_own", "OE106 Bulk Owner")
+        product = _make_product(shop)
+        api_client.force_authenticate(user=owner)
+
+        resp = api_client.patch(
+            reverse("bulk_update_products"),
+            {"items": [{"id": product.id, "app_price": "22.00"}]},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_200_OK
+        product.refresh_from_db()
+        assert product.app_price == Decimal("22.00")
+        assert OrgAuditLog.objects.filter(
+            organization=shop.organization,
+            object_type=OrgAuditLog.OBJECT_CHANNEL_PRICE,
+            object_id=str(product.id),
+        ).exists()
+
+    def test_create_with_app_price_requires_permission(self, api_client):
+        owner, shop = _make_retailer("oe106_crt_own", "OE106 Create Shop")
+        cashier = _make_staff(shop.organization, "oe106_crt_csh", [])
+        _make_location_profile(cashier, shop.organization, "OE106 Create Loc")
+        category = ProductCategory.objects.create(
+            name="Create Cat", retailer=shop
+        )
+        api_client.force_authenticate(user=cashier)
+        resp = api_client.post(
+            reverse("create_product"),
+            {
+                "name": "New App Priced",
+                "price": "40.00",
+                "app_price": "33.00",
+                "quantity": 1,
+                "category": category.id,
+            },
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_403_FORBIDDEN
+        assert not Product.objects.filter(name="New App Priced").exists()
+
+    def test_owner_app_price_patch_query_budget(
+        self, api_client, django_assert_num_queries
+    ):
+        owner, shop = _make_retailer("oe106_q_write", "OE106 Write Q Shop")
+        product = _make_product(shop)
+        api_client.force_authenticate(user=owner)
+
+        with django_assert_num_queries(20):
+            resp = api_client.patch(
+                reverse("update_product", args=[product.id]),
+                {"app_price": "33.00"},
+                format="json",
+            )
+        assert resp.status_code == status.HTTP_200_OK

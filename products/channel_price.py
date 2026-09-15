@@ -156,8 +156,12 @@ def require_catalog_price(user, organization=None):
     return catalog_price_denied_response()
 
 
-def app_price_summary(product, app_price=None):
-    if app_price is None and product is not None:
+_UNSET = object()
+
+
+def app_price_summary(product, app_price=_UNSET):
+    """Build an audit summary. Pass ``app_price=None`` to record a clear."""
+    if app_price is _UNSET and product is not None:
         app_price = product.app_price
     return {
         'product_id': product.id if product is not None else None,

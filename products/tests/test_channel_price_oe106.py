@@ -12,6 +12,7 @@ import pytest
 from products.channel_price import (
     CHANNEL_APP,
     CHANNEL_STORE,
+    app_price_summary,
     apply_channel_price_representation,
     create_payload_sets_app_price,
     format_money,
@@ -120,6 +121,15 @@ class TestChannelRepresentation:
         )
         assert data['price'] == '40.00'
         assert data['app_price'] == '33.00'
+
+
+class TestAppPriceSummary:
+    def test_explicit_none_is_not_current_product_value(self):
+        product = _product('40.00', app='33.00')
+        before = app_price_summary(product, app_price=None)
+        after = app_price_summary(product)
+        assert before['app_price'] is None
+        assert after['app_price'] == '33.00'
 
 
 @pytest.mark.django_db
