@@ -10,9 +10,18 @@ from .models import (
     PurchaseInvoice, PurchaseItem, SupplierLedger
 )
 from products.inventory_adjust import UNPARSEABLE_EXPIRY, parse_expiry_date
+from products.channel_price import apply_channel_price_representation
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+class ChannelPriceRepresentationMixin:
+    """POS/retailer sees store price + app_price; app callers see app list only."""
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        return apply_channel_price_representation(data, instance, self.context)
 
 
 def parent_bulk_cycle_exists(child_pk, parent_product):
@@ -103,7 +112,7 @@ class ProductReviewSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'customer_name', 'is_verified_purchase', 'created_at']
 
 
-class ProductListSerializer(serializers.ModelSerializer):
+class ProductListSerializer(ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product list view
     """
@@ -124,7 +133,7 @@ class ProductListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
         fields = [
-            'id', 'name', 'description', 'price', 'purchase_price', 'discounted_price',
+            'id', 'name', 'description', 'price', 'app_price', 'purchase_price', 'discounted_price',
             'original_price', 'discount_percentage', 'quantity', 'track_inventory', 'unit',
             'minimum_order_quantity', 'maximum_order_quantity',
             'image', 'image_url', 'category_name', 'brand_name', 'retailer_name',
@@ -277,7 +286,7 @@ class ProductListSerializer(serializers.ModelSerializer):
             return False
 
 
-class ProductSearchSerializer(serializers.ModelSerializer):
+class ProductSearchSerializer(ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Lightweight serializer for product search results
     """
@@ -287,7 +296,7 @@ class ProductSearchSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Product
-        fields = ['id', 'name', 'price', 'unit', 'image', 'track_inventory', 'quantity', 'has_batches', 'batches']
+        fields = ['id', 'name', 'price', 'app_price', 'unit', 'image', 'track_inventory', 'quantity', 'has_batches', 'batches']
         
     def get_batches(self, obj):
         if obj.has_batches:
@@ -302,7 +311,7 @@ class ProductSearchSerializer(serializers.ModelSerializer):
             logger.error(f"Error getting search image: {e}")
             return None
 
-class ProductDetailSerializer(serializers.ModelSerializer):
+class ProductDetailSerializer(ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product detail view
     """
@@ -332,7 +341,7 @@ class ProductDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
         fields = [
-            'id', 'name', 'description', 'price', 'purchase_price', 'discounted_price',
+            'id', 'name', 'description', 'price', 'app_price', 'purchase_price', 'discounted_price',
             'original_price', 'discount_percentage', 'savings', 'quantity', 'track_inventory',
             'unit', 'minimum_order_quantity', 'maximum_order_quantity', 'has_batches', 'batches',
             'image', 'image_url', 'images', 'additional_images', 'category', 
@@ -652,7 +661,7 @@ class ProductCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
         fields = [
-            'name', 'description', 'category', 'brand', 'price', 'purchase_price',
+            'name', 'description', 'category', 'brand', 'price', 'app_price', 'purchase_price',
             'original_price', 'discount_percentage', 'quantity', 'track_inventory', 'unit',
             'minimum_order_quantity', 'maximum_order_quantity', 'image',
             'images', 'specifications', 'tags', 'is_featured', 'is_available',
@@ -741,7 +750,7 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
         fields = [
-            'name', 'description', 'category', 'brand', 'price', 'purchase_price',
+            'name', 'description', 'category', 'brand', 'price', 'app_price', 'purchase_price',
             'original_price', 'discount_percentage', 'quantity', 'track_inventory', 'unit',
             'minimum_order_quantity', 'maximum_order_quantity', 'image',
             'images', 'specifications', 'tags', 'is_featured', 'is_available',

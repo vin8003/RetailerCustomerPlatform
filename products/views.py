@@ -378,6 +378,7 @@ def get_retailer_products(request):
                     'id': p.id,
                     'name': p.name,
                     'price': p.price,
+                    'app_price': p.app_price,
                     'discounted_price': p.discounted_price or p.price,
                     'original_price': p.original_price,
                     'quantity': p.quantity,
