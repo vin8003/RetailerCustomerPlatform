@@ -63,5 +63,5 @@ flowchart TD
 - Hand-set `Product.quantity` / `ProductBatch.quantity` on product update or bulk requires `inventory.adjust` (see [inventory-adjust-permission.md](../requirements/inventory-adjust-permission.md)). Cashiers cannot type a new on-hand number. Sales and purchases still change stock through their existing paths.
 - Setting or changing `ProductBatch.expiry_date` on product update also requires `inventory.adjust` (echo allowed). Bulk does not write expiry. See [product-batch-expiry.md](../requirements/product-batch-expiry.md).
 - Only active batches contribute to `Product.quantity`. Expired batches cannot be sold; `can_order_quantity` uses saleable qty.
-- Completed or expired write-off is a later ticket (OE-141 / E16).
+- Damage / expiry / spoilage write-off decreases on-hand and posts `ProductInventoryLog` with a reason code (see [damage-expiry-write-off.md](../requirements/damage-expiry-write-off.md)). Expiry write-off cannot target a non-expired batch. E16 expiry *report screens* stay later.
 - Fractional children inherit stock availability from the parent via the conversion factor.
