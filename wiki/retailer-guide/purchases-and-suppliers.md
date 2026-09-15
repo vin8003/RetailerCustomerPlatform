@@ -31,8 +31,13 @@ Stock increases automatically for each line.
 | Name | ABC Distributors |
 | Phone | Optional — for your reference |
 | Address | Optional |
+| GSTIN | Optional. The same GSTIN cannot be used twice in one shop group. |
+| Payment terms | Optional (for example Net 30). Only purchase-role staff can change terms. |
+| Active | Turn off a supplier you no longer buy from. Inactive suppliers cannot be picked on a **new** purchase. |
 
-Mobile number is **not required** — you can track suppliers by name alone.
+Mobile number is **not required** — you can track suppliers by name alone. GSTIN is also optional.
+
+Purchase orders (PO / GRN matching) are a later step. Today, new stock-in still uses **Purchases**. The same active-supplier rule will apply when POs arrive.
 
 ## Supplier khata (what you owe)
 

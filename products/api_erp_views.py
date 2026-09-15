@@ -12,7 +12,15 @@ from retailers.credit_lock import (
     record_credit_override_audit,
 )
 from retailers.models import Supplier, RetailerProfile, RetailerCustomerMapping
+from retailers.organization import get_organization_for_user
 from retailers.serializers import SupplierSerializer
+from retailers.suppliers import (
+    org_suppliers_queryset,
+    payment_terms_would_change,
+    record_payment_terms_audit,
+    require_purchasing_terms,
+    resolve_supplier_home_retailer,
+)
 from products.models import PurchaseInvoice, PurchaseItem, SupplierLedger, Product, ProductBatch, ProductInventoryLog
 from orders.models import Order, OrderItem
 from django.db.models import Sum, Q, Count, F, Case, When, DecimalField
@@ -26,21 +34,138 @@ class SupplierViewSet(viewsets.ModelViewSet):
     serializer_class = SupplierSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    search_fields = ['company_name', 'contact_person', 'phone_number']
+
+    def _caller_org(self):
+        return get_organization_for_user(self.request.user)
+
+    def _deny_if_not_tenant(self):
+        if getattr(self.request.user, 'user_type', None) != 'retailer':
+            return Response(
+                {'error': 'Only retailers can manage suppliers.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if self._caller_org() is None:
+            return Response(
+                {'error': 'Organization not found or access denied'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return None
+
+    def _check_payment_terms_write(self, instance=None):
+        denied = self._deny_if_not_tenant()
+        if denied is not None:
+            return denied
+        return require_purchasing_terms(
+            self.request.user,
+            organization=self._caller_org(),
+            changing=payment_terms_would_change(instance, self.request.data),
+        )
+
     def get_queryset(self):
-        retailer = RetailerProfile.objects.get(user=self.request.user)
-        return Supplier.objects.filter(retailer=retailer).order_by('-id')
-    
-    search_fields = ['company_name', 'contact_person', 'phone_number', 'email']
+        org = self._caller_org()
+        if org is None:
+            return Supplier.objects.none()
+        qs = org_suppliers_queryset(org).select_related('retailer').order_by('-id')
+        is_active = self.request.query_params.get('is_active')
+        if is_active is not None:
+            qs = qs.filter(is_active=is_active.lower() == 'true')
+        return qs
+
+    def list(self, request, *args, **kwargs):
+        denied = self._deny_if_not_tenant()
+        if denied is not None:
+            return denied
+        return super().list(request, *args, **kwargs)
+
+    def retrieve(self, request, *args, **kwargs):
+        denied = self._deny_if_not_tenant()
+        if denied is not None:
+            return denied
+        return super().retrieve(request, *args, **kwargs)
+
+    def create(self, request, *args, **kwargs):
+        denied = self._check_payment_terms_write(None)
+        if denied is not None:
+            return denied
+        return super().create(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        denied = self._deny_if_not_tenant()
+        if denied is not None:
+            return denied
+        instance = self.get_object()
+        terms_denied = require_purchasing_terms(
+            request.user,
+            organization=self._caller_org(),
+            changing=payment_terms_would_change(instance, request.data),
+        )
+        if terms_denied is not None:
+            return terms_denied
+        return super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        denied = self._deny_if_not_tenant()
+        if denied is not None:
+            return denied
+        instance = self.get_object()
+        terms_denied = require_purchasing_terms(
+            request.user,
+            organization=self._caller_org(),
+            changing=payment_terms_would_change(instance, request.data),
+        )
+        if terms_denied is not None:
+            return terms_denied
+        return super().partial_update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        denied = self._deny_if_not_tenant()
+        if denied is not None:
+            return denied
+        return super().destroy(request, *args, **kwargs)
 
     def perform_create(self, serializer):
-        retailer = RetailerProfile.objects.get(user=self.request.user)
-        serializer.save(retailer=retailer)
+        retailer = resolve_supplier_home_retailer(self.request.user)
+        if retailer is None:
+            raise ValidationError('Retailer profile not found.')
+        before = ''
+        supplier = serializer.save(retailer=retailer)
+        record_payment_terms_audit(
+            self.request.user,
+            supplier,
+            before,
+            supplier.payment_terms,
+        )
+
+    def perform_update(self, serializer):
+        before = serializer.instance.payment_terms
+        supplier = serializer.save()
+        record_payment_terms_audit(
+            self.request.user,
+            supplier,
+            before,
+            supplier.payment_terms,
+        )
 
 
 class PurchaseInvoiceViewSet(viewsets.ModelViewSet):
     serializer_class = PurchaseInvoiceSerializer
     permission_classes = [permissions.IsAuthenticated]
     parser_classes = [JSONParser, FormParser, MultiPartParser]
+
+    def _caller_retailer(self):
+        return (
+            RetailerProfile.objects.select_related('organization')
+            .filter(user=self.request.user)
+            .first()
+        )
+
+    def get_serializer_context(self):
+        ctx = super().get_serializer_context()
+        retailer = self._caller_retailer()
+        if retailer is not None:
+            ctx['retailer'] = retailer
+        return ctx
 
     def get_queryset(self):
         retailer = RetailerProfile.objects.get(user=self.request.user)

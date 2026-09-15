@@ -78,13 +78,16 @@ class TestPermissionCatalogAndBootstrap:
         assert "inventory.adjust" in roles[ROLE_SLUG_ADMIN].permissions
         assert "catalog.price" in roles[ROLE_SLUG_ADMIN].permissions
         assert "catalog.image" in roles[ROLE_SLUG_ADMIN].permissions
+        assert "purchasing.terms" in roles[ROLE_SLUG_ADMIN].permissions
         assert roles[ROLE_SLUG_CASHIER].permissions == []
         assert "inventory.adjust" not in roles[ROLE_SLUG_CASHIER].permissions
         assert "catalog.price" not in roles[ROLE_SLUG_CASHIER].permissions
         assert "catalog.image" not in roles[ROLE_SLUG_CASHIER].permissions
+        assert "purchasing.terms" not in roles[ROLE_SLUG_CASHIER].permissions
         assert user_has_org_permission(user, org, "inventory.adjust")
         assert user_has_org_permission(user, org, "catalog.price")
         assert user_has_org_permission(user, org, "catalog.image")
+        assert user_has_org_permission(user, org, "purchasing.terms")
 
         memberships = list(
             OrgStaffMembership.objects.filter(organization=org, is_active=True)
@@ -135,9 +138,11 @@ class TestPermissionCatalogAndBootstrap:
         assert "inventory.adjust" in codes
         assert "catalog.price" in codes
         assert "catalog.image" in codes
+        assert "purchasing.terms" in codes
         assert "inventory.adjust" in ALL_PERMISSION_CODES
         assert "catalog.price" in ALL_PERMISSION_CODES
         assert "catalog.image" in ALL_PERMISSION_CODES
+        assert "purchasing.terms" in ALL_PERMISSION_CODES
 
 
 @pytest.mark.django_db

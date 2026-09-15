@@ -827,12 +827,59 @@ class RetailerRewardConfigSerializer(serializers.ModelSerializer):
 
 class SupplierSerializer(serializers.ModelSerializer):
     """
-    Serializer for Supplier
+    Serializer for Supplier (OE-100 / F-0041).
+
+    GSTIN (``gst_number``) is optional. A duplicate non-blank GSTIN in the
+    same organization is flagged (``gstin_duplicate``). Payment-terms writes
+    are gated in the viewset (``purchasing.terms`` → 403).
     """
+    gst_number = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=15,
+    )
+
     class Meta:
         model = Supplier
         fields = '__all__'
         read_only_fields = ['id', 'retailer', 'balance_due', 'created_at', 'updated_at']
+
+    def validate_gst_number(self, value):
+        from retailers.suppliers import normalize_gstin
+
+        return normalize_gstin(value)
+
+    def validate(self, attrs):
+        from retailers.organization import get_organization_for_user
+        from retailers.suppliers import (
+            duplicate_gstin_error,
+            gstin_exists_in_org,
+            normalize_gstin,
+        )
+
+        gst = attrs.get('gst_number')
+        if gst is None:
+            gst = getattr(self.instance, 'gst_number', '') if self.instance else ''
+        gst = normalize_gstin(gst)
+        if gst:
+            attrs['gst_number'] = gst
+        if not gst:
+            return attrs
+
+        request = self.context.get('request')
+        org = None
+        if request is not None and getattr(request, 'user', None):
+            org = get_organization_for_user(request.user)
+        if org is None and self.instance is not None:
+            retailer = getattr(self.instance, 'retailer', None)
+            org = getattr(retailer, 'organization', None) if retailer is not None else None
+        if org is None:
+            return attrs
+
+        exclude_id = self.instance.pk if self.instance is not None else None
+        if gstin_exists_in_org(org, gst, exclude_id=exclude_id):
+            raise duplicate_gstin_error()
+        return attrs
 
 
 class FulfillmentSlotConfigSerializer(serializers.ModelSerializer):
