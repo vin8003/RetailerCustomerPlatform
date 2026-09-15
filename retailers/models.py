@@ -311,6 +311,7 @@ class OrgAuditLog(models.Model):
     OBJECT_NOTIFICATION_CONFIG = 'notification_config'
     OBJECT_CREDIT_OVERRIDE = 'credit_override'
     OBJECT_CHANNEL_PRICE = 'channel_price'
+    OBJECT_PRODUCT_IMAGE = 'product_image'
 
     organization = models.ForeignKey(
         Organization,

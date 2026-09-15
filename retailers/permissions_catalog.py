@@ -5,7 +5,7 @@ Deny-by-default: only codes listed here may be stored on a role.
 Org owner always has every permission (implicit admin) until they delegate.
 """
 
-PERMISSION_CATALOG_VERSION = 8
+PERMISSION_CATALOG_VERSION = 9
 
 # code -> human description
 PERMISSION_DEFINITIONS = {
@@ -23,6 +23,7 @@ PERMISSION_DEFINITIONS = {
     'fulfillment.manage': 'Configure fulfillment slot capacity for shop locations',
     'inventory.adjust': 'Hand-set on-hand quantity on product update or bulk update; change parent-child pack links on product create or update; set or change ProductBatch expiry_date on product update; post damage / expiry / spoilage write-off',
     'catalog.price': 'Set or clear Product.app_price (owned-app list). Store price stays on existing product update. Echoing the current app_price does not require this permission.',
+    'catalog.image': 'Bulk-import and replace Product photos (zip or csv+files) for this shop. Unauthenticated callers cannot upload.',
 }
 
 ALL_PERMISSION_CODES = frozenset(PERMISSION_DEFINITIONS.keys())
