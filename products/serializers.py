@@ -14,6 +14,7 @@ from products.inventory_service import (
     apply_stock_increase,
     log_inventory_change,
 )
+from products.tax_service import GST_RATES
 from .customer_stock import filter_in_stock_for_customer
 import logging
 
@@ -102,6 +103,7 @@ class ProductListSerializer(serializers.ModelSerializer):
     quantity = serializers.SerializerMethodField()
     minimum_order_quantity = serializers.SerializerMethodField()
     maximum_order_quantity = serializers.SerializerMethodField()
+    gst_rate = serializers.DecimalField(max_digits=5, decimal_places=2)
     class Meta:
         model = Product
         fields = [
@@ -112,7 +114,8 @@ class ProductListSerializer(serializers.ModelSerializer):
             'is_in_stock', 'is_featured', 'is_active', 'is_seasonal', 'is_available',
             'average_rating', 'review_count', 'created_at', 'product_group',
             'active_offer_text', 'is_wishlisted', 'barcode', 'has_batches', 'batches',
-            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor'
+            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor',
+            'hsn_code', 'gst_rate'
         ]
 
     def get_quantity(self, obj):
@@ -314,6 +317,7 @@ class ProductDetailSerializer(serializers.ModelSerializer):
     minimum_order_quantity = serializers.SerializerMethodField()
     maximum_order_quantity = serializers.SerializerMethodField()
     group_variants = serializers.SerializerMethodField()
+    gst_rate = serializers.DecimalField(max_digits=5, decimal_places=2)
     
     class Meta:
         model = Product
@@ -327,7 +331,8 @@ class ProductDetailSerializer(serializers.ModelSerializer):
             'is_in_stock', 'is_featured', 'is_active', 'is_seasonal', 'is_available', 
             'average_rating', 'review_count', 'created_at', 'updated_at',
             'product_group', 'active_offer_text', 'offers', 'is_wishlisted', 'barcode',
-            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor', 'group_variants'
+            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor', 'group_variants',
+            'hsn_code', 'gst_rate'
         ]
 
     def get_quantity(self, obj):
@@ -631,10 +636,19 @@ class MasterProductSerializer(serializers.ModelSerializer):
 
 
 
-class ProductCreateSerializer(serializers.ModelSerializer):
+class ProductTaxValidationMixin:
+    def validate_gst_rate(self, value):
+        if value not in GST_RATES:
+            raise serializers.ValidationError("Unsupported GST rate.")
+        return value
+
+
+class ProductCreateSerializer(ProductTaxValidationMixin, serializers.ModelSerializer):
     """
     Serializer for creating products
     """
+    gst_rate = serializers.DecimalField(max_digits=5, decimal_places=2, required=False)
+
     class Meta:
         model = Product
         fields = [
@@ -643,7 +657,8 @@ class ProductCreateSerializer(serializers.ModelSerializer):
             'minimum_order_quantity', 'maximum_order_quantity', 'image',
             'images', 'specifications', 'tags', 'is_featured', 'is_available',
             'barcode', 'master_product', 'product_group', 'is_active', 'is_seasonal', 'has_batches',
-            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor'
+            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor',
+            'hsn_code', 'gst_rate'
         ]
     
     def validate_barcode(self, value):
@@ -709,10 +724,12 @@ class ProductCreateSerializer(serializers.ModelSerializer):
         return product
 
 
-class ProductUpdateSerializer(serializers.ModelSerializer):
+class ProductUpdateSerializer(ProductTaxValidationMixin, serializers.ModelSerializer):
     """
     Serializer for updating products
     """
+    gst_rate = serializers.DecimalField(max_digits=5, decimal_places=2, required=False)
+
     class Meta:
         model = Product
         fields = [
@@ -721,7 +738,8 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
             'minimum_order_quantity', 'maximum_order_quantity', 'image',
             'images', 'specifications', 'tags', 'is_featured', 'is_available',
             'barcode', 'master_product', 'product_group', 'is_active', 'is_seasonal', 'has_batches',
-            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor'
+            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor',
+            'hsn_code', 'gst_rate'
         ]
     
     def validate_barcode(self, value):

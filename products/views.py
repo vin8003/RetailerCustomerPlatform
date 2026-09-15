@@ -27,6 +27,7 @@ from .models import (
     ProductUploadSession, UploadSessionItem, ProductBatch,
 )
 from products.inventory_service import apply_stock_decrease, apply_stock_increase, log_inventory_change
+from products.tax_service import GST_RATES
 from .serializers import (
     ProductListSerializer, ProductDetailSerializer, ProductCreateSerializer,
     ProductUpdateSerializer, ProductCategorySerializer, ProductBrandSerializer,
@@ -746,6 +747,19 @@ def bulk_update_products(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        for item in items:
+            if 'gst_rate' not in item:
+                continue
+            try:
+                gst_rate = Decimal(str(item['gst_rate']))
+            except (InvalidOperation, TypeError, ValueError):
+                gst_rate = None
+            if gst_rate not in GST_RATES:
+                return Response(
+                    {'error': f"Unsupported GST rate: {item['gst_rate']}"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
         updated_count = 0
         
         with transaction.atomic():
@@ -865,6 +879,14 @@ def bulk_update_products(request):
                         changed = True
                     except Exception:
                         pass
+
+                if 'hsn_code' in item:
+                    product.hsn_code = str(item['hsn_code'])
+                    changed = True
+
+                if 'gst_rate' in item:
+                    product.gst_rate = Decimal(str(item['gst_rate']))
+                    changed = True
 
                 if changed:
                     product.save()
@@ -1700,7 +1722,9 @@ def process_excel_upload(file, retailer, user):
 
         # Expected columns
         required_columns = ['name', 'price', 'quantity']
-        optional_columns = ['description', 'category', 'brand', 'unit', 'image']
+        optional_columns = [
+            'description', 'category', 'brand', 'unit', 'image', 'hsn', 'gst_rate'
+        ]
 
         # Check required columns
         missing_columns = [col for col in required_columns if col not in df.columns]
@@ -1729,6 +1753,22 @@ def process_excel_upload(file, retailer, user):
                         defaults={'is_active': True}
                     )
 
+                raw_hsn = row.get('hsn', '')
+                if pd.isna(raw_hsn):
+                    hsn_code = ''
+                elif isinstance(raw_hsn, float) and raw_hsn.is_integer():
+                    hsn_code = str(int(raw_hsn))
+                else:
+                    hsn_code = str(raw_hsn).strip()
+
+                raw_gst_rate = row.get('gst_rate', Decimal('0'))
+                if pd.isna(raw_gst_rate) or str(raw_gst_rate).strip() == '':
+                    gst_rate = Decimal('0')
+                else:
+                    gst_rate = Decimal(str(raw_gst_rate))
+                    if gst_rate not in GST_RATES:
+                        raise ValueError(f'Unsupported GST rate: {raw_gst_rate}')
+
                 # Create product
                 product_data = {
                     'retailer': retailer,
@@ -1739,6 +1779,8 @@ def process_excel_upload(file, retailer, user):
                     'category': category,
                     'brand': brand,
                     'unit': row.get('unit', 'piece'),
+                    'hsn_code': hsn_code,
+                    'gst_rate': gst_rate,
                 }
 
                 # Check if product already exists
