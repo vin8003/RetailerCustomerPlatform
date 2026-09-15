@@ -601,23 +601,35 @@ def get_inventory_ledger(request):
         retailer = RetailerProfile.objects.get(user=request.user)
     except RetailerProfile.DoesNotExist:
         return Response({'error': 'Unauthorized'}, status=status.HTTP_403_FORBIDDEN)
-        
+
     product_id = request.GET.get('product_id')
-    if not product_id:
-        return Response({'error': 'product_id is required'}, status=status.HTTP_400_BAD_REQUEST)
-        
-    try:
-        product = Product.objects.get(id=product_id, retailer=retailer)
-    except Product.DoesNotExist:
-        return Response({'error': 'Product not found'}, status=status.HTTP_404_NOT_FOUND)
-        
-    logs = ProductInventoryLog.objects.filter(product=product).order_by('-created_at')[:100]
-    
+    reason = request.GET.get('reason')
+    if reason is not None:
+        reason = str(reason).strip()
+    if not product_id and not reason:
+        return Response(
+            {'error': 'product_id or reason is required'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    logs = ProductInventoryLog.objects.filter(
+        product__retailer=retailer
+    ).select_related('created_by')
+    if product_id:
+        try:
+            product = Product.objects.get(id=product_id, retailer=retailer)
+        except Product.DoesNotExist:
+            return Response({'error': 'Product not found'}, status=status.HTTP_404_NOT_FOUND)
+        logs = logs.filter(product=product)
+    if reason:
+        logs = logs.filter(reason=reason)
+
     data = []
-    for log in logs:
+    for log in logs.order_by('-created_at')[:100]:
         data.append({
             'id': log.id,
             'log_type': log.log_type,
+            'batch_id': log.batch_id,
             'quantity_change': log.quantity_change,
             'previous_quantity': log.previous_quantity,
             'new_quantity': log.new_quantity,
@@ -625,7 +637,7 @@ def get_inventory_ledger(request):
             'created_at': log.created_at,
             'created_by': log.created_by.get_full_name() if log.created_by else 'System'
         })
-        
+
     return Response(data)
 
 

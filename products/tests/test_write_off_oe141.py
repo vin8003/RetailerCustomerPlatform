@@ -489,3 +489,102 @@ class TestWriteOffApi:
                 format="json",
             )
         assert response.status_code == status.HTTP_201_CREATED
+
+
+def _ledger_url():
+    return reverse("get_inventory_ledger")
+
+
+@pytest.mark.django_db
+class TestWriteOffLedgerFilter:
+    def test_ledger_filters_by_reason(self, api_client):
+        owner, shop = _make_retailer("oe141_led_own", "OE141 Ledger Shop")
+        product = _make_product(shop, quantity=Decimal("20.000"))
+        write_off_stock(
+            product_id=product.id,
+            retailer=shop,
+            quantity=Decimal("2.000"),
+            reason=REASON_DAMAGE,
+            created_by=owner,
+        )
+        write_off_stock(
+            product_id=product.id,
+            retailer=shop,
+            quantity=Decimal("1.000"),
+            reason=REASON_SPOILAGE,
+            created_by=owner,
+        )
+        ProductInventoryLog.objects.create(
+            product=product,
+            log_type="added",
+            quantity_change=Decimal("5.000"),
+            previous_quantity=Decimal("17.000"),
+            new_quantity=Decimal("22.000"),
+            reason="Product update",
+            created_by=owner,
+        )
+
+        api_client.force_authenticate(user=owner)
+        response = api_client.get(
+            _ledger_url(),
+            {"product_id": product.id, "reason": REASON_DAMAGE},
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert len(response.data) == 1
+        assert response.data[0]["reason"] == REASON_DAMAGE
+        assert response.data[0]["log_type"] == "damaged"
+        assert "batch_id" in response.data[0]
+
+    def test_shop_wide_reason_filter_hides_other_tenant(self, api_client):
+        owner_a, shop_a = _make_retailer("oe141_led_a", "OE141 Ledger A")
+        owner_b, shop_b = _make_retailer("oe141_led_b", "OE141 Ledger B")
+        product_a = _make_product(shop_a, name="A Rice", quantity=Decimal("10.000"))
+        product_b = _make_product(shop_b, name="B Rice", quantity=Decimal("10.000"))
+        write_off_stock(
+            product_id=product_a.id,
+            retailer=shop_a,
+            quantity=Decimal("1.000"),
+            reason=REASON_DAMAGE,
+            created_by=owner_a,
+        )
+        write_off_stock(
+            product_id=product_b.id,
+            retailer=shop_b,
+            quantity=Decimal("3.000"),
+            reason=REASON_DAMAGE,
+            created_by=owner_b,
+        )
+
+        api_client.force_authenticate(user=owner_a)
+        response = api_client.get(_ledger_url(), {"reason": REASON_DAMAGE})
+
+        assert response.status_code == status.HTTP_200_OK
+        assert len(response.data) == 1
+        assert str(response.data[0]["quantity_change"]) in ("1.000", "1.0", "1")
+
+    def test_cross_tenant_product_ledger_is_404(self, api_client):
+        owner_a, shop_a = _make_retailer("oe141_led_ten_a", "OE141 Led Ten A")
+        product = _make_product(shop_a, quantity=Decimal("4.000"))
+        write_off_stock(
+            product_id=product.id,
+            retailer=shop_a,
+            quantity=Decimal("1.000"),
+            reason=REASON_DAMAGE,
+            created_by=owner_a,
+        )
+        owner_b, _shop_b = _make_retailer("oe141_led_ten_b", "OE141 Led Ten B")
+
+        api_client.force_authenticate(user=owner_b)
+        response = api_client.get(
+            _ledger_url(),
+            {"product_id": product.id, "reason": REASON_DAMAGE},
+        )
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_ledger_requires_product_or_reason(self, api_client):
+        owner, _shop = _make_retailer("oe141_led_req", "OE141 Ledger Req")
+        api_client.force_authenticate(user=owner)
+        response = api_client.get(_ledger_url())
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
