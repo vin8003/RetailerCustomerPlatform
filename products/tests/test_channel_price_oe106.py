@@ -174,3 +174,58 @@ class TestProductAppPriceField:
         assert product.app_price is None
         assert product.channel_selling_price(CHANNEL_APP) == Decimal('40.00')
         assert product.quantity == Decimal('7.000')
+
+
+@pytest.mark.django_db
+class TestProductSearchSerializerChannel:
+    def _product(self, username):
+        from authentication.models import User
+        from products.models import Product
+        from retailers.models import RetailerProfile
+
+        user = User.objects.create_user(
+            username=username,
+            email=f'{username}@test.com',
+            password='TestPass123!',
+            user_type='retailer',
+            is_active=True,
+        )
+        shop = RetailerProfile.objects.create(
+            user=user,
+            shop_name='OE106 Search Ser Shop',
+            address_line1='1 Main',
+            city='City',
+            state='State',
+            pincode='110001',
+            is_active=True,
+        )
+        return Product.objects.create(
+            retailer=shop,
+            name='OE106 Search Ser',
+            price=Decimal('40.00'),
+            app_price=Decimal('33.00'),
+            quantity=Decimal('1.000'),
+            track_inventory=True,
+            is_active=True,
+            is_available=True,
+            unit='kg',
+        )
+
+    def test_missing_context_fail_closes_to_app(self):
+        from products.serializers import ProductSearchSerializer
+
+        data = ProductSearchSerializer(self._product('oe106_search_none')).data
+        assert data['price'] == '33.00'
+        assert 'app_price' not in data
+
+    def test_retailer_request_keeps_store_and_app_price(self):
+        from products.serializers import ProductSearchSerializer
+
+        request = SimpleNamespace(
+            user=SimpleNamespace(is_authenticated=True, user_type='retailer')
+        )
+        data = ProductSearchSerializer(
+            self._product('oe106_search_ret'), context={'request': request}
+        ).data
+        assert data['price'] == '40.00'
+        assert data['app_price'] == '33.00'

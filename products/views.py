@@ -506,7 +506,9 @@ def search_products(request):
         limit = int(request.query_params.get('limit', 50))
         products = products[:limit]
 
-        serializer = ProductSearchSerializer(products, many=True)
+        serializer = ProductSearchSerializer(
+            products, many=True, context={'request': request}
+        )
         return Response({
             'results': serializer.data,
             'facets': facets

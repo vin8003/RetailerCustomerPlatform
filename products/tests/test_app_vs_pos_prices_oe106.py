@@ -5,6 +5,7 @@ POS reads store ``price``. Customer/app reads ``app_price`` or store fallback.
 Cart charges the app list. One ATP pool. No marketplace connector.
 """
 from decimal import Decimal
+from unittest.mock import patch
 
 import pytest
 from django.db import connection
@@ -14,6 +15,7 @@ from rest_framework import status
 
 from authentication.models import User
 from cart.models import Cart, CartItem
+from orders.models import Order, OrderItem
 from products.channel_price import CHANNEL_APP, CHANNEL_STORE, PERM_CATALOG_PRICE
 from products.models import Product, ProductCategory
 from retailers.models import OrgAuditLog, OrgRole, OrgStaffMembership, RetailerProfile
@@ -246,6 +248,106 @@ class TestChannelPriceReads:
         )
         assert product.quantity == Decimal("9")
         assert Cart.objects.count() == 0
+
+    def test_retailer_search_keeps_store_price_and_app_price(self, api_client):
+        owner, shop = _make_retailer("oe106_ret_search", "OE106 Retailer Search")
+        product = _make_product(shop, app="33.00")
+        api_client.force_authenticate(user=owner)
+
+        resp = api_client.get(reverse("search_products"))
+        assert resp.status_code == status.HTTP_200_OK
+        row = next(item for item in resp.data["results"] if item["id"] == product.id)
+        assert Decimal(str(row["price"])) == Decimal("40.00")
+        assert Decimal(str(row["app_price"])) == Decimal("33.00")
+
+    def test_public_search_still_uses_app_price(self, api_client):
+        owner, shop = _make_retailer("oe106_pub_search", "OE106 Public Search")
+        product = _make_product(shop, app="33.00")
+
+        resp = api_client.get(reverse("search_products_public", args=[shop.id]))
+        assert resp.status_code == status.HTTP_200_OK
+        row = next(item for item in resp.data["results"] if item["id"] == product.id)
+        assert Decimal(str(row["price"])) == Decimal("33.00")
+        assert "app_price" not in row
+
+
+@pytest.mark.django_db
+class TestChannelPricePlaceOrder:
+    def _verified_customer(self, username):
+        customer = _make_customer(username)
+        customer.is_phone_verified = True
+        customer.save(update_fields=["is_phone_verified"])
+        return customer
+
+    @patch("common.notifications.send_push_notification")
+    @patch("common.notifications.send_silent_update")
+    def test_place_order_stamps_cart_app_unit_price(
+        self, mock_silent, mock_push, api_client
+    ):
+        owner, shop = _make_retailer("oe106_po_shop", "OE106 Place Order Shop")
+        product = _make_product(shop, app="33.00")
+        customer = self._verified_customer("oe106_po_cust")
+        api_client.force_authenticate(user=customer)
+
+        added = api_client.post(
+            reverse("add_to_cart"),
+            {"product_id": product.id, "quantity": 2},
+            format="json",
+        )
+        assert added.status_code == status.HTTP_201_CREATED
+        cart_item = CartItem.objects.get(product=product)
+        assert cart_item.unit_price == Decimal("33.00")
+
+        placed = api_client.post(
+            reverse("place_order"),
+            {
+                "retailer_id": shop.id,
+                "delivery_mode": "pickup",
+                "payment_mode": "cash_pickup",
+            },
+            format="json",
+        )
+        assert placed.status_code == status.HTTP_201_CREATED
+
+        order = Order.objects.get(customer=customer, retailer=shop)
+        line = OrderItem.objects.get(order=order, product=product)
+        assert line.unit_price == Decimal("33.00")
+        assert line.product_price == Decimal("33.00")
+        assert line.total_price == Decimal("66.00")
+        assert line.unit_price != product.price
+        assert order.subtotal == Decimal("66.00")
+        assert order.total_amount == line.total_price + order.delivery_fee
+
+    @patch("common.notifications.send_push_notification")
+    @patch("common.notifications.send_silent_update")
+    def test_place_order_null_app_price_falls_back_to_store(
+        self, mock_silent, mock_push, api_client
+    ):
+        owner, shop = _make_retailer("oe106_po_fb", "OE106 Place Order Fallback")
+        product = _make_product(shop)
+        customer = self._verified_customer("oe106_po_fb_cust")
+        api_client.force_authenticate(user=customer)
+
+        added = api_client.post(
+            reverse("add_to_cart"),
+            {"product_id": product.id, "quantity": 1},
+            format="json",
+        )
+        assert added.status_code == status.HTTP_201_CREATED
+
+        placed = api_client.post(
+            reverse("place_order"),
+            {
+                "retailer_id": shop.id,
+                "delivery_mode": "pickup",
+                "payment_mode": "cash_pickup",
+            },
+            format="json",
+        )
+        assert placed.status_code == status.HTTP_201_CREATED
+        line = OrderItem.objects.get(product=product)
+        assert line.unit_price == Decimal("40.00")
+        assert line.product_price == Decimal("40.00")
 
 
 @pytest.mark.django_db

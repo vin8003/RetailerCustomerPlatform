@@ -851,8 +851,9 @@ class OrderCreateSerializer(serializers.Serializer):
             item_discounts = offer_results.get('item_discounts', {})
 
             for cart_item in cart_items:
-                # Calculate final prices based on offers
-                unit_price = cart_item.product.price
+                # Cart already stamped the selling channel (app). Do not
+                # re-read store Product.price and overwrite that line.
+                unit_price = cart_item.unit_price
                 quantity = cart_item.quantity
                 
                 if cart_item.id in item_discounts:
@@ -866,7 +867,7 @@ class OrderCreateSerializer(serializers.Serializer):
                     order=order,
                     product=cart_item.product,
                     product_name=cart_item.product.name,
-                    product_price=cart_item.product.price,
+                    product_price=cart_item.unit_price,
                     product_unit=cart_item.product.unit,
                     quantity=quantity,
                     unit_price=unit_price,

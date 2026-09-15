@@ -36,9 +36,11 @@ There is no marketplace channel in this repo. A later marketplace connector must
 |--------|------|-----|----------|
 | GET | `/api/products/` and `/api/products/<id>/` | Retailer JWT | Store `price` + `app_price` |
 | GET | `/api/products/?no_page=true` | Retailer JWT (POS) | Store `price` + `app_price` |
+| GET | `/api/products/search/` | Retailer JWT | Store `price` + `app_price` (pass request / store channel; do not fail-closed to app) |
 | GET | `/api/products/retailer/<retailer_id>/…` | Public / customer | Resolved app selling price as `price`; no `app_price` field |
 | POST | `/api/products/erp/pos-checkout/` | Retailer JWT | Validates against store `price` |
 | POST | `/api/cart/add/` | Customer JWT | `unit_price` from app resolution |
+| POST | `/api/orders/place/` | Customer JWT | `OrderItem` stamps cart/channel `unit_price` (not store `Product.price`) |
 | PUT/PATCH | `/api/products/<id>/update/` | `catalog.price` when `app_price` **differs** | **403** if missing; echo OK |
 | POST | `/api/products/create/` | `catalog.price` when `app_price` is set | **403** if missing |
 | PATCH | `/api/products/bulk-update/` | `catalog.price` when any item `app_price` **differs** | **403** (nothing applied for that gate) |
