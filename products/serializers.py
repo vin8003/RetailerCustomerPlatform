@@ -1015,8 +1015,16 @@ class PurchaseItemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = PurchaseItem
-        fields = ['id', 'product', 'product_name', 'quantity', 'purchase_price', 'total', 'mrp_updated', 'new_price', 'new_original_price', 'returned_quantity', 'net_quantity']
-        read_only_fields = ['id']
+        fields = [
+            'id', 'product', 'product_name', 'quantity', 'purchase_price',
+            'total', 'hsn_code', 'gst_rate', 'taxable_value', 'tax_amount',
+            'tax_type', 'mrp_updated', 'new_price', 'new_original_price',
+            'returned_quantity', 'net_quantity',
+        ]
+        read_only_fields = [
+            'id', 'hsn_code', 'gst_rate', 'taxable_value', 'tax_amount',
+            'tax_type',
+        ]
 
     returned_quantity = serializers.SerializerMethodField()
     net_quantity = serializers.SerializerMethodField()
@@ -1040,10 +1048,14 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
         model = PurchaseInvoice
         fields = [
             'id', 'retailer', 'supplier', 'supplier_name', 'invoice_number',
-            'invoice_date', 'total_amount', 'refund_amount', 'net_amount', 'is_returned', 'paid_amount', 'payment_status',
-            'notes', 'bill_image', 'created_at', 'items'
+            'invoice_date', 'total_amount', 'taxable_amount', 'tax_amount',
+            'refund_amount', 'net_amount', 'is_returned', 'paid_amount',
+            'payment_status', 'notes', 'bill_image', 'created_at', 'items',
         ]
-        read_only_fields = ['id', 'retailer', 'created_at']
+        read_only_fields = [
+            'id', 'retailer', 'created_at', 'total_amount',
+            'taxable_amount', 'tax_amount',
+        ]
         extra_kwargs = {
             'invoice_number': {'required': False, 'allow_blank': True}
         }

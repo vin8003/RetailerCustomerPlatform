@@ -117,3 +117,56 @@ class TestPurchaseInvoiceTax:
         assert SupplierLedger.objects.get(
             reference_invoice=invoice, transaction_type='CREDIT'
         ).amount == Decimal('236.00')
+
+    def test_scalar_patch_cannot_override_calculated_total(
+        self, retailer, product
+    ):
+        supplier = Supplier.objects.create(
+            retailer=retailer,
+            company_name='Authoritative Total Supplier',
+        )
+        serializer = PurchaseInvoiceSerializer(
+            data=_invoice_data(supplier, product, purchase_price='118.00'),
+            context={'request': _request_for(retailer), 'retailer': retailer},
+        )
+        assert serializer.is_valid(), serializer.errors
+        invoice = serializer.save(retailer=retailer)
+
+        patch_serializer = PurchaseInvoiceSerializer(
+            invoice,
+            data={'total_amount': '1.00'},
+            partial=True,
+            context={'request': _request_for(retailer), 'retailer': retailer},
+        )
+        assert patch_serializer.is_valid(), patch_serializer.errors
+        patch_serializer.save()
+        invoice.refresh_from_db()
+
+        assert invoice.total_amount == Decimal('118.00')
+
+    def test_representation_exposes_read_only_tax_snapshots(
+        self, retailer, product
+    ):
+        supplier = Supplier.objects.create(
+            retailer=retailer,
+            company_name='Snapshot Supplier',
+        )
+        product.gst_rate = Decimal('18.00')
+        product.hsn_code = '10063010'
+        product.save(update_fields=['gst_rate', 'hsn_code'])
+        serializer = PurchaseInvoiceSerializer(
+            data=_invoice_data(supplier, product, purchase_price='118.00'),
+            context={'request': _request_for(retailer), 'retailer': retailer},
+        )
+        assert serializer.is_valid(), serializer.errors
+        invoice = serializer.save(retailer=retailer)
+
+        data = PurchaseInvoiceSerializer(invoice).data
+
+        assert data['taxable_amount'] == '100.00'
+        assert data['tax_amount'] == '18.00'
+        assert data['items'][0]['hsn_code'] == '10063010'
+        assert data['items'][0]['gst_rate'] == '18.00'
+        assert data['items'][0]['taxable_value'] == '100.00'
+        assert data['items'][0]['tax_amount'] == '18.00'
+        assert data['items'][0]['tax_type'] == 'GST'
