@@ -22,7 +22,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'product', 'product_name', 'product_image', 'product_price', 'product_unit',
             'quantity', 'unit_price', 'total_price', 'created_at', 'net_quantity', 'returned_quantity',
-            'mrp'
+            'mrp', 'hsn_code', 'gst_rate', 'taxable_value', 'tax_amount', 'tax_type'
         ]
         read_only_fields = ['id', 'created_at']
 
@@ -280,7 +280,8 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'id', 'order_number', 'customer', 'customer_name', 'customer_phone', 'customer_email',
             'retailer', 'retailer_name', 'retailer_phone',
             'retailer_address', 'retailer_upi_id', 'retailer_upi_qr_code', 'delivery_mode', 'payment_mode', 'status',
-            'subtotal', 'delivery_fee', 'discount_amount', 'discount_from_points', 'points_redeemed', 'points_earned', 'total_amount', 'refund_amount', 'net_amount',
+            'subtotal', 'delivery_fee', 'discount_amount', 'discount_from_points', 'points_redeemed', 'points_earned',
+            'taxable_amount', 'tax_amount', 'total_amount', 'refund_amount', 'net_amount',
             'special_instructions', 'cancellation_reason', 'cancelled_by', 
             'payment_reference_id', 'payment_status', 'payment_edit_count', 'is_payment_locked',
             'cash_amount', 'upi_amount', 'card_amount', 'credit_amount',
