@@ -27,7 +27,7 @@ from .models import (
     ProductUploadSession, UploadSessionItem, ProductBatch,
 )
 from products.inventory_service import apply_stock_decrease, apply_stock_increase, log_inventory_change
-from products.tax_service import GST_RATES
+from products.tax_service import GST_RATES, clean_hsn_code
 from .serializers import (
     ProductListSerializer, ProductDetailSerializer, ProductCreateSerializer,
     ProductUpdateSerializer, ProductCategorySerializer, ProductBrandSerializer,
@@ -747,18 +747,28 @@ def bulk_update_products(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # Pre-validate tax fields before opening the transaction so one bad row
+        # returns a 400 instead of aborting the whole batch with a DataError.
         for item in items:
-            if 'gst_rate' not in item:
-                continue
-            try:
-                gst_rate = Decimal(str(item['gst_rate']))
-            except (InvalidOperation, TypeError, ValueError):
-                gst_rate = None
-            if gst_rate not in GST_RATES:
-                return Response(
-                    {'error': f"Unsupported GST rate: {item['gst_rate']}"},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+            if 'gst_rate' in item:
+                try:
+                    gst_rate = Decimal(str(item['gst_rate']))
+                except (InvalidOperation, TypeError, ValueError):
+                    gst_rate = None
+                if gst_rate not in GST_RATES:
+                    return Response(
+                        {'error': f"Unsupported GST rate: {item['gst_rate']}"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+            if item.get('hsn_code') is not None:
+                try:
+                    clean_hsn_code(item['hsn_code'])
+                except ValueError as exc:
+                    return Response(
+                        {'error': str(exc)},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
 
         updated_count = 0
         
@@ -881,7 +891,7 @@ def bulk_update_products(request):
                         pass
 
                 if 'hsn_code' in item and item['hsn_code'] is not None:
-                    product.hsn_code = str(item['hsn_code'])
+                    product.hsn_code = clean_hsn_code(item['hsn_code'])
                     changed = True
 
                 if 'gst_rate' in item:
@@ -1762,9 +1772,9 @@ def process_excel_upload(file, retailer, user):
                     if pd.isna(raw_hsn) or str(raw_hsn).strip() == '':
                         hsn_code = None
                     elif isinstance(raw_hsn, float) and raw_hsn.is_integer():
-                        hsn_code = str(int(raw_hsn))
+                        hsn_code = clean_hsn_code(int(raw_hsn))
                     else:
-                        hsn_code = str(raw_hsn).strip()
+                        hsn_code = clean_hsn_code(raw_hsn)
 
                 gst_rate = None
                 if gst_column_present:

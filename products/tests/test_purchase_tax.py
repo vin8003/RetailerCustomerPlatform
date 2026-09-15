@@ -70,6 +70,32 @@ class TestPurchaseInvoiceTax:
             reference_invoice=invoice, transaction_type='CREDIT'
         ).amount == Decimal('118.00')
 
+    def test_zero_rate_purchase_matches_pre_gst_totals(self, retailer, product):
+        supplier = Supplier.objects.create(
+            retailer=retailer,
+            company_name='Zero Rate Supplier',
+        )
+        product.gst_rate = Decimal('0.00')
+        product.hsn_code = ''
+        product.save(update_fields=['gst_rate', 'hsn_code'])
+
+        serializer = PurchaseInvoiceSerializer(
+            data=_invoice_data(supplier, product, purchase_price='118.00'),
+            context={'request': _request_for(retailer), 'retailer': retailer},
+        )
+        assert serializer.is_valid(), serializer.errors
+        invoice = serializer.save(retailer=retailer)
+        item = invoice.items.get()
+
+        # Pre-GST behaviour: the full line total stays taxable, tax stays zero.
+        assert item.total == Decimal('118.00')
+        assert item.taxable_value == Decimal('118.00')
+        assert item.tax_amount == Decimal('0.00')
+        assert item.gst_rate == Decimal('0.00')
+        assert invoice.taxable_amount == Decimal('118.00')
+        assert invoice.tax_amount == Decimal('0.00')
+        assert invoice.total_amount == Decimal('118.00')
+
     def test_update_rebuilds_tax_snapshots_and_resolves_igst(
         self, retailer, product
     ):

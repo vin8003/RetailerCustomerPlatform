@@ -201,6 +201,53 @@ class ProductTaxAPITests(TestCase):
         self.product.refresh_from_db()
         self.assertEqual(self.product.hsn_code, "21069099")
 
+    def test_bulk_update_rejects_over_length_hsn_code(self):
+        response = self.client.patch(
+            reverse("bulk_update_products"),
+            {"items": [{"id": self.product.id, "hsn_code": "123456789"}]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Invalid HSN code", response.data["error"])
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.hsn_code, "")
+
+    def test_bulk_update_rejects_non_numeric_hsn_code(self):
+        response = self.client.patch(
+            reverse("bulk_update_products"),
+            {"items": [{"id": self.product.id, "hsn_code": "ABC123"}]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.hsn_code, "")
+
+    def test_bulk_update_bad_hsn_does_not_partially_apply_batch(self):
+        other = Product.objects.create(
+            retailer=self.retailer,
+            name="Second Product",
+            price=Decimal("10.00"),
+            quantity=1,
+            unit="piece",
+        )
+
+        response = self.client.patch(
+            reverse("bulk_update_products"),
+            {
+                "items": [
+                    {"id": self.product.id, "hsn_code": "21069099"},
+                    {"id": other.id, "hsn_code": "123456789"},
+                ]
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.hsn_code, "")
+
 
 class ProductTaxExcelTests(TestCase):
     def setUp(self):
@@ -255,6 +302,20 @@ class ProductTaxExcelTests(TestCase):
         self.assertEqual(result["failed_rows"], 1)
         self.assertIn("Unsupported GST rate", result["error_log"][0]["error"])
         self.assertFalse(Product.objects.filter(name="Bad Tax Product").exists())
+
+    def test_excel_rejects_over_length_hsn_code(self):
+        csv_file = SimpleUploadedFile(
+            "products.csv",
+            b"name,price,quantity,hsn\nBad HSN Product,100,2,123456789\n",
+            content_type="text/csv",
+        )
+
+        result = process_excel_upload(csv_file, self.retailer, self.retailer_user)
+
+        self.assertEqual(result["successful_rows"], 0)
+        self.assertEqual(result["failed_rows"], 1)
+        self.assertIn("Invalid HSN code", result["error_log"][0]["error"])
+        self.assertFalse(Product.objects.filter(name="Bad HSN Product").exists())
 
     def test_excel_reupload_preserves_blank_tax_columns(self):
         Product.objects.create(

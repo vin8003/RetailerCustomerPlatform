@@ -11,7 +11,24 @@ GST_RATES = (
     Decimal('40'),
 )
 TWO = Decimal('0.01')
+HSN_MAX_LENGTH = 8
 TaxType = Literal['GST', 'IGST']
+
+
+def clean_hsn_code(value) -> str:
+    """Normalize an HSN code for storage.
+
+    Raises ValueError for anything the varchar(8) column cannot hold, so callers
+    that bypass serializer validation fail with a 400 instead of a DataError.
+    """
+    hsn = str(value).strip()
+    if not hsn:
+        return ''
+    if not hsn.isdigit() or len(hsn) > HSN_MAX_LENGTH:
+        raise ValueError(
+            f'Invalid HSN code: {value}. Use up to {HSN_MAX_LENGTH} digits.'
+        )
+    return hsn
 
 
 def quantize_2(value: Decimal) -> Decimal:

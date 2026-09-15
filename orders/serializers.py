@@ -9,7 +9,7 @@ from products.models import Product
 from cart.models import Cart, CartItem
 from returns.models import SalesReturnItem
 from django.db.models import Sum
-from products.tax_service import quantize_2, split_inclusive_line
+from products.tax_service import allocate_order_discount, quantize_2, split_inclusive_line
 
 
 class OrderItemSerializer(serializers.ModelSerializer):
@@ -1152,7 +1152,8 @@ class OrderModificationSerializer(serializers.Serializer):
                         created_by=self.context.get('request').user if self.context.get('request') else None
                     ))
                     
-                    # Create new OrderItem
+                    # Create new OrderItem. Only lines added during this
+                    # modification take the current product tax defaults.
                     OrderItem.objects.create(
                         order=instance,
                         product=product,
@@ -1161,7 +1162,10 @@ class OrderModificationSerializer(serializers.Serializer):
                         product_unit=product.unit,
                         quantity=quantity,
                         unit_price=product.price, # Default to current product price
-                        total_price=product.price * quantity
+                        total_price=product.price * quantity,
+                        hsn_code=product.hsn_code,
+                        gst_rate=product.gst_rate,
+                        tax_type='GST',
                     )
             
             if logs_to_create:
@@ -1170,36 +1174,12 @@ class OrderModificationSerializer(serializers.Serializer):
             
             # Recalculate order subtotal from scratch to be safe
             # (In case some items were not in the update list but still exist)
-            taxable_amount = Decimal('0.00')
-            tax_amount = Decimal('0.00')
-            current_items = list(instance.items.select_related('product').all())
-            for item in current_items:
-                tax_split = split_inclusive_line(
-                    item.total_price,
-                    item.product.gst_rate,
-                )
-                item.hsn_code = item.product.hsn_code
-                item.gst_rate = item.product.gst_rate
-                item.taxable_value = tax_split['taxable_value']
-                item.tax_amount = tax_split['tax_amount']
-                item.tax_type = 'GST'
-                item.save(update_fields=[
-                    'hsn_code',
-                    'gst_rate',
-                    'taxable_value',
-                    'tax_amount',
-                    'tax_type',
-                ])
-                taxable_amount += tax_split['taxable_value']
-                tax_amount += tax_split['tax_amount']
-
+            current_items = list(instance.items.all())
             subtotal = sum(
                 (item.total_price for item in current_items),
                 Decimal('0.00'),
             )
-            instance.subtotal = subtotal
-            instance.taxable_amount = quantize_2(taxable_amount)
-            instance.tax_amount = quantize_2(tax_amount)
+            instance.subtotal = quantize_2(subtotal)
             
             # Update delivery mode
             if delivery_mode:
@@ -1208,7 +1188,7 @@ class OrderModificationSerializer(serializers.Serializer):
             # Always recalculate delivery fee based on current delivery_mode and retailer settings
             # This ensures correct fee whether mode changed or items changed
             retailer = instance.retailer
-            current_subtotal = Decimal(sum(item.total_price for item in instance.items.all())).quantize(Decimal('0.01'))
+            current_subtotal = instance.subtotal
             
             if instance.delivery_mode == 'delivery':
                 if retailer.delivery_charge > 0:
@@ -1226,8 +1206,29 @@ class OrderModificationSerializer(serializers.Serializer):
             if discount_amount is not None:
                 instance.discount_amount = discount_amount
             
+            # Tax is split from the post-discount inclusive line totals, so the
+            # order-level discount has to be allocated across the lines first.
+            # Loyalty points and delivery fee stay out of the tax base.
+            allocated_totals = allocate_order_discount(
+                [item.total_price for item in current_items],
+                instance.discount_amount,
+            )
+            taxable_amount = Decimal('0.00')
+            tax_amount = Decimal('0.00')
+            for item, allocated_total in zip(current_items, allocated_totals):
+                # Existing lines keep the rate they were sold at; re-reading the
+                # product here would rewrite historical tax.
+                tax_split = split_inclusive_line(allocated_total, item.gst_rate)
+                item.taxable_value = tax_split['taxable_value']
+                item.tax_amount = tax_split['tax_amount']
+                item.save(update_fields=['taxable_value', 'tax_amount'])
+                taxable_amount += tax_split['taxable_value']
+                tax_amount += tax_split['tax_amount']
+
+            instance.taxable_amount = quantize_2(taxable_amount)
+            instance.tax_amount = quantize_2(tax_amount)
+            
             # Recalculate total
-            instance.subtotal = Decimal(sum(item.total_price for item in instance.items.all())).quantize(Decimal('0.01'))
             instance.total_amount = (instance.subtotal + instance.delivery_fee - instance.discount_amount - instance.discount_from_points).quantize(Decimal('0.01'))
             
             # Validate total amount

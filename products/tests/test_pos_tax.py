@@ -50,6 +50,44 @@ class TestPOSTax:
         assert Decimal(response.data['order']['tax_amount']) == Decimal('18.00')
         assert response.data['order']['items'][0]['hsn_code'] == '21069099'
 
+    def test_zero_rate_order_matches_pre_gst_totals(
+        self, api_client, retailer_user, product
+    ):
+        api_client.force_authenticate(user=retailer_user)
+        product.price = Decimal('118.00')
+        product.gst_rate = Decimal('0.00')
+        product.hsn_code = ''
+        product.save(update_fields=['price', 'gst_rate', 'hsn_code'])
+
+        response = api_client.post(
+            reverse('create_pos_order'),
+            {
+                'items': [
+                    {
+                        'product_id': product.id,
+                        'quantity': 2,
+                        'unit_price': '118.00',
+                    }
+                ],
+                'payment_mode': 'cash',
+                'discount_amount': '0.00',
+            },
+            format='json',
+        )
+
+        assert response.status_code == status.HTTP_201_CREATED, response.data
+        order = Order.objects.get(pk=response.data['order']['id'])
+        item = order.items.get()
+        # Pre-GST behaviour: total is just the line total, nothing is carved out.
+        assert order.subtotal == Decimal('236.00')
+        assert order.total_amount == Decimal('236.00')
+        assert order.tax_amount == Decimal('0.00')
+        assert order.taxable_amount == Decimal('236.00')
+        assert item.gst_rate == Decimal('0.00')
+        assert item.taxable_value == item.total_price
+        assert item.tax_amount == Decimal('0.00')
+        assert Decimal(response.data['order']['tax_amount']) == Decimal('0.00')
+
     def test_manual_discount_is_allocated_before_inclusive_tax(
         self, api_client, retailer_user, product
     ):
