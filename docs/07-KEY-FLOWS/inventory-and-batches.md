@@ -20,7 +20,7 @@ When an order or POS sale reduces stock and no specific batch is passed:
 1. FIFO prefers the **earliest dated** saleable batch (`expiry_date ASC NULLS LAST`, then `created_at`).
 2. Expired batches (`expiry_date < today`) are not eligible. Default policy forbids selling them; there is no org-level FIFO/expired flag in this slice.
 3. Once a batch is depleted, deduction moves to the next eligible batch.
-4. Product.quantity is recomputed as the sum of remaining **active** batches (expired qty can still sit on that total until written off).
+4. Product.quantity is recomputed as the sum of remaining **active** batches (expired qty stays on that total until a write-off).
 
 ### 3. Fractional / Child Products
 
