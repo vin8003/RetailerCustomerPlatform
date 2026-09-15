@@ -827,6 +827,9 @@ class RetailerBlacklist(models.Model):
         return f"{self.customer.username} blacklisted by {self.retailer.shop_name}"
 
 
+UNIQ_ORG_SUPPLIER_GSTIN = 'uniq_org_supplier_nonblank_gstin'
+
+
 class Supplier(models.Model):
     """
     Distributor/Wholesaler for purchasing goods
@@ -835,6 +838,14 @@ class Supplier(models.Model):
         RetailerProfile, 
         on_delete=models.CASCADE, 
         related_name='suppliers'
+    )
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='suppliers',
+        null=True,
+        blank=True,
+        help_text='Denormalized from retailer.organization for org-unique GSTIN.',
     )
     company_name = models.CharField(max_length=255)
     contact_person = models.CharField(max_length=255, blank=True)
@@ -861,6 +872,39 @@ class Supplier(models.Model):
             models.Index(fields=['retailer', 'company_name']),
             models.Index(fields=['gst_number']),
         ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['organization', 'gst_number'],
+                condition=models.Q(organization__isnull=False) & ~models.Q(gst_number=''),
+                name=UNIQ_ORG_SUPPLIER_GSTIN,
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.retailer_id:
+            retailer = getattr(self, 'retailer', None)
+            org_id = (
+                getattr(retailer, 'organization_id', None)
+                if retailer is not None
+                else None
+            )
+            if org_id is None:
+                org_id = (
+                    RetailerProfile.objects.filter(pk=self.retailer_id)
+                    .values_list('organization_id', flat=True)
+                    .first()
+                )
+            if org_id is not None:
+                self.organization_id = org_id
+        if self.gst_number is None:
+            self.gst_number = ''
+        else:
+            self.gst_number = str(self.gst_number).strip().upper()
+        if self.payment_terms is None:
+            self.payment_terms = ''
+        else:
+            self.payment_terms = str(self.payment_terms).strip()
+        return super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.company_name} ({self.retailer.shop_name})"

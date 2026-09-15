@@ -836,18 +836,30 @@ class SupplierSerializer(serializers.ModelSerializer):
     gst_number = serializers.CharField(
         required=False,
         allow_blank=True,
+        allow_null=True,
         max_length=15,
+    )
+    payment_terms = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        max_length=80,
     )
 
     class Meta:
         model = Supplier
-        fields = '__all__'
+        exclude = ['organization']
         read_only_fields = ['id', 'retailer', 'balance_due', 'created_at', 'updated_at']
 
     def validate_gst_number(self, value):
         from retailers.suppliers import normalize_gstin
 
         return normalize_gstin(value)
+
+    def validate_payment_terms(self, value):
+        from retailers.suppliers import normalize_payment_terms
+
+        return normalize_payment_terms(value)
 
     def validate(self, attrs):
         from retailers.organization import get_organization_for_user
@@ -857,11 +869,13 @@ class SupplierSerializer(serializers.ModelSerializer):
             normalize_gstin,
         )
 
+        if 'gst_number' in attrs:
+            attrs['gst_number'] = normalize_gstin(attrs.get('gst_number'))
         gst = attrs.get('gst_number')
         if gst is None:
             gst = getattr(self.instance, 'gst_number', '') if self.instance else ''
         gst = normalize_gstin(gst)
-        if gst:
+        if 'gst_number' in attrs:
             attrs['gst_number'] = gst
         if not gst:
             return attrs

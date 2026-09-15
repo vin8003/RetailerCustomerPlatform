@@ -12,7 +12,7 @@ from rest_framework import status
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
-from retailers.models import OrgAuditLog, RetailerProfile, Supplier
+from retailers.models import OrgAuditLog, RetailerProfile, Supplier, UNIQ_ORG_SUPPLIER_GSTIN
 from retailers.organization import (
     ensure_org_rbac_bootstrap,
     get_organization_for_user,
@@ -29,6 +29,9 @@ GSTIN_FORMAT_MESSAGE = (
 )
 DUPLICATE_GSTIN_MESSAGE = (
     'GSTIN already used by another supplier in this organization.'
+)
+PAYMENT_TERMS_WHITESPACE_MESSAGE = (
+    'Payment terms cannot be whitespace-only.'
 )
 INACTIVE_SUPPLIER_MESSAGE = (
     'Inactive suppliers cannot be selected on new purchase documents.'
@@ -81,6 +84,29 @@ def duplicate_gstin_error():
     })
 
 
+def map_gstin_integrity_error(exc):
+    """Map the org GSTIN unique constraint to the same 400 the app check uses."""
+    text = str(exc)
+    if UNIQ_ORG_SUPPLIER_GSTIN in text or 'gst_number' in text:
+        raise duplicate_gstin_error() from exc
+    raise exc
+
+
+def normalize_payment_terms(value):
+    """
+    Trim payment terms. None/empty stays empty.
+
+    Whitespace-only is invalid when the field is being set.
+    """
+    if value is None:
+        return ''
+    text = str(value)
+    stripped = text.strip()
+    if text and not stripped:
+        raise ValidationError(PAYMENT_TERMS_WHITESPACE_MESSAGE)
+    return stripped
+
+
 def resolve_supplier_home_retailer(user):
     """
     Shop location to attach a newly created supplier.
@@ -110,10 +136,7 @@ def resolve_supplier_home_retailer(user):
 def submitted_payment_terms(data):
     if not isinstance(data, dict) or 'payment_terms' not in data:
         return _MISSING
-    raw = data.get('payment_terms')
-    if raw is None:
-        return ''
-    return str(raw).strip()
+    return normalize_payment_terms(data.get('payment_terms'))
 
 
 def payment_terms_would_change(instance, data):
