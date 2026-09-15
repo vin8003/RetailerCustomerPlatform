@@ -880,7 +880,7 @@ def bulk_update_products(request):
                     except Exception:
                         pass
 
-                if 'hsn_code' in item:
+                if 'hsn_code' in item and item['hsn_code'] is not None:
                     product.hsn_code = str(item['hsn_code'])
                     changed = True
 
@@ -1753,21 +1753,28 @@ def process_excel_upload(file, retailer, user):
                         defaults={'is_active': True}
                     )
 
-                raw_hsn = row.get('hsn', '')
-                if pd.isna(raw_hsn):
-                    hsn_code = ''
-                elif isinstance(raw_hsn, float) and raw_hsn.is_integer():
-                    hsn_code = str(int(raw_hsn))
-                else:
-                    hsn_code = str(raw_hsn).strip()
+                hsn_column_present = 'hsn' in df.columns
+                gst_column_present = 'gst_rate' in df.columns
 
-                raw_gst_rate = row.get('gst_rate', Decimal('0'))
-                if pd.isna(raw_gst_rate) or str(raw_gst_rate).strip() == '':
-                    gst_rate = Decimal('0')
-                else:
-                    gst_rate = Decimal(str(raw_gst_rate))
-                    if gst_rate not in GST_RATES:
-                        raise ValueError(f'Unsupported GST rate: {raw_gst_rate}')
+                hsn_code = None
+                if hsn_column_present:
+                    raw_hsn = row.get('hsn', '')
+                    if pd.isna(raw_hsn) or str(raw_hsn).strip() == '':
+                        hsn_code = None
+                    elif isinstance(raw_hsn, float) and raw_hsn.is_integer():
+                        hsn_code = str(int(raw_hsn))
+                    else:
+                        hsn_code = str(raw_hsn).strip()
+
+                gst_rate = None
+                if gst_column_present:
+                    raw_gst_rate = row.get('gst_rate', '')
+                    if pd.isna(raw_gst_rate) or str(raw_gst_rate).strip() == '':
+                        gst_rate = None
+                    else:
+                        gst_rate = Decimal(str(raw_gst_rate))
+                        if gst_rate not in GST_RATES:
+                            raise ValueError(f'Unsupported GST rate: {raw_gst_rate}')
 
                 # Create product
                 product_data = {
@@ -1779,8 +1786,6 @@ def process_excel_upload(file, retailer, user):
                     'category': category,
                     'brand': brand,
                     'unit': row.get('unit', 'piece'),
-                    'hsn_code': hsn_code,
-                    'gst_rate': gst_rate,
                 }
 
                 # Check if product already exists
@@ -1795,6 +1800,10 @@ def process_excel_upload(file, retailer, user):
                     for key, value in product_data.items():
                         if key != 'retailer':
                             setattr(existing_product, key, value)
+                    if hsn_column_present and hsn_code is not None:
+                        existing_product.hsn_code = hsn_code
+                    if gst_column_present and gst_rate is not None:
+                        existing_product.gst_rate = gst_rate
                     existing_product.save()
 
                     # Log inventory change
@@ -1813,6 +1822,8 @@ def process_excel_upload(file, retailer, user):
                         )
                 else:
                     # Create new product
+                    product_data['hsn_code'] = hsn_code if hsn_code is not None else ''
+                    product_data['gst_rate'] = gst_rate if gst_rate is not None else Decimal('0')
                     product = Product.objects.create(**product_data)
 
                     # Log inventory addition
