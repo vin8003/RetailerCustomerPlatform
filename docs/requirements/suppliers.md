@@ -17,7 +17,7 @@ One vendor master. Do not invent a second supplier / vendor table. Ledger rows s
 | `payment_terms` on `Supplier` | EXTEND |
 | Duplicate non-blank GSTIN flagged per **org** (`gstin_duplicate`) | EXTEND |
 | Org-unique non-blank GSTIN DB constraint (`uniq_org_supplier_nonblank_gstin`) | EXTEND — denormalized `Supplier.organization`; blank/null GSTIN stored as `''` and may repeat. Concurrent insert maps `IntegrityError` to the same 400 |
-| Reads scoped on `Supplier.organization` (not a `retailer__organization` join) | EXTEND — same column as the unique constraint, so the app duplicate check and the DB cover the same rows. `Supplier.save()` keeps it in step; migration 0028 backfilled |
+| Reads scoped on `Supplier.organization`, falling back to `retailer__organization` for NULL denorm | EXTEND — the denorm is the same column as the unique constraint, so the app duplicate check and the DB cover the same rows. `Supplier.save()` keeps it in step and migration 0028 backfilled, but a bulk write or a lazily provisioned org can still leave it NULL, and those rows stay org-scoped through `retailer` |
 | `purchasing.terms` for payment-terms writes (**403**) | EXTEND (catalog v10) |
 | Inactive supplier blocked on **new** purchase-invoice create / supplier change | EXTEND |
 | `GET /api/products/erp/suppliers/?is_active=true` picker filter | EXTEND — hook for OE-102 PO picker |
@@ -65,9 +65,19 @@ Purchase-invoice create is the current gate.
 | `PATCH /erp/suppliers/<id>/` (payment terms + audit) | **8** |
 
 The caller's organization is resolved once per request and passed to the
-serializer and the audit writer. `GET /erp/purchase-invoices/` joins
-`supplier` (the list exposes `supplier_name`), so the supplier table is not
-read once per invoice.
+serializer and the audit writer.
+
+`GET /erp/purchase-invoices/` joins `supplier` (the list exposes
+`supplier_name`), asserted in `products/tests/test_purchase_invoice_supplier_gate_oe100.py`:
+
+| Part | Budget |
+|------|--------|
+| Fixed, page not empty | **4** — caller retailer for the queryset, page count, invoice page, caller retailer for the serializer context |
+| Per invoice | **4** — `refund_amount` and `net_amount` each aggregate `purchase_return`, `is_returned` runs `exists()`, plus the nested items page |
+
+The per-invoice figure is flat in the number of distinct suppliers on the page;
+the four remaining per-invoice reads are the invoice's own children and are not
+part of this slice.
 
 ## Security
 
