@@ -9,6 +9,8 @@ from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from rest_framework import status
 
@@ -270,6 +272,38 @@ def _record_locked_product_pks(monkeypatch):
     return locked_pks
 
 
+def _record_lock_for_sale_calls(monkeypatch):
+    """Capture lock_for_sale sold SKUs and the pk-ordered locked set."""
+    calls = []
+    real_lock = Product.lock_for_sale
+
+    def tracking_lock(retailer, products):
+        sold_pks = [product.pk for product in products]
+        locked = real_lock(retailer, products)
+        calls.append(
+            {
+                "sold_pks": sold_pks,
+                "locked_pks": list(locked.keys()),
+            }
+        )
+        return locked
+
+    monkeypatch.setattr(Product, "lock_for_sale", staticmethod(tracking_lock))
+    return calls
+
+
+def _product_in_list_sql(captured_queries, *pks):
+    """Product SELECTs that mention every pk (lock_for_sale id__in)."""
+    needles = [str(pk) for pk in pks]
+    return [
+        query["sql"]
+        for query in captured_queries
+        if 'FROM "product"' in query["sql"]
+        and " IN " in query["sql"].upper()
+        and all(needle in query["sql"] for needle in needles)
+    ]
+
+
 def _make_pack_pair(retailer, category, brand, *, parent_qty=Decimal("1")):
     parent = Product.objects.create(
         retailer=retailer,
@@ -428,3 +462,117 @@ class TestSaleDeductLocksBeforeReduce:
         assert parent.pk in locked_pks
         parent.refresh_from_db()
         assert parent.quantity == Decimal("0.900")
+
+    def test_pos_pack_child_uses_one_lock_for_sale_before_reduce(
+        self, api_client, retailer_user, retailer, category, brand, monkeypatch
+    ):
+        parent, child = _make_pack_pair(
+            retailer, category, brand, parent_qty=Decimal("1")
+        )
+        assert parent.pk < child.pk
+        events = []
+        lock_calls = []
+        real_lock = Product.lock_for_sale
+        real_reduce = Product.reduce_quantity
+
+        def tracking_lock(retailer_arg, products):
+            sold_pks = [product.pk for product in products]
+            events.append(("lock_for_sale", sold_pks))
+            locked = real_lock(retailer_arg, products)
+            lock_calls.append(
+                {"sold_pks": sold_pks, "locked_pks": list(locked.keys())}
+            )
+            return locked
+
+        def tracking_reduce(self, *args, **kwargs):
+            events.append(("reduce", self.pk))
+            return real_reduce(self, *args, **kwargs)
+
+        monkeypatch.setattr(Product, "lock_for_sale", staticmethod(tracking_lock))
+        monkeypatch.setattr(Product, "reduce_quantity", tracking_reduce)
+        api_client.force_authenticate(user=retailer_user)
+
+        response = api_client.post(
+            reverse("create_pos_order"),
+            _pos_payload(child, Decimal("1")),
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_201_CREATED
+        assert events[0][0] == "lock_for_sale"
+        assert events[0][1] == [child.pk]
+        assert any(kind == "reduce" for kind, _payload in events)
+        assert next(
+            i for i, (kind, _payload) in enumerate(events) if kind == "lock_for_sale"
+        ) < next(i for i, (kind, _payload) in enumerate(events) if kind == "reduce")
+        assert len(lock_calls) == 1
+        assert lock_calls[0]["locked_pks"] == sorted([parent.pk, child.pk])
+
+    def test_pos_pack_lock_for_sale_covers_parent_and_child_in_one_ordered_sfu(
+        self, api_client, retailer_user, retailer, category, brand
+    ):
+        parent, child = _make_pack_pair(
+            retailer, category, brand, parent_qty=Decimal("1")
+        )
+        assert parent.pk < child.pk
+        api_client.force_authenticate(user=retailer_user)
+
+        with CaptureQueriesContext(connection) as ctx:
+            response = api_client.post(
+                reverse("create_pos_order"),
+                _pos_payload(child, Decimal("1")),
+                format="json",
+            )
+
+        assert response.status_code == status.HTTP_201_CREATED
+        joint = _product_in_list_sql(ctx.captured_queries, parent.pk, child.pk)
+        assert joint, "POS must lock pack parent+child in one lock_for_sale"
+        assert "ORDER BY" in joint[0].upper()
+
+    def test_pos_multi_sku_uses_one_lock_for_sale_for_every_sold_sku(
+        self, api_client, retailer_user, retailer, category, brand, monkeypatch
+    ):
+        parent, child = _make_pack_pair(
+            retailer, category, brand, parent_qty=Decimal("1")
+        )
+        standalone = Product.objects.create(
+            retailer=retailer,
+            name="OE146 Standalone Tea",
+            category=category,
+            brand=brand,
+            price=Decimal("10.00"),
+            quantity=Decimal("5"),
+            track_inventory=True,
+            is_active=True,
+            is_available=True,
+        )
+        lock_calls = _record_lock_for_sale_calls(monkeypatch)
+        api_client.force_authenticate(user=retailer_user)
+
+        response = api_client.post(
+            reverse("create_pos_order"),
+            {
+                "subtotal": float(child.price + standalone.price),
+                "total_amount": float(child.price + standalone.price),
+                "items": [
+                    {
+                        "product_id": child.id,
+                        "quantity": 1,
+                        "unit_price": float(child.price),
+                    },
+                    {
+                        "product_id": standalone.id,
+                        "quantity": 1,
+                        "unit_price": float(standalone.price),
+                    },
+                ],
+            },
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_201_CREATED
+        assert len(lock_calls) == 1
+        assert lock_calls[0]["sold_pks"] == [child.pk, standalone.pk]
+        assert lock_calls[0]["locked_pks"] == sorted(
+            [parent.pk, child.pk, standalone.pk]
+        )

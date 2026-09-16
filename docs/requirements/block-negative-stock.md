@@ -28,7 +28,7 @@ Sale deducts cannot take on-hand below zero unless the caller already passes the
 
 A blocked sale returns **400** (`Not enough saleable stock for …`). The product row and order create stay unchanged (`transaction.atomic`). Selling the last unit down to **zero** is allowed.
 
-`place_order` and order-modify lock the sold `Product` (and `ProductBatch` when the caller has one) with `select_for_update` before `reduce_quantity`. POS already locked the sold SKU; pack-child sales also lock the **parent** Product row that is deducted so two concurrent last-unit sales cannot both succeed.
+`place_order`, order-modify, and POS `create_pos_order` lock sold SKUs (and pack parents) with one `Product.lock_for_sale` in pk order before `reduce_quantity`. `ProductBatch` is still `select_for_update` when the caller has a batch. Pack-child sales must not lock child-then-parent ad hoc (AB-BA with the shared ASC protocol).
 
 `allow_negative` leftover on batched products still cannot consume an expired lot (OE-136).
 

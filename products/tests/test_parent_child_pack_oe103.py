@@ -571,8 +571,8 @@ class TestChildSaleAdjustsParent:
         parent, child = _make_parent_child(shop, category, prefix="POSQ")
         api_client.force_authenticate(user=owner)
 
-        # +1 vs pre-lock budget: pack-child select_for_update on the parent row.
-        with django_assert_num_queries(34):
+        # One lock_for_sale for sold child + pack parent (pk ASC), not ad-hoc child-then-parent.
+        with django_assert_num_queries(33):
             response = api_client.post(
                 reverse("create_pos_order"),
                 _pos_payload(child, Decimal("10")),

@@ -561,13 +561,15 @@ def create_pos_order(request):
             item_discounts = offer_results.get('item_discounts', {})
             # Existing Product.reduce_quantity flag only — no org policy model.
             allow_negative = data.get('allow_negative') is True
+            # One pk-ASC lock for every sold SKU (+ pack parents). Do not
+            # lock child-then-parent ad hoc — that AB-BA deadlocks with
+            # place_order / modify lock_for_sale.
+            locked_products = Product.lock_for_sale(
+                retailer,
+                [pos_item.product for pos_item in pos_items],
+            )
             for i, item in enumerate(items_data):
-                product = Product.objects.select_for_update().get(id=item['product_id'], retailer=retailer)
-                if product.parent_bulk_product_id:
-                    product.parent_bulk_product = Product.objects.select_for_update().get(
-                        pk=product.parent_bulk_product_id,
-                        retailer=retailer,
-                    )
+                product = locked_products[item['product_id']]
                 batch_id = item.get('batch_id')
                 batch = None
                 if batch_id:
