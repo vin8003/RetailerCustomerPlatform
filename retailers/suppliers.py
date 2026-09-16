@@ -8,6 +8,7 @@ three-way match is OE-102 and should call
 """
 import re
 
+from django.db.models import Q
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
@@ -57,16 +58,22 @@ def normalize_gstin(value):
 
 def org_suppliers_queryset(organization):
     """
-    Suppliers of this org, read off the denormalized ``Supplier.organization``.
+    Suppliers of this org: the ``Supplier.organization`` denorm, plus the
+    retailer walk for rows whose denorm is still NULL.
 
-    Same column the ``uniq_org_supplier_nonblank_gstin`` constraint uses, so the
-    app duplicate check and the DB constraint cover the same rows. ``save()``
-    keeps the column in step with ``retailer.organization``; migration 0028
-    backfilled existing rows.
+    The denorm is the column the ``uniq_org_supplier_nonblank_gstin`` constraint
+    uses, so the app duplicate check and the DB constraint cover the same rows.
+    ``save()`` keeps it in step with ``retailer.organization`` and migration 0028
+    backfilled, but a bulk write or a lazily provisioned org can still leave it
+    NULL. Those rows are org-scoped through ``retailer``, so read them the same
+    way ``assert_supplier_in_org`` and ``supplier_organization`` do.
     """
     if organization is None:
         return Supplier.objects.none()
-    return Supplier.objects.filter(organization=organization)
+    return Supplier.objects.filter(
+        Q(organization=organization)
+        | Q(organization__isnull=True, retailer__organization=organization)
+    )
 
 
 def supplier_organization(supplier):

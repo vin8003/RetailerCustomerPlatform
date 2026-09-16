@@ -79,6 +79,13 @@ def _make_staff(org, username, permissions):
     return user
 
 
+def _unbackfilled_supplier(shop, **kwargs):
+    """A row whose denorm ``organization`` is NULL: org-scoped only via retailer."""
+    supplier = Supplier.objects.create(retailer=shop, **kwargs)
+    Supplier.objects.filter(pk=supplier.pk).update(organization=None)
+    return Supplier.objects.get(pk=supplier.pk)
+
+
 def _gstin_duplicate_flagged(payload):
     flag = payload.get("gstin_duplicate")
     if flag is True:
@@ -663,12 +670,12 @@ class TestSupplierOrgDenormReads:
     ``uniq_org_supplier_nonblank_gstin`` constraint looked at different rows.
     """
 
-    def test_org_queryset_has_no_retailer_join(self):
+    def test_org_queryset_reads_the_denorm_column(self):
         _owner, shop = _make_retailer("denorm_join", "Denorm Join Shop")
         Supplier.objects.create(retailer=shop, company_name="Vendor J")
         sql = str(org_suppliers_queryset(shop.organization).query)
-        assert "retailer_profile" not in sql
-        assert '"supplier"."organization_id"' in sql
+        assert '"supplier"."organization_id" = ' in sql
+        assert '"supplier"."organization_id" IS NULL' in sql
 
     def test_supplier_save_backfills_organization(self):
         _owner, shop = _make_retailer("denorm_save", "Denorm Save Shop")
@@ -757,9 +764,7 @@ class TestSupplierOrgDenormReads:
 
     def test_assert_supplier_in_org_falls_back_for_unbackfilled_row(self):
         _owner, shop = _make_retailer("denorm_legacy", "Denorm Legacy Shop")
-        supplier = Supplier.objects.create(retailer=shop, company_name="Legacy Vendor")
-        Supplier.objects.filter(pk=supplier.pk).update(organization=None)
-        legacy = Supplier.objects.get(pk=supplier.pk)
+        legacy = _unbackfilled_supplier(shop, company_name="Legacy Vendor")
         assert legacy.organization_id is None
         assert_supplier_in_org(legacy, shop)
 
@@ -778,3 +783,94 @@ class TestSupplierOrgDenormReads:
         assert entry is not None
         assert entry.organization_id == shop.organization_id
         assert entry.summary_after == {"payment_terms": "Net 15"}
+
+
+@pytest.mark.django_db
+class TestSupplierNullDenormStaysVisible:
+    """
+    A supplier whose denorm ``organization`` is NULL (written before the 0028
+    backfill, or by a bulk insert / lazily provisioned org) is still org-scoped
+    through ``retailer``. Reading the denorm alone hid those rows from the list,
+    404'd detail and PATCH, and let a duplicate GSTIN through as 201.
+    """
+
+    def test_queryset_includes_unbackfilled_row(self):
+        _owner, shop = _make_retailer("null_qs", "Null Queryset Shop")
+        legacy = _unbackfilled_supplier(shop, company_name="Legacy Vendor")
+        backfilled = Supplier.objects.create(retailer=shop, company_name="New Vendor")
+        found = set(
+            org_suppliers_queryset(shop.organization).values_list("id", flat=True)
+        )
+        assert found == {legacy.id, backfilled.id}
+
+    def test_queryset_excludes_other_org_unbackfilled_row(self):
+        _owner, shop = _make_retailer("null_mine", "Null Mine Shop")
+        _other_owner, other_shop = _make_retailer("null_theirs", "Null Theirs Shop")
+        _unbackfilled_supplier(other_shop, company_name="Foreign Legacy")
+        assert not org_suppliers_queryset(shop.organization).exists()
+
+    def test_active_picker_includes_unbackfilled_row(self):
+        _owner, shop = _make_retailer("null_picker", "Null Picker Shop")
+        live = _unbackfilled_supplier(shop, company_name="Legacy Live", is_active=True)
+        _unbackfilled_supplier(shop, company_name="Legacy Dead", is_active=False)
+        names = set(
+            active_suppliers_for_org(shop.organization).values_list(
+                "company_name", flat=True
+            )
+        )
+        assert names == {live.company_name}
+
+    def test_list_shows_unbackfilled_row(self, api_client):
+        owner, shop = _make_retailer("null_list", "Null List Shop")
+        legacy = _unbackfilled_supplier(shop, company_name="Legacy Vendor")
+        api_client.force_authenticate(user=owner)
+        resp = api_client.get(reverse("erp-supplier-list"))
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.data["count"] == 1
+        assert [row["id"] for row in resp.data["results"]] == [legacy.id]
+
+    def test_retrieve_and_patch_unbackfilled_row(self, api_client):
+        owner, shop = _make_retailer("null_detail", "Null Detail Shop")
+        legacy = _unbackfilled_supplier(shop, company_name="Legacy Vendor")
+        detail_url = reverse("erp-supplier-detail", args=[legacy.id])
+        api_client.force_authenticate(user=owner)
+
+        resp = api_client.get(detail_url)
+        assert resp.status_code == status.HTTP_200_OK, resp.data
+        assert resp.data["id"] == legacy.id
+
+        patched = api_client.patch(
+            detail_url, {"company_name": "Renamed Vendor"}, format="json"
+        )
+        assert patched.status_code == status.HTTP_200_OK, patched.data
+        legacy.refresh_from_db()
+        assert legacy.company_name == "Renamed Vendor"
+        # The write heals the denorm via Supplier.save().
+        assert legacy.organization_id == shop.organization_id
+
+    def test_duplicate_gstin_flagged_against_unbackfilled_row(self, api_client):
+        owner, shop = _make_retailer("null_dup", "Null Dup Shop")
+        _unbackfilled_supplier(shop, company_name="Legacy Vendor", gst_number=GSTIN_A)
+        api_client.force_authenticate(user=owner)
+        resp = api_client.post(
+            reverse("erp-supplier-list"),
+            {"company_name": "New Vendor", "gst_number": GSTIN_A},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST, resp.data
+        assert _gstin_duplicate_flagged(resp.data)
+        assert Supplier.objects.filter(gst_number=GSTIN_A).count() == 1
+
+    def test_other_org_may_still_use_that_gstin(self, api_client):
+        _owner, shop = _make_retailer("null_dup_mine", "Null Dup Mine Shop")
+        other_owner, _other_shop = _make_retailer(
+            "null_dup_theirs", "Null Dup Theirs Shop"
+        )
+        _unbackfilled_supplier(shop, company_name="Legacy Vendor", gst_number=GSTIN_A)
+        api_client.force_authenticate(user=other_owner)
+        resp = api_client.post(
+            reverse("erp-supplier-list"),
+            {"company_name": "Their Vendor", "gst_number": GSTIN_A},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_201_CREATED, resp.data
