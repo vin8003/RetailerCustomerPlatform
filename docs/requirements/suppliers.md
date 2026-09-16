@@ -68,7 +68,9 @@ The caller's organization is resolved once per request and passed to the
 serializer and the audit writer.
 
 `GET /erp/purchase-invoices/` joins `supplier` (the list exposes
-`supplier_name`), asserted in `products/tests/test_purchase_invoice_supplier_gate_oe100.py`:
+`supplier_name`). `?search=` is wired on the viewset (`SearchFilter`) and uses `invoice_number` and
+`supplier__company_name` — not the serializer alias `supplier_name`.
+Asserted in `products/tests/test_purchase_invoice_supplier_gate_oe100.py`:
 
 | Part | Budget |
 |------|--------|

@@ -1,6 +1,7 @@
 from decimal import Decimal
 from rest_framework import viewsets, permissions, status
 from rest_framework.exceptions import ValidationError
+from rest_framework.filters import SearchFilter
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from django.utils import timezone
@@ -175,6 +176,7 @@ class PurchaseInvoiceViewSet(viewsets.ModelViewSet):
     serializer_class = PurchaseInvoiceSerializer
     permission_classes = [permissions.IsAuthenticated]
     parser_classes = [JSONParser, FormParser, MultiPartParser]
+    filter_backends = [SearchFilter]
 
     def _caller_retailer(self):
         return (
@@ -206,7 +208,8 @@ class PurchaseInvoiceViewSet(viewsets.ModelViewSet):
             qs = qs.filter(invoice_date__lte=end_date)
         return qs
 
-    search_fields = ['invoice_number', 'supplier_name']
+    # supplier_name is a serializer alias, not a model field.
+    search_fields = ['invoice_number', 'supplier__company_name']
 
     def perform_create(self, serializer):
         retailer = RetailerProfile.objects.get(user=self.request.user)

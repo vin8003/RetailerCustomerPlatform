@@ -40,6 +40,7 @@ This change is **slice B (OTP redeem)** only. Earn-on-sale already runs on POS f
 - A used OTP cannot be reused. Failed OTP does not decrease points.
 - Tenant filter is the caller's org locations (`staff_order_for_redeem`, same `retailer__in=locations` rule as `get_order_for_retailer`).
 - App checkout and staff redeem lock the wallet before consume; OTP is consumed only when a burn will happen.
+- App checkout **validate** peeks OTP with `select_for_update` so a wrong code increments `attempts` without a lost update. The checkout create transaction is unchanged.
 - Redeem mutates order totals — reuse `orders.update` (catalog has no `rewards.redeem`).
 
 ## Not in this change

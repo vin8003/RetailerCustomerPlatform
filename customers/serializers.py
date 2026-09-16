@@ -1,6 +1,11 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from .models import CustomerProfile, CustomerAddress, CustomerWishlist, CustomerNotification
+from products.channel_price import (
+    channel_from_context,
+    format_money,
+    resolve_channel_price,
+)
 from products.models import Product
 from retailers.models import CustomerLedger
 
@@ -103,6 +108,14 @@ class CustomerWishlistSerializer(serializers.ModelSerializer):
             'retailer_name', 'retailer_id', 'created_at'
         ]
         read_only_fields = ['id', 'product_name', 'product_price', 'product_image', 'retailer_name', 'retailer_id', 'created_at']
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        product = getattr(instance, 'product', None)
+        if product is not None:
+            selling = resolve_channel_price(product, channel_from_context(self.context))
+            data['product_price'] = format_money(selling)
+        return data
     
     def create(self, validated_data):
         """Create wishlist item with customer from context"""
