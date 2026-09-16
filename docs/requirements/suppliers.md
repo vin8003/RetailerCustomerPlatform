@@ -17,6 +17,7 @@ One vendor master. Do not invent a second supplier / vendor table. Ledger rows s
 | `payment_terms` on `Supplier` | EXTEND |
 | Duplicate non-blank GSTIN flagged per **org** (`gstin_duplicate`) | EXTEND |
 | Org-unique non-blank GSTIN DB constraint (`uniq_org_supplier_nonblank_gstin`) | EXTEND — denormalized `Supplier.organization`; blank/null GSTIN stored as `''` and may repeat. Concurrent insert maps `IntegrityError` to the same 400 |
+| Reads scoped on `Supplier.organization` (not a `retailer__organization` join) | EXTEND — same column as the unique constraint, so the app duplicate check and the DB cover the same rows. `Supplier.save()` keeps it in step; migration 0028 backfilled |
 | `purchasing.terms` for payment-terms writes (**403**) | EXTEND (catalog v10) |
 | Inactive supplier blocked on **new** purchase-invoice create / supplier change | EXTEND |
 | `GET /api/products/erp/suppliers/?is_active=true` picker filter | EXTEND — hook for OE-102 PO picker |
@@ -51,6 +52,22 @@ There is no PO/GRN create path yet. When OE-102 adds PO create:
 3. Reuse the same org check (`assert_supplier_in_org`).
 
 Purchase-invoice create is the current gate.
+
+## Query budgets
+
+`assertNumQueries` on the supplier endpoints (dummy DB, `retailers/tests/test_suppliers_oe100.py`):
+
+| Endpoint | Budget |
+|----------|--------|
+| `GET /erp/suppliers/` | **3** — flat at 8 rows |
+| `POST /erp/suppliers/` | **6** |
+| `GET /erp/suppliers/<id>/` | **2** |
+| `PATCH /erp/suppliers/<id>/` (payment terms + audit) | **8** |
+
+The caller's organization is resolved once per request and passed to the
+serializer and the audit writer. `GET /erp/purchase-invoices/` joins
+`supplier` (the list exposes `supplier_name`), so the supplier table is not
+read once per invoice.
 
 ## Security
 
