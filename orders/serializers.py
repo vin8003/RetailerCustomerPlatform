@@ -5,7 +5,7 @@ from django.utils import timezone
 from .models import Order, OrderItem, OrderStatusLog, OrderDelivery, OrderFeedback, OrderReturn, OrderChatMessage, RetailerRating
 from .domain.status_policy import ensure_transition_allowed, InvalidStatusTransitionError
 from customers.models import CustomerAddress
-from products.models import Product
+from products.models import Product, ProductInventoryLog
 from cart.models import Cart, CartItem
 from returns.models import SalesReturnItem
 from django.db.models import Sum
@@ -762,7 +762,6 @@ class OrderCreateSerializer(serializers.Serializer):
                     cart_item.product.reduce_quantity(quantity)
                     new_qty = prev_qty - quantity
                     
-                    from products.models import ProductInventoryLog
                     logs_to_create.append(ProductInventoryLog(
                         product=cart_item.product,
                         log_type='sold',
@@ -777,7 +776,6 @@ class OrderCreateSerializer(serializers.Serializer):
             OrderItem.objects.bulk_create(order_items)
             
             if logs_to_create:
-                from products.models import ProductInventoryLog
                 ProductInventoryLog.objects.bulk_create(logs_to_create)
 
             if points_to_redeem > 0:
@@ -1052,7 +1050,6 @@ class OrderModificationSerializer(serializers.Serializer):
                                 item.product.increase_quantity(item.quantity)
                                 new_qty = prev_qty + item.quantity
                                 
-                                from products.models import ProductInventoryLog
                                 logs_to_create.append(ProductInventoryLog(
                                     product=item.product,
                                     log_type='returned',
@@ -1098,7 +1095,7 @@ class OrderModificationSerializer(serializers.Serializer):
                         
                         # Update price if provided
                         if 'unit_price' in item_data:
-                            item.unit_price = item_data['unit_price']
+                            item.unit_price = Decimal(str(item_data['unit_price']))
                         
                         # Recalculate item total and save
                         item.save() # save() method in model calculates total_price
@@ -1145,7 +1142,6 @@ class OrderModificationSerializer(serializers.Serializer):
                     )
             
             if logs_to_create:
-                from products.models import ProductInventoryLog
                 ProductInventoryLog.objects.bulk_create(logs_to_create)
             
             # Recalculate order subtotal from scratch to be safe
