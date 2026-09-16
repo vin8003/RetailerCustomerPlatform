@@ -343,12 +343,12 @@ class TestLinkBarcodeBatchCreation:
 @pytest.mark.django_db
 class TestPOSNegativeStockBilling:
     """
-    Tests for POS billing when stock is 0 or negative.
-    POS must always allow billing (allow_negative=True).
+    POS sale deduct blocks when on-hand would go negative (OE-146).
+    Explicit allow_negative=True remains the only override.
     """
 
     def test_pos_billing_with_zero_stock(self, api_client, retailer_user, retailer, category, brand):
-        """POS should allow billing even when product stock is 0"""
+        """POS must reject a sale that would take on-hand below zero."""
         api_client.force_authenticate(user=retailer_user)
 
         product = Product.objects.create(
@@ -371,13 +371,15 @@ class TestPOSNegativeStockBilling:
         }
         
         response = api_client.post(url, data, format='json')
-        assert response.status_code == status.HTTP_201_CREATED
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "Not enough saleable stock" in response.data.get('error', '')
         
         product.refresh_from_db()
-        assert product.quantity == -2  # Negative stock allowed for POS
+        assert product.quantity == 0
+        assert not Order.objects.filter(retailer=retailer, source="pos").exists()
 
     def test_pos_billing_batch_with_zero_stock(self, api_client, retailer_user, retailer, category, brand):
-        """POS should allow billing from a batch with 0 stock"""
+        """POS must reject a batch sale that would take on-hand below zero."""
         api_client.force_authenticate(user=retailer_user)
 
         product = Product.objects.create(
@@ -404,10 +406,12 @@ class TestPOSNegativeStockBilling:
         }
         
         response = api_client.post(url, data, format='json')
-        assert response.status_code == status.HTTP_201_CREATED
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "Not enough saleable stock" in response.data.get('error', '')
         
         batch.refresh_from_db()
-        assert batch.quantity == -1  # Negative allowed
+        assert batch.quantity == 0
+        assert not Order.objects.filter(retailer=retailer, source="pos").exists()
 
 
 @pytest.mark.django_db

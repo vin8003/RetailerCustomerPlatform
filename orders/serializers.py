@@ -877,7 +877,9 @@ class OrderCreateSerializer(serializers.Serializer):
                 # Reduce product quantity (only if tracked) and log it
                 if cart_item.product.track_inventory:
                     prev_qty = cart_item.product.quantity
-                    if not cart_item.product.reduce_quantity(quantity):
+                    if not cart_item.product.reduce_quantity(
+                        quantity, allow_negative=False
+                    ):
                         raise serializers.ValidationError(
                             f"Not enough saleable stock for {cart_item.product.name}"
                         )
@@ -1303,7 +1305,9 @@ class OrderModificationSerializer(serializers.Serializer):
                                       # Need more
                                       if not item.product.can_order_quantity(diff):
                                           raise serializers.ValidationError(f"Not enough stock for {item.product_name}")
-                                      if not item.product.reduce_quantity(diff):
+                                      if not item.product.reduce_quantity(
+                                          diff, allow_negative=False
+                                      ):
                                           raise serializers.ValidationError(f"Not enough saleable stock for {item.product_name}")
                                       log_type = 'sold'
                                       change_val = -diff
@@ -1350,7 +1354,9 @@ class OrderModificationSerializer(serializers.Serializer):
                     
                     # Reduce stock
                     prev_qty = product.quantity
-                    if not product.reduce_quantity(quantity):
+                    if not product.reduce_quantity(
+                        quantity, allow_negative=False
+                    ):
                         raise serializers.ValidationError(f"Not enough saleable stock for {product.name}")
                     new_qty = product.quantity
                     

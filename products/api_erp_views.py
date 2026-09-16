@@ -559,6 +559,8 @@ def create_pos_order(request):
 
             # Create Order Items and Reduce Inventory
             item_discounts = offer_results.get('item_discounts', {})
+            # Existing Product.reduce_quantity flag only — no org policy model.
+            allow_negative = data.get('allow_negative') is True
             for i, item in enumerate(items_data):
                 product = Product.objects.select_for_update().get(id=item['product_id'], retailer=retailer)
                 batch_id = item.get('batch_id')
@@ -579,10 +581,14 @@ def create_pos_order(request):
                 # Calculate previous quantity for logging
                 prev_qty = batch.quantity if (batch and product.track_inventory) else product.quantity
                 
-                # Reduce inventory using the model method (handles FIFO if batch is None)
-                # POS allows negative stock (allow_negative=True)
-                if not product.reduce_quantity(qty, batch=batch, allow_negative=True):
-                    raise ValueError(f"Unexpected error reducing stock for {product.name}")
+                # Sale deduct blocks when on-hand would go negative unless
+                # the caller already passed the existing allow_negative flag.
+                if not product.reduce_quantity(
+                    qty, batch=batch, allow_negative=allow_negative
+                ):
+                    raise ValueError(
+                        f"Not enough saleable stock for {product.name}"
+                    )
                 
                 new_qty = batch.quantity if (batch and product.track_inventory) else product.quantity
 
