@@ -15,14 +15,18 @@ from retailers.permissions_catalog import ALL_PERMISSION_CODES
 from retailers.serializers import SupplierSerializer
 from retailers.suppliers import (
     DUPLICATE_GSTIN_MESSAGE,
+    INVALID_SUPPLIER_ORG_MESSAGE,
     PAYMENT_TERMS_WHITESPACE_MESSAGE,
     PERM_PURCHASING_TERMS,
     UNIQ_ORG_SUPPLIER_GSTIN,
     active_suppliers_for_org,
     assert_payment_terms_not_whitespace_only,
+    assert_supplier_in_org,
     gstin_exists_in_org,
     normalize_gstin,
+    org_suppliers_queryset,
     payment_terms_would_change,
+    record_payment_terms_audit,
 )
 
 
@@ -73,6 +77,13 @@ def _make_staff(org, username, permissions):
         is_active=True,
     )
     return user
+
+
+def _unbackfilled_supplier(shop, **kwargs):
+    """A row whose denorm ``organization`` is NULL: org-scoped only via retailer."""
+    supplier = Supplier.objects.create(retailer=shop, **kwargs)
+    Supplier.objects.filter(pk=supplier.pk).update(organization=None)
+    return Supplier.objects.get(pk=supplier.pk)
 
 
 def _gstin_duplicate_flagged(payload):
@@ -596,7 +607,7 @@ class TestSupplierQueryBudget:
         owner, shop = _make_retailer("sup_q_list", "Query List Shop")
         Supplier.objects.create(retailer=shop, company_name="Vendor 1")
         api_client.force_authenticate(user=owner)
-        with django_assert_num_queries(4):
+        with django_assert_num_queries(3):
             resp = api_client.get(reverse("erp-supplier-list"))
         assert resp.status_code == status.HTTP_200_OK
         assert resp.data["count"] == 1
@@ -606,7 +617,7 @@ class TestSupplierQueryBudget:
         for i in range(8):
             Supplier.objects.create(retailer=shop, company_name=f"Vendor {i}")
         api_client.force_authenticate(user=owner)
-        with django_assert_num_queries(4):
+        with django_assert_num_queries(3):
             resp = api_client.get(reverse("erp-supplier-list"))
         assert resp.status_code == status.HTTP_200_OK
         assert resp.data["count"] == 8
@@ -614,7 +625,7 @@ class TestSupplierQueryBudget:
     def test_create_query_count(self, api_client, django_assert_num_queries):
         owner, _shop = _make_retailer("sup_q_create", "Query Create Shop")
         api_client.force_authenticate(user=owner)
-        with django_assert_num_queries(8):
+        with django_assert_num_queries(6):
             resp = api_client.post(
                 reverse("erp-supplier-list"),
                 {"company_name": "Budget Vendor", "gst_number": GSTIN_A},
@@ -622,3 +633,244 @@ class TestSupplierQueryBudget:
             )
         assert resp.status_code == status.HTTP_201_CREATED, resp.data
         assert resp.data["gst_number"] == GSTIN_A
+
+    def test_retrieve_query_count(self, api_client, django_assert_num_queries):
+        owner, shop = _make_retailer("sup_q_get", "Query Get Shop")
+        supplier = Supplier.objects.create(retailer=shop, company_name="Vendor Get")
+        api_client.force_authenticate(user=owner)
+        with django_assert_num_queries(2):
+            resp = api_client.get(reverse("erp-supplier-detail", args=[supplier.id]))
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.data["id"] == supplier.id
+
+    def test_patch_payment_terms_query_count(
+        self, api_client, django_assert_num_queries
+    ):
+        owner, shop = _make_retailer("sup_q_patch", "Query Patch Shop")
+        supplier = Supplier.objects.create(retailer=shop, company_name="Vendor Patch")
+        api_client.force_authenticate(user=owner)
+        with django_assert_num_queries(8):
+            resp = api_client.patch(
+                reverse("erp-supplier-detail", args=[supplier.id]),
+                {"payment_terms": "Net 30"},
+                format="json",
+            )
+        assert resp.status_code == status.HTTP_200_OK, resp.data
+        assert resp.data["payment_terms"] == "Net 30"
+        assert OrgAuditLog.objects.filter(
+            object_type=OrgAuditLog.OBJECT_SUPPLIER, object_id=str(supplier.id)
+        ).count() == 1
+
+
+@pytest.mark.django_db
+class TestSupplierOrgDenormReads:
+    """
+    #100 added ``Supplier.organization`` but only wrote it. Reads still joined
+    ``retailer__organization``, so the app duplicate check and the
+    ``uniq_org_supplier_nonblank_gstin`` constraint looked at different rows.
+    """
+
+    def test_org_queryset_reads_the_denorm_column(self):
+        _owner, shop = _make_retailer("denorm_join", "Denorm Join Shop")
+        Supplier.objects.create(retailer=shop, company_name="Vendor J")
+        sql = str(org_suppliers_queryset(shop.organization).query)
+        assert '"supplier"."organization_id" = ' in sql
+        assert '"supplier"."organization_id" IS NULL' in sql
+
+    def test_supplier_save_backfills_organization(self):
+        _owner, shop = _make_retailer("denorm_save", "Denorm Save Shop")
+        supplier = Supplier.objects.create(retailer=shop, company_name="Vendor S")
+        assert supplier.organization_id == shop.organization_id
+
+    def test_org_queryset_spans_shop_locations(self):
+        _owner, shop = _make_retailer("denorm_multi", "Denorm Multi Shop")
+        org = shop.organization
+        second_user = User.objects.create_user(
+            username="denorm_multi_2",
+            email="denorm_multi_2@test.com",
+            password="TestPass123!",
+            user_type="retailer",
+            is_active=True,
+        )
+        second_shop = RetailerProfile.objects.create(
+            user=second_user,
+            shop_name="Denorm Multi Branch",
+            address_line1="2 Main",
+            city="City",
+            state="State",
+            pincode="110002",
+            is_active=True,
+            organization=org,
+        )
+        first = Supplier.objects.create(retailer=shop, company_name="Vendor HQ")
+        branch = Supplier.objects.create(
+            retailer=second_shop, company_name="Vendor Branch"
+        )
+        found = set(org_suppliers_queryset(org).values_list("id", flat=True))
+        assert found == {first.id, branch.id}
+
+    def test_duplicate_gstin_flagged_across_org_locations(self, api_client):
+        _owner, shop = _make_retailer("denorm_dup", "Denorm Dup Shop")
+        org = shop.organization
+        branch_user = User.objects.create_user(
+            username="denorm_dup_2",
+            email="denorm_dup_2@test.com",
+            password="TestPass123!",
+            user_type="retailer",
+            is_active=True,
+        )
+        RetailerProfile.objects.create(
+            user=branch_user,
+            shop_name="Denorm Dup Branch",
+            address_line1="3 Main",
+            city="City",
+            state="State",
+            pincode="110003",
+            is_active=True,
+            organization=org,
+        )
+        Supplier.objects.create(
+            retailer=shop, company_name="Vendor HQ", gst_number=GSTIN_A
+        )
+
+        api_client.force_authenticate(user=branch_user)
+        resp = api_client.post(
+            reverse("erp-supplier-list"),
+            {"company_name": "Vendor Branch", "gst_number": GSTIN_A},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST, resp.data
+        assert _gstin_duplicate_flagged(resp.data)
+        assert Supplier.objects.filter(organization=org, gst_number=GSTIN_A).count() == 1
+
+    def test_assert_supplier_in_org_reads_denorm_without_query(
+        self, django_assert_num_queries
+    ):
+        _owner, shop = _make_retailer("denorm_assert", "Denorm Assert Shop")
+        Supplier.objects.create(retailer=shop, company_name="Vendor A")
+        supplier = Supplier.objects.get(company_name="Vendor A")
+        with django_assert_num_queries(0):
+            assert_supplier_in_org(supplier, shop)
+
+    def test_assert_supplier_in_org_rejects_other_org(self):
+        _owner, shop = _make_retailer("denorm_mine", "Denorm Mine Shop")
+        _other_owner, other_shop = _make_retailer("denorm_theirs", "Denorm Theirs Shop")
+        foreign = Supplier.objects.create(
+            retailer=other_shop, company_name="Foreign Vendor"
+        )
+        with pytest.raises(Exception) as exc:
+            assert_supplier_in_org(foreign, shop)
+        assert INVALID_SUPPLIER_ORG_MESSAGE in str(exc.value)
+
+    def test_assert_supplier_in_org_falls_back_for_unbackfilled_row(self):
+        _owner, shop = _make_retailer("denorm_legacy", "Denorm Legacy Shop")
+        legacy = _unbackfilled_supplier(shop, company_name="Legacy Vendor")
+        assert legacy.organization_id is None
+        assert_supplier_in_org(legacy, shop)
+
+    def test_audit_uses_passed_organization_without_query(
+        self, django_assert_num_queries
+    ):
+        owner, shop = _make_retailer("denorm_audit", "Denorm Audit Shop")
+        Supplier.objects.create(retailer=shop, company_name="Audit Vendor")
+        supplier = Supplier.objects.select_related("retailer").get(
+            company_name="Audit Vendor"
+        )
+        with django_assert_num_queries(1):
+            entry = record_payment_terms_audit(
+                owner, supplier, "", "Net 15", organization=shop.organization
+            )
+        assert entry is not None
+        assert entry.organization_id == shop.organization_id
+        assert entry.summary_after == {"payment_terms": "Net 15"}
+
+
+@pytest.mark.django_db
+class TestSupplierNullDenormStaysVisible:
+    """
+    A supplier whose denorm ``organization`` is NULL (written before the 0028
+    backfill, or by a bulk insert / lazily provisioned org) is still org-scoped
+    through ``retailer``. Reading the denorm alone hid those rows from the list,
+    404'd detail and PATCH, and let a duplicate GSTIN through as 201.
+    """
+
+    def test_queryset_includes_unbackfilled_row(self):
+        _owner, shop = _make_retailer("null_qs", "Null Queryset Shop")
+        legacy = _unbackfilled_supplier(shop, company_name="Legacy Vendor")
+        backfilled = Supplier.objects.create(retailer=shop, company_name="New Vendor")
+        found = set(
+            org_suppliers_queryset(shop.organization).values_list("id", flat=True)
+        )
+        assert found == {legacy.id, backfilled.id}
+
+    def test_queryset_excludes_other_org_unbackfilled_row(self):
+        _owner, shop = _make_retailer("null_mine", "Null Mine Shop")
+        _other_owner, other_shop = _make_retailer("null_theirs", "Null Theirs Shop")
+        _unbackfilled_supplier(other_shop, company_name="Foreign Legacy")
+        assert not org_suppliers_queryset(shop.organization).exists()
+
+    def test_active_picker_includes_unbackfilled_row(self):
+        _owner, shop = _make_retailer("null_picker", "Null Picker Shop")
+        live = _unbackfilled_supplier(shop, company_name="Legacy Live", is_active=True)
+        _unbackfilled_supplier(shop, company_name="Legacy Dead", is_active=False)
+        names = set(
+            active_suppliers_for_org(shop.organization).values_list(
+                "company_name", flat=True
+            )
+        )
+        assert names == {live.company_name}
+
+    def test_list_shows_unbackfilled_row(self, api_client):
+        owner, shop = _make_retailer("null_list", "Null List Shop")
+        legacy = _unbackfilled_supplier(shop, company_name="Legacy Vendor")
+        api_client.force_authenticate(user=owner)
+        resp = api_client.get(reverse("erp-supplier-list"))
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.data["count"] == 1
+        assert [row["id"] for row in resp.data["results"]] == [legacy.id]
+
+    def test_retrieve_and_patch_unbackfilled_row(self, api_client):
+        owner, shop = _make_retailer("null_detail", "Null Detail Shop")
+        legacy = _unbackfilled_supplier(shop, company_name="Legacy Vendor")
+        detail_url = reverse("erp-supplier-detail", args=[legacy.id])
+        api_client.force_authenticate(user=owner)
+
+        resp = api_client.get(detail_url)
+        assert resp.status_code == status.HTTP_200_OK, resp.data
+        assert resp.data["id"] == legacy.id
+
+        patched = api_client.patch(
+            detail_url, {"company_name": "Renamed Vendor"}, format="json"
+        )
+        assert patched.status_code == status.HTTP_200_OK, patched.data
+        legacy.refresh_from_db()
+        assert legacy.company_name == "Renamed Vendor"
+        # The write heals the denorm via Supplier.save().
+        assert legacy.organization_id == shop.organization_id
+
+    def test_duplicate_gstin_flagged_against_unbackfilled_row(self, api_client):
+        owner, shop = _make_retailer("null_dup", "Null Dup Shop")
+        _unbackfilled_supplier(shop, company_name="Legacy Vendor", gst_number=GSTIN_A)
+        api_client.force_authenticate(user=owner)
+        resp = api_client.post(
+            reverse("erp-supplier-list"),
+            {"company_name": "New Vendor", "gst_number": GSTIN_A},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST, resp.data
+        assert _gstin_duplicate_flagged(resp.data)
+        assert Supplier.objects.filter(gst_number=GSTIN_A).count() == 1
+
+    def test_other_org_may_still_use_that_gstin(self, api_client):
+        _owner, shop = _make_retailer("null_dup_mine", "Null Dup Mine Shop")
+        other_owner, _other_shop = _make_retailer(
+            "null_dup_theirs", "Null Dup Theirs Shop"
+        )
+        _unbackfilled_supplier(shop, company_name="Legacy Vendor", gst_number=GSTIN_A)
+        api_client.force_authenticate(user=other_owner)
+        resp = api_client.post(
+            reverse("erp-supplier-list"),
+            {"company_name": "Their Vendor", "gst_number": GSTIN_A},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_201_CREATED, resp.data

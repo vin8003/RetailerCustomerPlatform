@@ -867,6 +867,7 @@ class SupplierSerializer(serializers.ModelSerializer):
             duplicate_gstin_error,
             gstin_exists_in_org,
             normalize_gstin,
+            supplier_organization,
         )
 
         gst = attrs.get('gst_number')
@@ -879,12 +880,11 @@ class SupplierSerializer(serializers.ModelSerializer):
             return attrs
 
         request = self.context.get('request')
-        org = None
-        if request is not None and getattr(request, 'user', None):
+        org = self.context.get('organization')
+        if org is None and request is not None and getattr(request, 'user', None):
             org = get_organization_for_user(request.user)
-        if org is None and self.instance is not None:
-            retailer = getattr(self.instance, 'retailer', None)
-            org = getattr(retailer, 'organization', None) if retailer is not None else None
+        if org is None:
+            org = supplier_organization(self.instance)
         if org is None:
             return attrs
 

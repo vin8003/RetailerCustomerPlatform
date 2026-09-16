@@ -8,6 +8,7 @@ three-way match is OE-102 and should call
 """
 import re
 
+from django.db.models import Q
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
@@ -56,10 +57,33 @@ def normalize_gstin(value):
 
 
 def org_suppliers_queryset(organization):
-    """Suppliers attached to any shop location of this org (no N+1)."""
+    """
+    Suppliers of this org: the ``Supplier.organization`` denorm, plus the
+    retailer walk for rows whose denorm is still NULL.
+
+    The denorm is the column the ``uniq_org_supplier_nonblank_gstin`` constraint
+    uses, so the app duplicate check and the DB constraint cover the same rows.
+    ``save()`` keeps it in step with ``retailer.organization`` and migration 0028
+    backfilled, but a bulk write or a lazily provisioned org can still leave it
+    NULL. Those rows are org-scoped through ``retailer``, so read them the same
+    way ``assert_supplier_in_org`` and ``supplier_organization`` do.
+    """
     if organization is None:
         return Supplier.objects.none()
-    return Supplier.objects.filter(retailer__organization=organization)
+    return Supplier.objects.filter(
+        Q(organization=organization)
+        | Q(organization__isnull=True, retailer__organization=organization)
+    )
+
+
+def supplier_organization(supplier):
+    """Org that owns this supplier: denorm first, retailer walk for pre-0028 rows."""
+    if supplier is None:
+        return None
+    if supplier.organization_id:
+        return supplier.organization
+    retailer = getattr(supplier, 'retailer', None)
+    return getattr(retailer, 'organization', None) if retailer is not None else None
 
 
 def active_suppliers_for_org(organization):
@@ -224,10 +248,9 @@ def assert_supplier_in_org(supplier, retailer):
         return
     org_id = getattr(retailer, 'organization_id', None)
     if org_id:
-        supplier_org_id = getattr(
-            getattr(supplier, 'retailer', None), 'organization_id', None
-        )
+        supplier_org_id = supplier.organization_id
         if supplier_org_id is None and supplier.retailer_id:
+            # Row written before the 0028 denorm backfill.
             supplier_org_id = (
                 RetailerProfile.objects.filter(pk=supplier.retailer_id)
                 .values_list('organization_id', flat=True)
@@ -240,8 +263,13 @@ def assert_supplier_in_org(supplier, retailer):
         raise ValidationError({'supplier': INVALID_SUPPLIER_ORG_MESSAGE})
 
 
-def record_payment_terms_audit(user, supplier, before, after):
-    """Append OrgAuditLog when payment terms actually change."""
+def record_payment_terms_audit(user, supplier, before, after, *, organization=None):
+    """
+    Append OrgAuditLog when payment terms actually change.
+
+    Callers that already hold the caller's organization should pass it; that
+    keeps the audit write off the ``supplier.retailer.organization`` walk.
+    """
     if supplier is None:
         return None
     before_val = (before or '').strip()
@@ -249,7 +277,7 @@ def record_payment_terms_audit(user, supplier, before, after):
     if before_val == after_val:
         return None
     retailer = getattr(supplier, 'retailer', None)
-    org = getattr(retailer, 'organization', None) if retailer is not None else None
+    org = organization or supplier_organization(supplier)
     if org is None:
         return None
     from retailers.audit_log import record_org_audit_event

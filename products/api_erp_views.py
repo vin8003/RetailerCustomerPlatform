@@ -39,7 +39,15 @@ class SupplierViewSet(viewsets.ModelViewSet):
     search_fields = ['company_name', 'contact_person', 'phone_number']
 
     def _caller_org(self):
-        return get_organization_for_user(self.request.user)
+        """Resolve the caller org once; every action asks for it 2-3 times."""
+        if not hasattr(self, '_cached_caller_org'):
+            self._cached_caller_org = get_organization_for_user(self.request.user)
+        return self._cached_caller_org
+
+    def get_serializer_context(self):
+        ctx = super().get_serializer_context()
+        ctx['organization'] = self._caller_org()
+        return ctx
 
     def _deny_if_not_tenant(self):
         if getattr(self.request.user, 'user_type', None) != 'retailer':
@@ -144,6 +152,7 @@ class SupplierViewSet(viewsets.ModelViewSet):
             supplier,
             before,
             supplier.payment_terms,
+            organization=self._caller_org(),
         )
 
     def perform_update(self, serializer):
@@ -158,6 +167,7 @@ class SupplierViewSet(viewsets.ModelViewSet):
             supplier,
             before,
             supplier.payment_terms,
+            organization=self._caller_org(),
         )
 
 
@@ -182,7 +192,12 @@ class PurchaseInvoiceViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         retailer = RetailerProfile.objects.get(user=self.request.user)
-        qs = PurchaseInvoice.objects.filter(retailer=retailer).order_by('-invoice_date')
+        # supplier_name reads supplier.company_name on every row.
+        qs = (
+            PurchaseInvoice.objects.filter(retailer=retailer)
+            .select_related('supplier')
+            .order_by('-invoice_date')
+        )
         start_date = self.request.query_params.get('start_date')
         end_date = self.request.query_params.get('end_date')
         if start_date:
