@@ -13,7 +13,7 @@ Online orders use the **Orders** section instead — but they draw from the **sa
 ## Starting a new bill
 
 1. Open **POS Billing** from the sidebar
-2. Search for a product by **name** or scan **barcode**
+2. Search for a product by **name** or scan **barcode** (including extra barcodes on the product)
 3. Tap product to add to bill — adjust quantity as needed
 4. Repeat for all items
 
