@@ -7,6 +7,8 @@ OE-102 PO create should call assert_supplier_selectable_for_new_purchase.
 from decimal import Decimal
 
 import pytest
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
@@ -169,3 +171,41 @@ class TestInactiveSupplierPurchaseInvoiceGate:
         )
         assert resp.status_code == status.HTTP_400_BAD_REQUEST, resp.data
         assert not PurchaseInvoice.objects.filter(invoice_number="INV-FOREIGN").exists()
+
+
+@pytest.mark.django_db
+class TestPurchaseInvoiceSupplierQueries:
+    """The list serializer reads supplier.company_name on every row."""
+
+    def test_list_reads_suppliers_without_per_row_query(
+        self, api_client, retailer_user, retailer
+    ):
+        for i in range(3):
+            supplier = Supplier.objects.create(
+                retailer=retailer, company_name=f"Vendor {i}"
+            )
+            PurchaseInvoice.objects.create(
+                retailer=retailer,
+                supplier=supplier,
+                invoice_number=f"INV-N1-{i}",
+                invoice_date="2026-09-15",
+                total_amount=Decimal("10.00"),
+                paid_amount=Decimal("0.00"),
+            )
+
+        api_client.force_authenticate(user=retailer_user)
+        with CaptureQueriesContext(connection) as captured:
+            resp = api_client.get(reverse("erp-purchase-invoice-list"))
+
+        assert resp.status_code == status.HTTP_200_OK, resp.data
+        assert sorted(row["supplier_name"] for row in resp.data["results"]) == [
+            "Vendor 0",
+            "Vendor 1",
+            "Vendor 2",
+        ]
+        standalone_supplier_reads = [
+            q["sql"]
+            for q in captured.captured_queries
+            if 'FROM "supplier"' in q["sql"]
+        ]
+        assert standalone_supplier_reads == []

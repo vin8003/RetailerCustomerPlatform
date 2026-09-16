@@ -69,6 +69,16 @@ def org_suppliers_queryset(organization):
     return Supplier.objects.filter(organization=organization)
 
 
+def supplier_organization(supplier):
+    """Org that owns this supplier: denorm first, retailer walk for pre-0028 rows."""
+    if supplier is None:
+        return None
+    if supplier.organization_id:
+        return supplier.organization
+    retailer = getattr(supplier, 'retailer', None)
+    return getattr(retailer, 'organization', None) if retailer is not None else None
+
+
 def active_suppliers_for_org(organization):
     """Picker queryset for new POs / purchase invoices (OE-102 hook)."""
     return org_suppliers_queryset(organization).filter(is_active=True)
@@ -260,12 +270,7 @@ def record_payment_terms_audit(user, supplier, before, after, *, organization=No
     if before_val == after_val:
         return None
     retailer = getattr(supplier, 'retailer', None)
-    org = organization
-    if org is None and supplier.organization_id:
-        org = supplier.organization
-    if org is None and retailer is not None:
-        # Row written before the 0028 denorm backfill.
-        org = getattr(retailer, 'organization', None)
+    org = organization or supplier_organization(supplier)
     if org is None:
         return None
     from retailers.audit_log import record_org_audit_event

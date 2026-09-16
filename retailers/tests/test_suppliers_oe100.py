@@ -600,7 +600,7 @@ class TestSupplierQueryBudget:
         owner, shop = _make_retailer("sup_q_list", "Query List Shop")
         Supplier.objects.create(retailer=shop, company_name="Vendor 1")
         api_client.force_authenticate(user=owner)
-        with django_assert_num_queries(4):
+        with django_assert_num_queries(3):
             resp = api_client.get(reverse("erp-supplier-list"))
         assert resp.status_code == status.HTTP_200_OK
         assert resp.data["count"] == 1
@@ -610,7 +610,7 @@ class TestSupplierQueryBudget:
         for i in range(8):
             Supplier.objects.create(retailer=shop, company_name=f"Vendor {i}")
         api_client.force_authenticate(user=owner)
-        with django_assert_num_queries(4):
+        with django_assert_num_queries(3):
             resp = api_client.get(reverse("erp-supplier-list"))
         assert resp.status_code == status.HTTP_200_OK
         assert resp.data["count"] == 8
@@ -618,7 +618,7 @@ class TestSupplierQueryBudget:
     def test_create_query_count(self, api_client, django_assert_num_queries):
         owner, _shop = _make_retailer("sup_q_create", "Query Create Shop")
         api_client.force_authenticate(user=owner)
-        with django_assert_num_queries(8):
+        with django_assert_num_queries(6):
             resp = api_client.post(
                 reverse("erp-supplier-list"),
                 {"company_name": "Budget Vendor", "gst_number": GSTIN_A},
@@ -626,6 +626,33 @@ class TestSupplierQueryBudget:
             )
         assert resp.status_code == status.HTTP_201_CREATED, resp.data
         assert resp.data["gst_number"] == GSTIN_A
+
+    def test_retrieve_query_count(self, api_client, django_assert_num_queries):
+        owner, shop = _make_retailer("sup_q_get", "Query Get Shop")
+        supplier = Supplier.objects.create(retailer=shop, company_name="Vendor Get")
+        api_client.force_authenticate(user=owner)
+        with django_assert_num_queries(2):
+            resp = api_client.get(reverse("erp-supplier-detail", args=[supplier.id]))
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.data["id"] == supplier.id
+
+    def test_patch_payment_terms_query_count(
+        self, api_client, django_assert_num_queries
+    ):
+        owner, shop = _make_retailer("sup_q_patch", "Query Patch Shop")
+        supplier = Supplier.objects.create(retailer=shop, company_name="Vendor Patch")
+        api_client.force_authenticate(user=owner)
+        with django_assert_num_queries(8):
+            resp = api_client.patch(
+                reverse("erp-supplier-detail", args=[supplier.id]),
+                {"payment_terms": "Net 30"},
+                format="json",
+            )
+        assert resp.status_code == status.HTTP_200_OK, resp.data
+        assert resp.data["payment_terms"] == "Net 30"
+        assert OrgAuditLog.objects.filter(
+            object_type=OrgAuditLog.OBJECT_SUPPLIER, object_id=str(supplier.id)
+        ).count() == 1
 
 
 @pytest.mark.django_db
