@@ -806,7 +806,8 @@ class TestPickupQueryCounts:
         _cart_with_item(customer, profile, product)
 
         api_client.force_authenticate(user=customer)
-        with django_assert_num_queries(45):
+        # +1: place_order select_for_update of sold products before deduct.
+        with django_assert_num_queries(46):
             resp = api_client.post(
                 reverse("place_order"),
                 {
