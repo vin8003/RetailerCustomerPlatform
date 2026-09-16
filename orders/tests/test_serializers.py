@@ -65,8 +65,10 @@ class TestOrderModificationInventoryLogs:
         assert serializer.is_valid(), serializer.errors
         serializer.save()
         product2.refresh_from_db()
+        added = OrderItem.objects.get(order=order, product=product2)
 
-        assert OrderItem.objects.filter(order=order, product=product2).exists()
+        assert added.gst_rate is not None
+        assert added.tax_type == 'GST'
         assert product2.quantity == Decimal('19')
         assert ProductInventoryLog.objects.filter(
             product=product2,

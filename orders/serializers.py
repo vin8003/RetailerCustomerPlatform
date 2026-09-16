@@ -1160,8 +1160,8 @@ class OrderModificationSerializer(serializers.Serializer):
                         quantity=quantity,
                         unit_price=product.price, # Default to current product price
                         total_price=product.price * quantity,
-                        hsn_code=product.hsn_code,
-                        gst_rate=product.gst_rate,
+                        hsn_code=product.hsn_code or '',
+                        gst_rate=product.gst_rate if product.gst_rate is not None else Decimal('0.00'),
                         tax_type='GST',
                     )
             
