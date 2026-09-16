@@ -14,6 +14,13 @@ from products.inventory_service import (
     apply_stock_increase,
     log_inventory_change,
 )
+from products.tax_service import (
+    GST_RATES,
+    quantize_2,
+    resolve_tax_type,
+    round_rupee,
+    split_inclusive_line,
+)
 from .customer_stock import filter_in_stock_for_customer
 import logging
 
@@ -102,6 +109,7 @@ class ProductListSerializer(serializers.ModelSerializer):
     quantity = serializers.SerializerMethodField()
     minimum_order_quantity = serializers.SerializerMethodField()
     maximum_order_quantity = serializers.SerializerMethodField()
+    gst_rate = serializers.DecimalField(max_digits=5, decimal_places=2)
     class Meta:
         model = Product
         fields = [
@@ -112,7 +120,8 @@ class ProductListSerializer(serializers.ModelSerializer):
             'is_in_stock', 'is_featured', 'is_active', 'is_seasonal', 'is_available',
             'average_rating', 'review_count', 'created_at', 'product_group',
             'active_offer_text', 'is_wishlisted', 'barcode', 'has_batches', 'batches',
-            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor'
+            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor',
+            'hsn_code', 'gst_rate'
         ]
 
     def get_quantity(self, obj):
@@ -314,6 +323,7 @@ class ProductDetailSerializer(serializers.ModelSerializer):
     minimum_order_quantity = serializers.SerializerMethodField()
     maximum_order_quantity = serializers.SerializerMethodField()
     group_variants = serializers.SerializerMethodField()
+    gst_rate = serializers.DecimalField(max_digits=5, decimal_places=2)
     
     class Meta:
         model = Product
@@ -327,7 +337,8 @@ class ProductDetailSerializer(serializers.ModelSerializer):
             'is_in_stock', 'is_featured', 'is_active', 'is_seasonal', 'is_available', 
             'average_rating', 'review_count', 'created_at', 'updated_at',
             'product_group', 'active_offer_text', 'offers', 'is_wishlisted', 'barcode',
-            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor', 'group_variants'
+            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor', 'group_variants',
+            'hsn_code', 'gst_rate'
         ]
 
     def get_quantity(self, obj):
@@ -631,10 +642,19 @@ class MasterProductSerializer(serializers.ModelSerializer):
 
 
 
-class ProductCreateSerializer(serializers.ModelSerializer):
+class ProductTaxValidationMixin:
+    def validate_gst_rate(self, value):
+        if value not in GST_RATES:
+            raise serializers.ValidationError("Unsupported GST rate.")
+        return value
+
+
+class ProductCreateSerializer(ProductTaxValidationMixin, serializers.ModelSerializer):
     """
     Serializer for creating products
     """
+    gst_rate = serializers.DecimalField(max_digits=5, decimal_places=2, required=False)
+
     class Meta:
         model = Product
         fields = [
@@ -643,7 +663,8 @@ class ProductCreateSerializer(serializers.ModelSerializer):
             'minimum_order_quantity', 'maximum_order_quantity', 'image',
             'images', 'specifications', 'tags', 'is_featured', 'is_available',
             'barcode', 'master_product', 'product_group', 'is_active', 'is_seasonal', 'has_batches',
-            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor'
+            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor',
+            'hsn_code', 'gst_rate'
         ]
     
     def validate_barcode(self, value):
@@ -709,10 +730,12 @@ class ProductCreateSerializer(serializers.ModelSerializer):
         return product
 
 
-class ProductUpdateSerializer(serializers.ModelSerializer):
+class ProductUpdateSerializer(ProductTaxValidationMixin, serializers.ModelSerializer):
     """
     Serializer for updating products
     """
+    gst_rate = serializers.DecimalField(max_digits=5, decimal_places=2, required=False)
+
     class Meta:
         model = Product
         fields = [
@@ -721,7 +744,8 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
             'minimum_order_quantity', 'maximum_order_quantity', 'image',
             'images', 'specifications', 'tags', 'is_featured', 'is_available',
             'barcode', 'master_product', 'product_group', 'is_active', 'is_seasonal', 'has_batches',
-            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor'
+            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor',
+            'hsn_code', 'gst_rate'
         ]
     
     def validate_barcode(self, value):
@@ -991,8 +1015,16 @@ class PurchaseItemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = PurchaseItem
-        fields = ['id', 'product', 'product_name', 'quantity', 'purchase_price', 'total', 'mrp_updated', 'new_price', 'new_original_price', 'returned_quantity', 'net_quantity']
-        read_only_fields = ['id']
+        fields = [
+            'id', 'product', 'product_name', 'quantity', 'purchase_price',
+            'total', 'hsn_code', 'gst_rate', 'taxable_value', 'tax_amount',
+            'tax_type', 'mrp_updated', 'new_price', 'new_original_price',
+            'returned_quantity', 'net_quantity',
+        ]
+        read_only_fields = [
+            'id', 'hsn_code', 'gst_rate', 'taxable_value', 'tax_amount',
+            'tax_type',
+        ]
 
     returned_quantity = serializers.SerializerMethodField()
     net_quantity = serializers.SerializerMethodField()
@@ -1016,10 +1048,14 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
         model = PurchaseInvoice
         fields = [
             'id', 'retailer', 'supplier', 'supplier_name', 'invoice_number',
-            'invoice_date', 'total_amount', 'refund_amount', 'net_amount', 'is_returned', 'paid_amount', 'payment_status',
-            'notes', 'bill_image', 'created_at', 'items'
+            'invoice_date', 'total_amount', 'taxable_amount', 'tax_amount',
+            'refund_amount', 'net_amount', 'is_returned', 'paid_amount',
+            'payment_status', 'notes', 'bill_image', 'created_at', 'items',
         ]
-        read_only_fields = ['id', 'retailer', 'created_at']
+        read_only_fields = [
+            'id', 'retailer', 'created_at', 'total_amount',
+            'taxable_amount', 'tax_amount',
+        ]
         extra_kwargs = {
             'invoice_number': {'required': False, 'allow_blank': True}
         }
@@ -1068,6 +1104,42 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
             'supplier': 'This supplier is inactive and cannot be used for new purchases.'
         })
 
+    def _apply_tax_snapshots(self, items_data, retailer, supplier):
+        tax_type = resolve_tax_type(
+            retailer.gst_number,
+            supplier.gst_number if supplier else '',
+        )
+        taxable_amount = Decimal('0.00')
+        tax_amount = Decimal('0.00')
+        line_total_amount = Decimal('0.00')
+
+        for item_data in items_data:
+            product = item_data.get('product')
+            line_total = quantize_2(
+                Decimal(str(item_data['quantity']))
+                * Decimal(str(item_data['purchase_price']))
+            )
+            gst_rate = product.gst_rate if product else Decimal('0.00')
+            split = split_inclusive_line(line_total, gst_rate)
+
+            item_data.update({
+                'total': line_total,
+                'taxable_value': split['taxable_value'],
+                'tax_amount': split['tax_amount'],
+                'gst_rate': gst_rate,
+                'hsn_code': product.hsn_code if product else '',
+                'tax_type': tax_type,
+            })
+            taxable_amount += split['taxable_value']
+            tax_amount += split['tax_amount']
+            line_total_amount += line_total
+
+        return {
+            'taxable_amount': quantize_2(taxable_amount),
+            'tax_amount': quantize_2(tax_amount),
+            'total_amount': round_rupee(line_total_amount),
+        }
+
     def create(self, validated_data):
         items_data = validated_data.pop('items', [])
         retailer = validated_data.get('retailer')
@@ -1077,8 +1149,9 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
         self._validate_supplier_active_for_purchase(supplier)
         
         with transaction.atomic():
-            # Calculate total from items to ensure accuracy
-            calculated_total = sum(Decimal(str(item['quantity'])) * Decimal(str(item['purchase_price'])) for item in items_data)
+            validated_data.update(
+                self._apply_tax_snapshots(items_data, retailer, supplier)
+            )
             
             # Auto-generate invoice_number if missing
             invoice_num = validated_data.get('invoice_number', '') or ''
@@ -1088,8 +1161,7 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
                 hasher = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
                 validated_data['invoice_number'] = f"INV-{now().strftime('%y%m%d')}-{hasher}"
 
-            # 1. Create Invoice (overwrite total_amount with calculated value)
-            validated_data['total_amount'] = calculated_total
+            # 1. Create Invoice with authoritative tax and total calculations
             invoice = PurchaseInvoice.objects.create(**validated_data)
             
             for item_data in items_data:
@@ -1200,9 +1272,10 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
 
             # --- 2. APPLY NEW CHANGES ---
             
-            # Recalculate New Total
-            new_total = sum(Decimal(str(item['quantity'])) * Decimal(str(item['purchase_price'])) for item in items_data)
-            validated_data['total_amount'] = new_total
+            # Recalculate tax snapshots and authoritative totals
+            validated_data.update(
+                self._apply_tax_snapshots(items_data, retailer, new_supplier)
+            )
             
             # Update Invoice Instance
             for attr, value in validated_data.items():

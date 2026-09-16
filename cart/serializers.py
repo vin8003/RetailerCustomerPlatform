@@ -320,6 +320,8 @@ class CartSummarySerializer(serializers.Serializer):
     """
     total_items = serializers.IntegerField()
     total_amount = serializers.DecimalField(max_digits=10, decimal_places=2)
+    taxable_amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    tax_amount = serializers.DecimalField(max_digits=12, decimal_places=2)
     retailer_name = serializers.CharField()
     retailer_id = serializers.IntegerField()
     minimum_order_amount = serializers.DecimalField(max_digits=10, decimal_places=2)

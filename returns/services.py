@@ -6,6 +6,7 @@ from products.inventory_service import (
     log_inventory_change,
 )
 from products.models import SupplierLedger
+from products.tax_service import split_inclusive_line
 from retailers.models import RetailerCustomerMapping
 from .models import SalesReturn, SalesReturnItem, PurchaseReturn, PurchaseReturnItem
 from django.db.models import Sum
@@ -31,7 +32,9 @@ def process_sales_return(retailer, order, items_data, refund_payment_mode, reaso
             created_by=created_by
         )
         
-        total_refund = 0
+        total_refund = Decimal('0.00')
+        total_taxable = Decimal('0.00')
+        total_tax = Decimal('0.00')
         for item in items_data:
             product = item['product']
             batch = item.get('batch')
@@ -62,7 +65,13 @@ def process_sales_return(retailer, order, items_data, refund_payment_mode, reaso
             )
             
             item_total = qty * unit_price
+            tax_source = order_item or product
+            gst_rate = tax_source.gst_rate
+            tax_split = split_inclusive_line(item_total, gst_rate)
+            item_total = tax_split['line_total']
             total_refund += item_total
+            total_taxable += tax_split['taxable_value']
+            total_tax += tax_split['tax_amount']
             
             SalesReturnItem.objects.create(
                 sales_return=sales_return,
@@ -71,11 +80,18 @@ def process_sales_return(retailer, order, items_data, refund_payment_mode, reaso
                 order_item=order_item,
                 quantity=qty,
                 refund_unit_price=unit_price,
-                total_refund=item_total
+                total_refund=item_total,
+                hsn_code=tax_source.hsn_code,
+                gst_rate=gst_rate,
+                taxable_value=tax_split['taxable_value'],
+                tax_amount=tax_split['tax_amount'],
+                tax_type=order_item.tax_type if order_item else 'GST',
             )
             
         sales_return.refund_amount = total_refund
-        sales_return.save()
+        sales_return.taxable_amount = total_taxable
+        sales_return.tax_amount = total_tax
+        sales_return.save(update_fields=['refund_amount', 'taxable_amount', 'tax_amount'])
         
         # 3. Update CRM Mapping if order/customer exists
         if order and order.customer:
@@ -191,7 +207,9 @@ def process_purchase_return(retailer, supplier, invoice, items_data, notes, crea
             created_by=created_by
         )
         
-        total_return_value = 0
+        total_return_value = Decimal('0.00')
+        total_taxable = Decimal('0.00')
+        total_tax = Decimal('0.00')
         for item in items_data:
             product = item['product']
             batch = item.get('batch')
@@ -222,7 +240,13 @@ def process_purchase_return(retailer, supplier, invoice, items_data, notes, crea
             )
             
             item_total = qty * price
+            tax_source = purchase_item or product
+            gst_rate = tax_source.gst_rate
+            tax_split = split_inclusive_line(item_total, gst_rate)
+            item_total = tax_split['line_total']
             total_return_value += item_total
+            total_taxable += tax_split['taxable_value']
+            total_tax += tax_split['tax_amount']
             
             PurchaseReturnItem.objects.create(
                 purchase_return=purchase_return,
@@ -231,11 +255,20 @@ def process_purchase_return(retailer, supplier, invoice, items_data, notes, crea
                 purchase_item=purchase_item,
                 quantity=qty,
                 purchase_price=price,
-                total=item_total
+                total=item_total,
+                hsn_code=tax_source.hsn_code,
+                gst_rate=gst_rate,
+                taxable_value=tax_split['taxable_value'],
+                tax_amount=tax_split['tax_amount'],
+                tax_type=purchase_item.tax_type if purchase_item else 'GST',
             )
             
         purchase_return.total_amount = total_return_value
-        purchase_return.save()
+        purchase_return.taxable_amount = total_taxable
+        purchase_return.tax_amount = total_tax
+        purchase_return.save(
+            update_fields=['total_amount', 'taxable_amount', 'tax_amount']
+        )
         
         # 3. Update Supplier Ledger
         SupplierLedger.objects.create(

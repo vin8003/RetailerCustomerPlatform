@@ -5,10 +5,11 @@ from django.utils import timezone
 from .models import Order, OrderItem, OrderStatusLog, OrderDelivery, OrderFeedback, OrderReturn, OrderChatMessage, RetailerRating
 from .domain.status_policy import ensure_transition_allowed, InvalidStatusTransitionError
 from customers.models import CustomerAddress
-from products.models import Product
+from products.models import Product, ProductInventoryLog
 from cart.models import Cart, CartItem
 from returns.models import SalesReturnItem
 from django.db.models import Sum
+from products.tax_service import allocate_order_discount, quantize_2, split_inclusive_line
 
 
 class OrderItemSerializer(serializers.ModelSerializer):
@@ -22,7 +23,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'product', 'product_name', 'product_image', 'product_price', 'product_unit',
             'quantity', 'unit_price', 'total_price', 'created_at', 'net_quantity', 'returned_quantity',
-            'mrp'
+            'mrp', 'hsn_code', 'gst_rate', 'taxable_value', 'tax_amount', 'tax_type'
         ]
         read_only_fields = ['id', 'created_at']
 
@@ -280,7 +281,8 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'id', 'order_number', 'customer', 'customer_name', 'customer_phone', 'customer_email',
             'retailer', 'retailer_name', 'retailer_phone',
             'retailer_address', 'retailer_upi_id', 'retailer_upi_qr_code', 'delivery_mode', 'payment_mode', 'status',
-            'subtotal', 'delivery_fee', 'discount_amount', 'discount_from_points', 'points_redeemed', 'points_earned', 'total_amount', 'refund_amount', 'net_amount',
+            'subtotal', 'delivery_fee', 'discount_amount', 'discount_from_points', 'points_redeemed', 'points_earned',
+            'taxable_amount', 'tax_amount', 'total_amount', 'refund_amount', 'net_amount',
             'special_instructions', 'cancellation_reason', 'cancelled_by', 
             'payment_reference_id', 'payment_status', 'payment_edit_count', 'is_payment_locked',
             'cash_amount', 'upi_amount', 'card_amount', 'credit_amount',
@@ -616,7 +618,7 @@ class OrderCreateSerializer(serializers.Serializer):
                  # Default logic if not set (or 0 means free)
                  delivery_fee = 0
         
-        total_amount = items_total + delivery_fee
+        total_amount = quantize_2(items_total + delivery_fee)
         
         # Calculate discount from points
         discount_from_points = 0
@@ -659,7 +661,7 @@ class OrderCreateSerializer(serializers.Serializer):
                 
                 if points_to_redeem > 0:
                     discount_from_points = Decimal(str(points_to_redeem)) * config.conversion_rate
-                    total_amount -= discount_from_points
+                    total_amount = quantize_2(total_amount - discount_from_points)
         
         # Check minimum order amount
         if total_amount < retailer.minimum_order_amount:
@@ -732,6 +734,8 @@ class OrderCreateSerializer(serializers.Serializer):
             
             # Get item discounts map
             item_discounts = offer_results.get('item_discounts', {})
+            taxable_amount = Decimal('0.00')
+            tax_amount = Decimal('0.00')
 
             for cart_item in cart_items:
                 # Calculate final prices based on offers
@@ -743,7 +747,13 @@ class OrderCreateSerializer(serializers.Serializer):
                     unit_price = info['final_price']
                     quantity = info.get('total_display_quantity', cart_item.quantity)
                 
-                total_price = unit_price * quantity
+                total_price = quantize_2(unit_price * quantity)
+                tax_split = split_inclusive_line(
+                    total_price,
+                    cart_item.product.gst_rate,
+                )
+                taxable_amount += tax_split['taxable_value']
+                tax_amount += tax_split['tax_amount']
                 
                 order_items.append(OrderItem(
                     order=order,
@@ -753,7 +763,12 @@ class OrderCreateSerializer(serializers.Serializer):
                     product_unit=cart_item.product.unit,
                     quantity=quantity,
                     unit_price=unit_price,
-                    total_price=total_price
+                    total_price=total_price,
+                    hsn_code=cart_item.product.hsn_code,
+                    gst_rate=cart_item.product.gst_rate,
+                    taxable_value=tax_split['taxable_value'],
+                    tax_amount=tax_split['tax_amount'],
+                    tax_type='GST',
                 ))
                 
                 # Reduce product quantity (only if tracked) and log it
@@ -762,7 +777,6 @@ class OrderCreateSerializer(serializers.Serializer):
                     cart_item.product.reduce_quantity(quantity)
                     new_qty = prev_qty - quantity
                     
-                    from products.models import ProductInventoryLog
                     logs_to_create.append(ProductInventoryLog(
                         product=cart_item.product,
                         log_type='sold',
@@ -775,9 +789,11 @@ class OrderCreateSerializer(serializers.Serializer):
 
             # Bulk create items
             OrderItem.objects.bulk_create(order_items)
+            order.taxable_amount = quantize_2(taxable_amount)
+            order.tax_amount = quantize_2(tax_amount)
+            order.save(update_fields=['taxable_amount', 'tax_amount'])
             
             if logs_to_create:
-                from products.models import ProductInventoryLog
                 ProductInventoryLog.objects.bulk_create(logs_to_create)
 
             if points_to_redeem > 0:
@@ -1020,6 +1036,8 @@ class OrderModificationSerializer(serializers.Serializer):
 
     def update(self, instance, validated_data):
         """Update order items and details"""
+        from products.models import ProductInventoryLog
+
         items_data = validated_data.get('items', [])
         delivery_mode = validated_data.get('delivery_mode')
         discount_amount = validated_data.get('discount_amount')
@@ -1052,7 +1070,6 @@ class OrderModificationSerializer(serializers.Serializer):
                                 item.product.increase_quantity(item.quantity)
                                 new_qty = prev_qty + item.quantity
                                 
-                                from products.models import ProductInventoryLog
                                 logs_to_create.append(ProductInventoryLog(
                                     product=item.product,
                                     log_type='returned',
@@ -1098,7 +1115,7 @@ class OrderModificationSerializer(serializers.Serializer):
                         
                         # Update price if provided
                         if 'unit_price' in item_data:
-                            item.unit_price = item_data['unit_price']
+                            item.unit_price = Decimal(str(item_data['unit_price']))
                         
                         # Recalculate item total and save
                         item.save() # save() method in model calculates total_price
@@ -1132,7 +1149,8 @@ class OrderModificationSerializer(serializers.Serializer):
                         created_by=self.context.get('request').user if self.context.get('request') else None
                     ))
                     
-                    # Create new OrderItem
+                    # Create new OrderItem. Only lines added during this
+                    # modification take the current product tax defaults.
                     OrderItem.objects.create(
                         order=instance,
                         product=product,
@@ -1141,17 +1159,23 @@ class OrderModificationSerializer(serializers.Serializer):
                         product_unit=product.unit,
                         quantity=quantity,
                         unit_price=product.price, # Default to current product price
-                        total_price=product.price * quantity
+                        total_price=product.price * quantity,
+                        hsn_code=product.hsn_code or '',
+                        gst_rate=product.gst_rate if product.gst_rate is not None else Decimal('0.00'),
+                        tax_type='GST',
                     )
             
             if logs_to_create:
-                from products.models import ProductInventoryLog
                 ProductInventoryLog.objects.bulk_create(logs_to_create)
             
             # Recalculate order subtotal from scratch to be safe
             # (In case some items were not in the update list but still exist)
-            subtotal = sum(item.total_price for item in instance.items.all())
-            instance.subtotal = subtotal
+            current_items = list(instance.items.all())
+            subtotal = sum(
+                (item.total_price for item in current_items),
+                Decimal('0.00'),
+            )
+            instance.subtotal = quantize_2(subtotal)
             
             # Update delivery mode
             if delivery_mode:
@@ -1160,7 +1184,7 @@ class OrderModificationSerializer(serializers.Serializer):
             # Always recalculate delivery fee based on current delivery_mode and retailer settings
             # This ensures correct fee whether mode changed or items changed
             retailer = instance.retailer
-            current_subtotal = Decimal(sum(item.total_price for item in instance.items.all())).quantize(Decimal('0.01'))
+            current_subtotal = instance.subtotal
             
             if instance.delivery_mode == 'delivery':
                 if retailer.delivery_charge > 0:
@@ -1178,8 +1202,29 @@ class OrderModificationSerializer(serializers.Serializer):
             if discount_amount is not None:
                 instance.discount_amount = discount_amount
             
+            # Tax is split from the post-discount inclusive line totals, so the
+            # order-level discount has to be allocated across the lines first.
+            # Loyalty points and delivery fee stay out of the tax base.
+            allocated_totals = allocate_order_discount(
+                [item.total_price for item in current_items],
+                instance.discount_amount,
+            )
+            taxable_amount = Decimal('0.00')
+            tax_amount = Decimal('0.00')
+            for item, allocated_total in zip(current_items, allocated_totals):
+                # Existing lines keep the rate they were sold at; re-reading the
+                # product here would rewrite historical tax.
+                tax_split = split_inclusive_line(allocated_total, item.gst_rate)
+                item.taxable_value = tax_split['taxable_value']
+                item.tax_amount = tax_split['tax_amount']
+                item.save(update_fields=['taxable_value', 'tax_amount'])
+                taxable_amount += tax_split['taxable_value']
+                tax_amount += tax_split['tax_amount']
+
+            instance.taxable_amount = quantize_2(taxable_amount)
+            instance.tax_amount = quantize_2(tax_amount)
+            
             # Recalculate total
-            instance.subtotal = Decimal(sum(item.total_price for item in instance.items.all())).quantize(Decimal('0.01'))
             instance.total_amount = (instance.subtotal + instance.delivery_fee - instance.discount_amount - instance.discount_from_points).quantize(Decimal('0.01'))
             
             # Validate total amount
