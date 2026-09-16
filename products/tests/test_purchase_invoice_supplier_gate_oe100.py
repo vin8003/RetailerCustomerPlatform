@@ -173,36 +173,74 @@ class TestInactiveSupplierPurchaseInvoiceGate:
         assert not PurchaseInvoice.objects.filter(invoice_number="INV-FOREIGN").exists()
 
 
+# GET /erp/purchase-invoices/ with at least one row on the page: the caller's
+# retailer for the queryset, the page count, the invoice page (supplier joined),
+# and the caller's retailer again for the serializer context.
+PI_LIST_FIXED_QUERIES = 4
+# Per invoice the serializer walks that invoice's own children: refund_amount
+# and net_amount each aggregate purchase_return, is_returned runs exists(), and
+# the nested items page. Supplier is not in here — select_related('supplier')
+# covers it — so this stays 4 however many distinct suppliers the page spans.
+PI_LIST_PER_INVOICE_QUERIES = 4
+
+
+def _seed_invoices(retailer, count):
+    """One invoice per supplier, so an unjoined supplier read would show up."""
+    for i in range(count):
+        supplier = Supplier.objects.create(
+            retailer=retailer, company_name=f"Vendor {i}"
+        )
+        PurchaseInvoice.objects.create(
+            retailer=retailer,
+            supplier=supplier,
+            invoice_number=f"INV-N1-{i}",
+            invoice_date="2026-09-15",
+            total_amount=Decimal("10.00"),
+            paid_amount=Decimal("0.00"),
+        )
+
+
 @pytest.mark.django_db
 class TestPurchaseInvoiceSupplierQueries:
     """The list serializer reads supplier.company_name on every row."""
 
-    def test_list_reads_suppliers_without_per_row_query(
-        self, api_client, retailer_user, retailer
+    def test_list_query_budget(
+        self, api_client, retailer_user, retailer, django_assert_num_queries
     ):
-        for i in range(3):
-            supplier = Supplier.objects.create(
-                retailer=retailer, company_name=f"Vendor {i}"
-            )
-            PurchaseInvoice.objects.create(
-                retailer=retailer,
-                supplier=supplier,
-                invoice_number=f"INV-N1-{i}",
-                invoice_date="2026-09-15",
-                total_amount=Decimal("10.00"),
-                paid_amount=Decimal("0.00"),
-            )
-
+        _seed_invoices(retailer, 1)
         api_client.force_authenticate(user=retailer_user)
-        with CaptureQueriesContext(connection) as captured:
+        with django_assert_num_queries(
+            PI_LIST_FIXED_QUERIES + PI_LIST_PER_INVOICE_QUERIES
+        ):
             resp = api_client.get(reverse("erp-purchase-invoice-list"))
+        assert resp.status_code == status.HTTP_200_OK, resp.data
+        assert [row["supplier_name"] for row in resp.data["results"]] == ["Vendor 0"]
 
+    def test_list_budget_is_flat_across_suppliers(
+        self, api_client, retailer_user, retailer, django_assert_num_queries
+    ):
+        _seed_invoices(retailer, 3)
+        api_client.force_authenticate(user=retailer_user)
+        with django_assert_num_queries(
+            PI_LIST_FIXED_QUERIES + 3 * PI_LIST_PER_INVOICE_QUERIES
+        ):
+            resp = api_client.get(reverse("erp-purchase-invoice-list"))
         assert resp.status_code == status.HTTP_200_OK, resp.data
         assert sorted(row["supplier_name"] for row in resp.data["results"]) == [
             "Vendor 0",
             "Vendor 1",
             "Vendor 2",
         ]
+
+    def test_list_reads_suppliers_without_per_row_query(
+        self, api_client, retailer_user, retailer
+    ):
+        _seed_invoices(retailer, 3)
+        api_client.force_authenticate(user=retailer_user)
+        with CaptureQueriesContext(connection) as captured:
+            resp = api_client.get(reverse("erp-purchase-invoice-list"))
+
+        assert resp.status_code == status.HTTP_200_OK, resp.data
         standalone_supplier_reads = [
             q["sql"]
             for q in captured.captured_queries
