@@ -7,4 +7,4 @@ An **inactive** (`is_active=False`) or **unavailable** (`is_available=False`) pr
 
 This matches customer cart (`AddToCartSerializer` requires `is_active=True` and `is_available=True`). POS UI already filters `is_active=true`; this rule closes the checkout hole if the client sends a stale or crafted id.
 
-Identity remains `Product.id` (and barcode on Product / ProductBatch). There is no separate SKU column.
+Identity remains `Product.id` (and barcode on Product / ProductBatch, plus `Product.additional_barcodes` in POS/catalog search — [additional-barcodes-lookup.md](additional-barcodes-lookup.md)). There is no separate SKU column.

@@ -12,7 +12,7 @@ Open **Products** to see everything in your catalog. Each product typically has:
 | Selling price | Counter / POS price |
 | App price | Optional online price. If empty, the customer app uses the selling price |
 | MRP | Printed price on pack (optional) |
-| Barcode | For POS scan |
+| Barcode | For POS scan. Extra barcodes on the product scan the same way |
 | Category | Organisation and browsing |
 | Stock quantity | How many available |
 | Images | Photos for customer app |
