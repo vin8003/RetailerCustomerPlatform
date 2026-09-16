@@ -428,6 +428,107 @@ class TestSaleDeductLocksBeforeReduce:
         assert product.quantity == Decimal("1")
         assert item.quantity == Decimal("1")
 
+    def test_order_modify_multi_sku_uses_one_lock_for_sale_before_reduce(
+        self, customer, retailer, address, category, brand, monkeypatch
+    ):
+        from orders.serializers import OrderModificationSerializer
+
+        parent, child = _make_pack_pair(
+            retailer, category, brand, parent_qty=Decimal("1")
+        )
+        parent.minimum_order_quantity = Decimal("0.001")
+        parent.save(update_fields=["minimum_order_quantity"])
+        standalone = Product.objects.create(
+            retailer=retailer,
+            name="OE146 Modify Tea",
+            category=category,
+            brand=brand,
+            price=Decimal("10.00"),
+            quantity=Decimal("5"),
+            track_inventory=True,
+            is_active=True,
+            is_available=True,
+        )
+        assert parent.pk < child.pk
+        high, low = (
+            (standalone, child)
+            if standalone.pk > child.pk
+            else (child, standalone)
+        )
+        order = Order.objects.create(
+            customer=customer,
+            retailer=retailer,
+            delivery_address=address,
+            delivery_mode="delivery",
+            payment_mode="cash",
+            subtotal=high.price + low.price,
+            total_amount=high.price + low.price,
+            status="pending",
+        )
+        item_high = OrderItem.objects.create(
+            order=order,
+            product=high,
+            product_name=high.name,
+            product_price=high.price,
+            product_unit=high.unit,
+            quantity=Decimal("1"),
+            unit_price=high.price,
+            total_price=high.price,
+        )
+        item_low = OrderItem.objects.create(
+            order=order,
+            product=low,
+            product_name=low.name,
+            product_price=low.price,
+            product_unit=low.unit,
+            quantity=Decimal("1"),
+            unit_price=low.price,
+            total_price=low.price,
+        )
+        events = []
+        lock_calls = []
+        real_lock = Product.lock_for_sale
+        real_reduce = Product.reduce_quantity
+
+        def tracking_lock(retailer_arg, products):
+            sold_pks = [product.pk for product in products]
+            events.append(("lock_for_sale", sold_pks))
+            locked = real_lock(retailer_arg, products)
+            lock_calls.append(
+                {"sold_pks": sold_pks, "locked_pks": list(locked.keys())}
+            )
+            return locked
+
+        def tracking_reduce(self, *args, **kwargs):
+            events.append(("reduce", self.pk))
+            return real_reduce(self, *args, **kwargs)
+
+        monkeypatch.setattr(Product, "lock_for_sale", staticmethod(tracking_lock))
+        monkeypatch.setattr(Product, "reduce_quantity", tracking_reduce)
+
+        serializer = OrderModificationSerializer(
+            order,
+            data={
+                "items": [
+                    {"id": item_high.id, "quantity": 2},
+                    {"id": item_low.id, "quantity": 2},
+                ]
+            },
+            context={},
+        )
+        assert serializer.is_valid(), serializer.errors
+        serializer.save()
+
+        assert events[0][0] == "lock_for_sale"
+        assert any(kind == "reduce" for kind, _payload in events)
+        assert next(
+            i for i, (kind, _payload) in enumerate(events) if kind == "lock_for_sale"
+        ) < next(i for i, (kind, _payload) in enumerate(events) if kind == "reduce")
+        assert len(lock_calls) == 1
+        assert lock_calls[0]["locked_pks"] == sorted(
+            [parent.pk, child.pk, standalone.pk]
+        )
+
     def test_reduce_quantity_relocks_stale_pack_parent(
         self, retailer, category, brand
     ):

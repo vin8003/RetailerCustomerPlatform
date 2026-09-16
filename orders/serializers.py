@@ -1262,6 +1262,8 @@ class OrderModificationSerializer(serializers.Serializer):
 
     def update(self, instance, validated_data):
         """Update order items and details"""
+        from products.models import ProductInventoryLog
+
         items_data = validated_data.get('items', [])
         delivery_mode = validated_data.get('delivery_mode')
         discount_amount = validated_data.get('discount_amount')
@@ -1273,6 +1275,34 @@ class OrderModificationSerializer(serializers.Serializer):
             # Create a map of existing items for easy access
             existing_items = {item.id: item for item in instance.items.all()}
             logs_to_create = []
+
+            # One pk-ASC lock for every SKU this modify will reduce
+            # (+ pack parents). Do not lock per sale line — that AB-BA
+            # deadlocks with POS / place_order.
+            products_to_reduce = []
+            for item_data in items_data:
+                if 'id' in item_data:
+                    item = existing_items.get(item_data.get('id'))
+                    if item is None or 'quantity' not in item_data:
+                        continue
+                    quantity = Decimal(str(item_data['quantity']))
+                    if quantity > item.quantity:
+                        products_to_reduce.append(item.product)
+                elif 'product_id' in item_data:
+                    try:
+                        seed = Product.objects.get(
+                            id=item_data.get('product_id'),
+                            retailer=instance.retailer,
+                        )
+                    except Product.DoesNotExist:
+                        raise serializers.ValidationError(
+                            f"Product with ID {item_data.get('product_id')} not found in your catalog"
+                        )
+                    products_to_reduce.append(seed)
+
+            locked_products = Product.lock_for_sale(
+                instance.retailer, products_to_reduce
+            )
             
             for item_data in items_data:
                 # Handle existing items
@@ -1294,7 +1324,6 @@ class OrderModificationSerializer(serializers.Serializer):
                                 item.product.increase_quantity(item.quantity)
                                 new_qty = prev_qty + item.quantity
                                 
-                                from products.models import ProductInventoryLog
                                 logs_to_create.append(ProductInventoryLog(
                                     product=item.product,
                                     log_type='returned',
@@ -1311,10 +1340,7 @@ class OrderModificationSerializer(serializers.Serializer):
                             diff = quantity - item.quantity
                             if diff != 0:
                                  if diff > 0:
-                                      locked = Product.lock_for_sale(
-                                          instance.retailer, [item.product]
-                                      )
-                                      product = locked[item.product_id]
+                                      product = locked_products[item.product_id]
                                       prev_qty = product.quantity
                                       # Need more
                                       if not product.can_order_quantity(diff):
@@ -1365,8 +1391,7 @@ class OrderModificationSerializer(serializers.Serializer):
                     except Product.DoesNotExist:
                         raise serializers.ValidationError(f"Product with ID {product_id} not found in your catalog")
 
-                    locked = Product.lock_for_sale(instance.retailer, [seed])
-                    product = locked[seed.id]
+                    product = locked_products[seed.id]
                     
                     # Check stock
                     if not product.can_order_quantity(quantity):
@@ -1403,7 +1428,6 @@ class OrderModificationSerializer(serializers.Serializer):
                     )
             
             if logs_to_create:
-                from products.models import ProductInventoryLog
                 ProductInventoryLog.objects.bulk_create(logs_to_create)
             
             # Recalculate order subtotal from scratch to be safe
