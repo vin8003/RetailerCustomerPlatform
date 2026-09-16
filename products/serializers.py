@@ -1369,3 +1369,20 @@ class SupplierLedgerSerializer(serializers.ModelSerializer):
     def get_reference_invoice_number(self, obj):
         return obj.reference_invoice.invoice_number if obj.reference_invoice else None
 
+
+class SkuSupplierLastCostSerializer(serializers.Serializer):
+    """One supplier's latest PI unit cost for a SKU (OE-112)."""
+
+    supplier_id = serializers.IntegerField()
+    supplier_name = serializers.CharField(allow_blank=True)
+    last_cost = serializers.DecimalField(max_digits=10, decimal_places=2)
+    invoice_id = serializers.IntegerField()
+    invoice_date = serializers.DateField()
+
+
+class SkuLastSupplierCostsSerializer(serializers.Serializer):
+    """Purchase-role read of last PI costs by supplier. Empty list = no history."""
+
+    product_id = serializers.IntegerField()
+    suppliers = SkuSupplierLastCostSerializer(many=True)
+

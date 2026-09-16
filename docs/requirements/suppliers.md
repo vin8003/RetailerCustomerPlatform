@@ -33,6 +33,7 @@ One vendor master. Do not invent a second supplier / vendor table. Ledger rows s
 | GET | `/api/products/erp/suppliers/` | Same-org suppliers. `?is_active=true` hides inactive (picker). |
 | PATCH | `/api/products/erp/suppliers/<id>/` | Echoing current `payment_terms` (after trim) is allowed. Changing terms without `purchasing.terms` → **403**, row unchanged. Whitespace-only `payment_terms` → **400**, row unchanged. |
 | POST | `/api/products/erp/purchase-invoices/` | Inactive `supplier` → **400**. Cross-org supplier → **400**. Existing invoice may keep a supplier later marked inactive. |
+| GET | `/api/products/erp/products/<id>/last-supplier-costs/` | Purchase-role last unit cost per supplier for that SKU from PI history (OE-112). Missing history → empty list, not zero. See [compare-supplier-cost.md](compare-supplier-cost.md). |
 
 GSTIN is stored as `gst_number` (uppercase). Format must match `22AAAAA0000A1Z5` when provided.
 
