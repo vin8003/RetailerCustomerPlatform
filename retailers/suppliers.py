@@ -56,10 +56,17 @@ def normalize_gstin(value):
 
 
 def org_suppliers_queryset(organization):
-    """Suppliers attached to any shop location of this org (no N+1)."""
+    """
+    Suppliers of this org, read off the denormalized ``Supplier.organization``.
+
+    Same column the ``uniq_org_supplier_nonblank_gstin`` constraint uses, so the
+    app duplicate check and the DB constraint cover the same rows. ``save()``
+    keeps the column in step with ``retailer.organization``; migration 0028
+    backfilled existing rows.
+    """
     if organization is None:
         return Supplier.objects.none()
-    return Supplier.objects.filter(retailer__organization=organization)
+    return Supplier.objects.filter(organization=organization)
 
 
 def active_suppliers_for_org(organization):
@@ -224,10 +231,9 @@ def assert_supplier_in_org(supplier, retailer):
         return
     org_id = getattr(retailer, 'organization_id', None)
     if org_id:
-        supplier_org_id = getattr(
-            getattr(supplier, 'retailer', None), 'organization_id', None
-        )
+        supplier_org_id = supplier.organization_id
         if supplier_org_id is None and supplier.retailer_id:
+            # Row written before the 0028 denorm backfill.
             supplier_org_id = (
                 RetailerProfile.objects.filter(pk=supplier.retailer_id)
                 .values_list('organization_id', flat=True)
@@ -240,8 +246,13 @@ def assert_supplier_in_org(supplier, retailer):
         raise ValidationError({'supplier': INVALID_SUPPLIER_ORG_MESSAGE})
 
 
-def record_payment_terms_audit(user, supplier, before, after):
-    """Append OrgAuditLog when payment terms actually change."""
+def record_payment_terms_audit(user, supplier, before, after, *, organization=None):
+    """
+    Append OrgAuditLog when payment terms actually change.
+
+    Callers that already hold the caller's organization should pass it; that
+    keeps the audit write off the ``supplier.retailer.organization`` walk.
+    """
     if supplier is None:
         return None
     before_val = (before or '').strip()
@@ -249,7 +260,12 @@ def record_payment_terms_audit(user, supplier, before, after):
     if before_val == after_val:
         return None
     retailer = getattr(supplier, 'retailer', None)
-    org = getattr(retailer, 'organization', None) if retailer is not None else None
+    org = organization
+    if org is None and supplier.organization_id:
+        org = supplier.organization
+    if org is None and retailer is not None:
+        # Row written before the 0028 denorm backfill.
+        org = getattr(retailer, 'organization', None)
     if org is None:
         return None
     from retailers.audit_log import record_org_audit_event

@@ -15,14 +15,18 @@ from retailers.permissions_catalog import ALL_PERMISSION_CODES
 from retailers.serializers import SupplierSerializer
 from retailers.suppliers import (
     DUPLICATE_GSTIN_MESSAGE,
+    INVALID_SUPPLIER_ORG_MESSAGE,
     PAYMENT_TERMS_WHITESPACE_MESSAGE,
     PERM_PURCHASING_TERMS,
     UNIQ_ORG_SUPPLIER_GSTIN,
     active_suppliers_for_org,
     assert_payment_terms_not_whitespace_only,
+    assert_supplier_in_org,
     gstin_exists_in_org,
     normalize_gstin,
+    org_suppliers_queryset,
     payment_terms_would_change,
+    record_payment_terms_audit,
 )
 
 
@@ -622,3 +626,128 @@ class TestSupplierQueryBudget:
             )
         assert resp.status_code == status.HTTP_201_CREATED, resp.data
         assert resp.data["gst_number"] == GSTIN_A
+
+
+@pytest.mark.django_db
+class TestSupplierOrgDenormReads:
+    """
+    #100 added ``Supplier.organization`` but only wrote it. Reads still joined
+    ``retailer__organization``, so the app duplicate check and the
+    ``uniq_org_supplier_nonblank_gstin`` constraint looked at different rows.
+    """
+
+    def test_org_queryset_has_no_retailer_join(self):
+        _owner, shop = _make_retailer("denorm_join", "Denorm Join Shop")
+        Supplier.objects.create(retailer=shop, company_name="Vendor J")
+        sql = str(org_suppliers_queryset(shop.organization).query)
+        assert "retailer_profile" not in sql
+        assert '"supplier"."organization_id"' in sql
+
+    def test_supplier_save_backfills_organization(self):
+        _owner, shop = _make_retailer("denorm_save", "Denorm Save Shop")
+        supplier = Supplier.objects.create(retailer=shop, company_name="Vendor S")
+        assert supplier.organization_id == shop.organization_id
+
+    def test_org_queryset_spans_shop_locations(self):
+        _owner, shop = _make_retailer("denorm_multi", "Denorm Multi Shop")
+        org = shop.organization
+        second_user = User.objects.create_user(
+            username="denorm_multi_2",
+            email="denorm_multi_2@test.com",
+            password="TestPass123!",
+            user_type="retailer",
+            is_active=True,
+        )
+        second_shop = RetailerProfile.objects.create(
+            user=second_user,
+            shop_name="Denorm Multi Branch",
+            address_line1="2 Main",
+            city="City",
+            state="State",
+            pincode="110002",
+            is_active=True,
+            organization=org,
+        )
+        first = Supplier.objects.create(retailer=shop, company_name="Vendor HQ")
+        branch = Supplier.objects.create(
+            retailer=second_shop, company_name="Vendor Branch"
+        )
+        found = set(org_suppliers_queryset(org).values_list("id", flat=True))
+        assert found == {first.id, branch.id}
+
+    def test_duplicate_gstin_flagged_across_org_locations(self, api_client):
+        _owner, shop = _make_retailer("denorm_dup", "Denorm Dup Shop")
+        org = shop.organization
+        branch_user = User.objects.create_user(
+            username="denorm_dup_2",
+            email="denorm_dup_2@test.com",
+            password="TestPass123!",
+            user_type="retailer",
+            is_active=True,
+        )
+        RetailerProfile.objects.create(
+            user=branch_user,
+            shop_name="Denorm Dup Branch",
+            address_line1="3 Main",
+            city="City",
+            state="State",
+            pincode="110003",
+            is_active=True,
+            organization=org,
+        )
+        Supplier.objects.create(
+            retailer=shop, company_name="Vendor HQ", gst_number=GSTIN_A
+        )
+
+        api_client.force_authenticate(user=branch_user)
+        resp = api_client.post(
+            reverse("erp-supplier-list"),
+            {"company_name": "Vendor Branch", "gst_number": GSTIN_A},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST, resp.data
+        assert _gstin_duplicate_flagged(resp.data)
+        assert Supplier.objects.filter(organization=org, gst_number=GSTIN_A).count() == 1
+
+    def test_assert_supplier_in_org_reads_denorm_without_query(
+        self, django_assert_num_queries
+    ):
+        _owner, shop = _make_retailer("denorm_assert", "Denorm Assert Shop")
+        Supplier.objects.create(retailer=shop, company_name="Vendor A")
+        supplier = Supplier.objects.get(company_name="Vendor A")
+        with django_assert_num_queries(0):
+            assert_supplier_in_org(supplier, shop)
+
+    def test_assert_supplier_in_org_rejects_other_org(self):
+        _owner, shop = _make_retailer("denorm_mine", "Denorm Mine Shop")
+        _other_owner, other_shop = _make_retailer("denorm_theirs", "Denorm Theirs Shop")
+        foreign = Supplier.objects.create(
+            retailer=other_shop, company_name="Foreign Vendor"
+        )
+        with pytest.raises(Exception) as exc:
+            assert_supplier_in_org(foreign, shop)
+        assert INVALID_SUPPLIER_ORG_MESSAGE in str(exc.value)
+
+    def test_assert_supplier_in_org_falls_back_for_unbackfilled_row(self):
+        _owner, shop = _make_retailer("denorm_legacy", "Denorm Legacy Shop")
+        supplier = Supplier.objects.create(retailer=shop, company_name="Legacy Vendor")
+        Supplier.objects.filter(pk=supplier.pk).update(organization=None)
+        legacy = Supplier.objects.get(pk=supplier.pk)
+        assert legacy.organization_id is None
+        assert_supplier_in_org(legacy, shop)
+
+    def test_audit_uses_passed_organization_without_query(
+        self, django_assert_num_queries
+    ):
+        owner, shop = _make_retailer("denorm_audit", "Denorm Audit Shop")
+        Supplier.objects.create(retailer=shop, company_name="Audit Vendor")
+        supplier = Supplier.objects.select_related("retailer").get(
+            company_name="Audit Vendor"
+        )
+        with django_assert_num_queries(1):
+            entry = record_payment_terms_audit(
+                owner, supplier, "", "Net 15", organization=shop.organization
+            )
+        assert entry is not None
+        assert entry.organization_id == shop.organization_id
+        assert entry.summary_after == {"payment_terms": "Net 15"}
