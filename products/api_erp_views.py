@@ -563,6 +563,11 @@ def create_pos_order(request):
             allow_negative = data.get('allow_negative') is True
             for i, item in enumerate(items_data):
                 product = Product.objects.select_for_update().get(id=item['product_id'], retailer=retailer)
+                if product.parent_bulk_product_id:
+                    product.parent_bulk_product = Product.objects.select_for_update().get(
+                        pk=product.parent_bulk_product_id,
+                        retailer=retailer,
+                    )
                 batch_id = item.get('batch_id')
                 batch = None
                 if batch_id:

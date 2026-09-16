@@ -13,7 +13,7 @@ from django.urls import reverse
 from rest_framework import status
 
 from cart.models import Cart, CartItem
-from orders.models import Order
+from orders.models import Order, OrderItem
 from products.models import Product, ProductBatch
 
 
@@ -234,3 +234,197 @@ class TestPlaceOrderBlockNegativeStock:
         product.refresh_from_db()
         assert allowed is True
         assert product.quantity == Decimal("-2")
+
+
+def _zero_product_on_lock(monkeypatch, *products):
+    """Simulate a concurrent last-unit sale that lands before our row lock."""
+    pks = {product.pk for product in products}
+    real_sfu = Product.objects.select_for_update
+
+    def select_for_update_after_sale(*args, **kwargs):
+        Product.objects.filter(pk__in=pks).update(quantity=Decimal("0"))
+        return real_sfu(*args, **kwargs)
+
+    monkeypatch.setattr(
+        Product.objects, "select_for_update", select_for_update_after_sale
+    )
+
+
+def _record_locked_product_pks(monkeypatch):
+    locked_pks = []
+    real_sfu = Product.objects.select_for_update
+
+    def tracking_sfu(*args, **kwargs):
+        qs = real_sfu(*args, **kwargs)
+        original_get = qs.get
+
+        def tracking_get(*a, **kw):
+            obj = original_get(*a, **kw)
+            locked_pks.append(obj.pk)
+            return obj
+
+        qs.get = tracking_get
+        return qs
+
+    monkeypatch.setattr(Product.objects, "select_for_update", tracking_sfu)
+    return locked_pks
+
+
+def _make_pack_pair(retailer, category, brand, *, parent_qty=Decimal("1")):
+    parent = Product.objects.create(
+        retailer=retailer,
+        name="OE146 Pack Rice 50kg",
+        category=category,
+        brand=brand,
+        price=Decimal("2000.00"),
+        quantity=parent_qty,
+        track_inventory=True,
+        is_active=True,
+        is_available=True,
+        is_parent_bulk=True,
+        unit="kg",
+    )
+    child = Product.objects.create(
+        retailer=retailer,
+        name="OE146 Pack Rice 5kg",
+        category=category,
+        brand=brand,
+        price=Decimal("250.00"),
+        quantity=Decimal("0"),
+        track_inventory=True,
+        is_active=True,
+        is_available=True,
+        parent_bulk_product=parent,
+        conversion_factor=Decimal("0.1000"),
+        unit="kg",
+    )
+    parent.refresh_from_db()
+    child.refresh_from_db()
+    return parent, child
+
+
+@pytest.mark.django_db
+class TestSaleDeductLocksBeforeReduce:
+    @patch("common.notifications.send_push_notification")
+    @patch("common.notifications.send_silent_update")
+    def test_place_order_lock_sees_concurrent_last_unit_sale(
+        self,
+        mock_silent,
+        mock_push,
+        api_client,
+        customer,
+        retailer,
+        address,
+        product,
+        monkeypatch,
+    ):
+        product.quantity = Decimal("1")
+        product.save(update_fields=["quantity"])
+        cart = Cart.objects.create(customer=customer, retailer=retailer)
+        CartItem.objects.create(
+            cart=cart,
+            product=product,
+            quantity=Decimal("1"),
+            unit_price=product.price,
+        )
+        _zero_product_on_lock(monkeypatch, product)
+
+        customer.is_phone_verified = True
+        customer.save(update_fields=["is_phone_verified"])
+        api_client.force_authenticate(user=customer)
+        response = api_client.post(
+            reverse("place_order"),
+            {
+                "retailer_id": retailer.id,
+                "delivery_mode": "delivery",
+                "payment_mode": "cash",
+                "address_id": address.id,
+            },
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        product.refresh_from_db()
+        # Concurrent UPDATE is in the same atomic and rolls back with the sale.
+        assert product.quantity == Decimal("1")
+        assert not Order.objects.filter(retailer=retailer, customer=customer).exists()
+
+    def test_order_modify_lock_sees_concurrent_last_unit_sale(
+        self, customer, retailer, address, product, monkeypatch
+    ):
+        from rest_framework.exceptions import ValidationError as DRFValidationError
+
+        from orders.serializers import OrderModificationSerializer
+
+        product.quantity = Decimal("1")
+        product.save(update_fields=["quantity"])
+        order = Order.objects.create(
+            customer=customer,
+            retailer=retailer,
+            delivery_address=address,
+            delivery_mode="delivery",
+            payment_mode="cash",
+            subtotal=product.price,
+            total_amount=product.price,
+            status="pending",
+        )
+        item = OrderItem.objects.create(
+            order=order,
+            product=product,
+            product_name=product.name,
+            product_price=product.price,
+            product_unit=product.unit,
+            quantity=Decimal("1"),
+            unit_price=product.price,
+            total_price=product.price,
+        )
+        _zero_product_on_lock(monkeypatch, product)
+
+        serializer = OrderModificationSerializer(
+            order,
+            data={"items": [{"id": item.id, "quantity": 2}]},
+            context={},
+        )
+        assert serializer.is_valid(), serializer.errors
+        with pytest.raises(DRFValidationError):
+            serializer.save()
+
+        product.refresh_from_db()
+        item.refresh_from_db()
+        assert product.quantity == Decimal("1")
+        assert item.quantity == Decimal("1")
+
+    def test_reduce_quantity_relocks_stale_pack_parent(
+        self, retailer, category, brand
+    ):
+        parent, child = _make_pack_pair(
+            retailer, category, brand, parent_qty=Decimal("1")
+        )
+        Product.objects.filter(pk=parent.pk).update(quantity=Decimal("0"))
+        assert parent.quantity == Decimal("1")
+
+        blocked = child.reduce_quantity(Decimal("1"))
+
+        assert blocked is False
+        parent.refresh_from_db()
+        assert parent.quantity == Decimal("0")
+
+    def test_pos_pack_child_locks_parent_row(
+        self, api_client, retailer_user, retailer, category, brand, monkeypatch
+    ):
+        parent, child = _make_pack_pair(
+            retailer, category, brand, parent_qty=Decimal("1")
+        )
+        locked_pks = _record_locked_product_pks(monkeypatch)
+        api_client.force_authenticate(user=retailer_user)
+
+        response = api_client.post(
+            reverse("create_pos_order"),
+            _pos_payload(child, Decimal("1")),
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_201_CREATED
+        assert parent.pk in locked_pks
+        parent.refresh_from_db()
+        assert parent.quantity == Decimal("0.900")

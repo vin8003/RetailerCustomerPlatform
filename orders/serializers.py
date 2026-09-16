@@ -850,6 +850,15 @@ class OrderCreateSerializer(serializers.Serializer):
             # Get item discounts map
             item_discounts = offer_results.get('item_discounts', {})
 
+            locked_products = Product.lock_for_sale(
+                retailer,
+                [
+                    cart_item.product
+                    for cart_item in cart_items
+                    if cart_item.product.track_inventory
+                ],
+            )
+
             for cart_item in cart_items:
                 # Cart already stamped the selling channel (app). Do not
                 # re-read store Product.price and overwrite that line.
@@ -876,18 +885,19 @@ class OrderCreateSerializer(serializers.Serializer):
                 
                 # Reduce product quantity (only if tracked) and log it
                 if cart_item.product.track_inventory:
-                    prev_qty = cart_item.product.quantity
-                    if not cart_item.product.reduce_quantity(
+                    product = locked_products[cart_item.product_id]
+                    prev_qty = product.quantity
+                    if not product.reduce_quantity(
                         quantity, allow_negative=False
                     ):
                         raise serializers.ValidationError(
                             f"Not enough saleable stock for {cart_item.product.name}"
                         )
-                    new_qty = cart_item.product.quantity
+                    new_qty = product.quantity
                     
                     from products.models import ProductInventoryLog
                     logs_to_create.append(ProductInventoryLog(
-                        product=cart_item.product,
+                        product=product,
                         log_type='sold',
                         quantity_change=-quantity,
                         previous_quantity=prev_qty,
@@ -1300,27 +1310,34 @@ class OrderModificationSerializer(serializers.Serializer):
                             # Handle stock change for quantity difference
                             diff = quantity - item.quantity
                             if diff != 0:
-                                 prev_qty = item.product.quantity
                                  if diff > 0:
+                                      locked = Product.lock_for_sale(
+                                          instance.retailer, [item.product]
+                                      )
+                                      product = locked[item.product_id]
+                                      prev_qty = product.quantity
                                       # Need more
-                                      if not item.product.can_order_quantity(diff):
+                                      if not product.can_order_quantity(diff):
                                           raise serializers.ValidationError(f"Not enough stock for {item.product_name}")
-                                      if not item.product.reduce_quantity(
+                                      if not product.reduce_quantity(
                                           diff, allow_negative=False
                                       ):
                                           raise serializers.ValidationError(f"Not enough saleable stock for {item.product_name}")
                                       log_type = 'sold'
                                       change_val = -diff
-                                      new_qty = prev_qty - diff
+                                      new_qty = product.quantity
+                                      log_product = product
                                  else:
                                       # Returning some
+                                      prev_qty = item.product.quantity
                                       item.product.increase_quantity(abs(diff))
                                       log_type = 'returned'
                                       change_val = abs(diff)
                                       new_qty = prev_qty - diff
+                                      log_product = item.product
                                  
                                  logs_to_create.append(ProductInventoryLog(
-                                     product=item.product,
+                                     product=log_product,
                                      log_type=log_type,
                                      quantity_change=change_val,
                                      previous_quantity=prev_qty,
@@ -1344,9 +1361,12 @@ class OrderModificationSerializer(serializers.Serializer):
                     quantity = Decimal(str(item_data['quantity']))
                     
                     try:
-                        product = Product.objects.get(id=product_id, retailer=instance.retailer)
+                        seed = Product.objects.get(id=product_id, retailer=instance.retailer)
                     except Product.DoesNotExist:
                         raise serializers.ValidationError(f"Product with ID {product_id} not found in your catalog")
+
+                    locked = Product.lock_for_sale(instance.retailer, [seed])
+                    product = locked[seed.id]
                     
                     # Check stock
                     if not product.can_order_quantity(quantity):

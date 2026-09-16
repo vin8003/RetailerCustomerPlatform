@@ -900,7 +900,8 @@ class TestSaleableHotPathQueryBudget:
         customer.save(update_fields=["is_phone_verified"])
 
         api_client.force_authenticate(user=customer)
-        with django_assert_num_queries(85), CaptureQueriesContext(connection) as ctx:
+        # +1: one lock_for_sale query for all tracked cart SKUs (not per line).
+        with django_assert_num_queries(86), CaptureQueriesContext(connection) as ctx:
             response = api_client.post(
                 reverse("place_order"),
                 {
