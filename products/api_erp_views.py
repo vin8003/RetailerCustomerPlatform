@@ -206,7 +206,8 @@ class PurchaseInvoiceViewSet(viewsets.ModelViewSet):
             qs = qs.filter(invoice_date__lte=end_date)
         return qs
 
-    search_fields = ['invoice_number', 'supplier_name']
+    # supplier_name is a serializer alias, not a model field.
+    search_fields = ['invoice_number', 'supplier__company_name']
 
     def perform_create(self, serializer):
         retailer = RetailerProfile.objects.get(user=self.request.user)

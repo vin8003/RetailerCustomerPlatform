@@ -16,8 +16,9 @@ from rest_framework import status
 from authentication.models import User
 from cart.models import Cart, CartItem
 from orders.models import Order, OrderItem
+from customers.models import CustomerWishlist
 from products.channel_price import CHANNEL_APP, CHANNEL_STORE, PERM_CATALOG_PRICE
-from products.models import Product, ProductCategory
+from products.models import Product, ProductBatch, ProductCategory
 from retailers.models import OrgAuditLog, OrgRole, OrgStaffMembership, RetailerProfile
 from retailers.organization import ensure_organization_for_profile
 
@@ -269,6 +270,79 @@ class TestChannelPriceReads:
         row = next(item for item in resp.data["results"] if item["id"] == product.id)
         assert Decimal(str(row["price"])) == Decimal("33.00")
         assert "app_price" not in row
+
+    def test_public_detail_rewrites_batch_and_group_variant_prices(self, api_client):
+        owner, shop = _make_retailer("oe106_nested", "OE106 Nested Prices")
+        product = _make_product(shop, name="OE106 Group A", app="33.00")
+        product.product_group = "oe106-grain"
+        product.has_batches = True
+        product.save(update_fields=["product_group", "has_batches"])
+        ProductBatch.objects.create(
+            product=product,
+            retailer=shop,
+            batch_number="B-OE106",
+            price=Decimal("42.00"),
+            quantity=4,
+            is_active=True,
+        )
+        sibling = _make_product(shop, name="OE106 Group B", store="80.00", app="70.00")
+        sibling.product_group = "oe106-grain"
+        sibling.save(update_fields=["product_group"])
+        customer = _make_customer("oe106_nested_cust")
+        api_client.force_authenticate(user=customer)
+
+        public = api_client.get(
+            reverse(
+                "get_product_detail_public",
+                kwargs={"retailer_id": shop.id, "product_id": product.id},
+            )
+        )
+        assert public.status_code == status.HTTP_200_OK
+        assert Decimal(str(public.data["price"])) == Decimal("33.00")
+        assert public.data["batches"]
+        assert Decimal(str(public.data["batches"][0]["price"])) == Decimal("33.00")
+        variant = next(
+            row for row in public.data["group_variants"] if row["id"] == sibling.id
+        )
+        assert Decimal(str(variant["price"])) == Decimal("70.00")
+        assert "app_price" not in public.data
+
+        api_client.force_authenticate(user=owner)
+        store = api_client.get(reverse("get_product_detail", args=[product.id]))
+        assert store.status_code == status.HTTP_200_OK
+        assert Decimal(str(store.data["price"])) == Decimal("40.00")
+        assert Decimal(str(store.data["batches"][0]["price"])) == Decimal("42.00")
+        store_variant = next(
+            row for row in store.data["group_variants"] if row["id"] == sibling.id
+        )
+        assert Decimal(str(store_variant["price"])) == Decimal("80.00")
+
+    def test_wishlist_uses_app_price(self, api_client):
+        owner, shop = _make_retailer("oe106_wish", "OE106 Wishlist Shop")
+        product = _make_product(shop, app="33.00")
+        customer = _make_customer("oe106_wish_cust")
+        CustomerWishlist.objects.create(customer=customer, product=product)
+        api_client.force_authenticate(user=customer)
+
+        resp = api_client.get(reverse("get_customer_wishlist"))
+        assert resp.status_code == status.HTTP_200_OK
+        rows = resp.data["results"] if isinstance(resp.data, dict) else resp.data
+        row = next(item for item in rows if item["product"] == product.id)
+        assert Decimal(str(row["product_price"])) == Decimal("33.00")
+
+    def test_wishlist_empty_and_retailer_denied(self, api_client):
+        owner, shop = _make_retailer("oe106_wish_neg", "OE106 Wishlist Deny")
+        _make_product(shop, app="33.00")
+        customer = _make_customer("oe106_wish_empty")
+        api_client.force_authenticate(user=customer)
+        empty = api_client.get(reverse("get_customer_wishlist"))
+        assert empty.status_code == status.HTTP_200_OK
+        rows = empty.data["results"] if isinstance(empty.data, dict) else empty.data
+        assert rows == []
+
+        api_client.force_authenticate(user=owner)
+        denied = api_client.get(reverse("get_customer_wishlist"))
+        assert denied.status_code == status.HTTP_403_FORBIDDEN
 
 
 @pytest.mark.django_db

@@ -135,11 +135,16 @@ def _evaluate_otp_row(row, otp_code):
 
 
 def peek_redeem_otp(customer, retailer, otp_code):
-    """Check OTP without marking it used. Wrong code increments attempts."""
+    """Check OTP without marking it used. Wrong code increments attempts.
+
+    Checkout validate is outside the place-order transaction, so lock the OTP
+    row here. Do not rewrite the checkout create transaction.
+    """
     if _normalize_otp(otp_code) == '':
         return False, ERR_OTP_REQUIRED
-    row = _latest_otp_qs(customer, retailer).first()
-    return _evaluate_otp_row(row, otp_code)
+    with transaction.atomic():
+        row = _latest_otp_qs(customer, retailer).select_for_update().first()
+        return _evaluate_otp_row(row, otp_code)
 
 
 def consume_redeem_otp(customer, retailer, otp_code):

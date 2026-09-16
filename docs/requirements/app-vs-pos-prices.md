@@ -28,6 +28,8 @@ The same SKU can have a **store / POS** price different from the **owned-app** p
 
 Customer / public payloads do **not** include `app_price` or the store-only list. Retailer payloads include both `price` (store) and `app_price`.
 
+The same rewrite applies to customer-facing leftovers: wishlist `product_price`, `group_variants[].price`, and nested `batches[].price` when `app_price` is set. No batch-level app price and no PriceList matrix.
+
 There is no marketplace channel in this repo. A later marketplace connector must not read the store or app list of another channel; do not invent a connector here.
 
 ## API

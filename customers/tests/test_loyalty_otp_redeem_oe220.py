@@ -218,7 +218,28 @@ class TestCheckoutRedeemRequiresOtp:
         assert loyalty.points == Decimal("80.00")
         otp = LoyaltyRedeemOTP.objects.get(customer=customer, retailer=retailer)
         assert otp.is_used is False
+        assert otp.attempts == 1
         assert Order.objects.filter(customer=customer, retailer=retailer).count() == 0
+
+    def test_peek_wrong_otp_increments_attempts_without_consume(self):
+        from customers.loyalty_redeem import peek_redeem_otp
+
+        _owner, retailer = _make_retailer("oe220_peek", "OE220 Peek Shop")
+        customer = _make_customer("oe220_peek_cust", "9000002211")
+        _issue_otp(customer, retailer, "222222")
+
+        ok, err = peek_redeem_otp(customer, retailer, "000000")
+        assert ok is False
+        assert err
+        row = LoyaltyRedeemOTP.objects.get(customer=customer, retailer=retailer)
+        assert row.is_used is False
+        assert row.attempts == 1
+
+        ok, err = peek_redeem_otp(customer, retailer, "000000")
+        assert ok is False
+        row.refresh_from_db()
+        assert row.attempts == 2
+        assert row.is_used is False
 
     def test_valid_otp_burns_and_sets_discount_from_points(self):
         _owner, retailer = _make_retailer("oe220_chk_ok", "OE220 OK OTP Shop")

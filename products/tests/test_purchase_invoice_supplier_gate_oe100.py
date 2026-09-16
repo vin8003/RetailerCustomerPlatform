@@ -247,3 +247,41 @@ class TestPurchaseInvoiceSupplierQueries:
             if 'FROM "supplier"' in q["sql"]
         ]
         assert standalone_supplier_reads == []
+
+
+@pytest.mark.django_db
+class TestPurchaseInvoiceSearchFields:
+    def test_search_by_supplier_company_name(
+        self, api_client, retailer_user, retailer
+    ):
+        _seed_invoices(retailer, 2)
+        api_client.force_authenticate(user=retailer_user)
+
+        resp = api_client.get(
+            reverse("erp-purchase-invoice-list"), {"search": "Vendor 1"}
+        )
+        assert resp.status_code == status.HTTP_200_OK, resp.data
+        names = [row["supplier_name"] for row in resp.data["results"]]
+        assert names == ["Vendor 1"]
+
+    def test_search_by_invoice_number(self, api_client, retailer_user, retailer):
+        _seed_invoices(retailer, 2)
+        api_client.force_authenticate(user=retailer_user)
+
+        resp = api_client.get(
+            reverse("erp-purchase-invoice-list"), {"search": "INV-N1-0"}
+        )
+        assert resp.status_code == status.HTTP_200_OK, resp.data
+        assert [row["invoice_number"] for row in resp.data["results"]] == ["INV-N1-0"]
+
+    def test_search_unknown_is_empty_not_field_error(
+        self, api_client, retailer_user, retailer
+    ):
+        _seed_invoices(retailer, 1)
+        api_client.force_authenticate(user=retailer_user)
+
+        resp = api_client.get(
+            reverse("erp-purchase-invoice-list"), {"search": "no-such-vendor"}
+        )
+        assert resp.status_code == status.HTTP_200_OK, resp.data
+        assert resp.data["results"] == []

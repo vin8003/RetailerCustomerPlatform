@@ -10,7 +10,11 @@ from .models import (
     PurchaseInvoice, PurchaseItem, SupplierLedger
 )
 from products.inventory_adjust import UNPARSEABLE_EXPIRY, parse_expiry_date
-from products.channel_price import apply_channel_price_representation
+from products.channel_price import (
+    apply_channel_price_representation,
+    channel_from_context,
+    resolve_channel_price,
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -572,7 +576,7 @@ class ProductDetailSerializer(ChannelPriceRepresentationMixin, serializers.Model
                     is_active=True,
                     is_available=True
                 ).exclude(id=obj.id).only(
-                    'id', 'name', 'unit', 'price', 'original_price', 
+                    'id', 'name', 'unit', 'price', 'app_price', 'original_price',
                     'is_parent_bulk', 'parent_bulk_product'
                 )
                 
@@ -581,15 +585,17 @@ class ProductDetailSerializer(ChannelPriceRepresentationMixin, serializers.Model
                     list(siblings),
                     key=lambda s: (0 if (s.is_parent_bulk or s.parent_bulk_product_id is not None) else 1, s.id)
                 )
+                channel = channel_from_context(self.context)
                 
                 variants = []
                 for s in sorted_siblings:
+                    selling = resolve_channel_price(s, channel)
                     variants.append({
                         'id': s.id,
                         'name': s.name,
                         'unit': s.unit,
-                        'price': float(s.price),
-                        'original_price': float(s.original_price) if s.original_price else float(s.price),
+                        'price': float(selling),
+                        'original_price': float(s.original_price) if s.original_price else float(selling),
                         'image': s.image_display_url,
                         'minimum_order_quantity': float(s.minimum_order_quantity) if s.minimum_order_quantity else 1,
                         'maximum_order_quantity': float(s.maximum_order_quantity) if s.maximum_order_quantity else None,

@@ -316,10 +316,14 @@ def get_customer_wishlist(request):
         page = paginator.paginate_queryset(wishlist, request)
         
         if page is not None:
-            serializer = CustomerWishlistSerializer(page, many=True)
+            serializer = CustomerWishlistSerializer(
+                page, many=True, context={'request': request}
+            )
             return paginator.get_paginated_response(serializer.data)
         
-        serializer = CustomerWishlistSerializer(wishlist, many=True)
+        serializer = CustomerWishlistSerializer(
+            wishlist, many=True, context={'request': request}
+        )
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     except Exception as e:
@@ -345,7 +349,7 @@ def add_to_wishlist(request):
         
         serializer = CustomerWishlistSerializer(
             data=request.data, 
-            context={'customer': request.user}
+            context={'customer': request.user, 'request': request}
         )
         
         if serializer.is_valid():

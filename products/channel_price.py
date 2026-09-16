@@ -7,6 +7,7 @@ unchanged (``Product.quantity`` / saleable). No PriceList engine (F-0022)
 and no marketplace connector.
 """
 from decimal import Decimal, InvalidOperation
+from types import SimpleNamespace
 
 from rest_framework import status
 from rest_framework.fields import DecimalField
@@ -53,19 +54,40 @@ def price_channel_from_request(request):
     return CHANNEL_APP
 
 
+def channel_from_context(context):
+    """Prefer an explicit channel; otherwise derive it from the request."""
+    context = context or {}
+    channel = context.get('price_channel')
+    if channel is None:
+        channel = price_channel_from_request(context.get('request'))
+    return channel
+
+
 def format_money(value):
     if value is None:
         return None
     return _MONEY.to_representation(value)
 
 
+def _rewrite_nested_batch_prices(data, product, channel):
+    """Customer payloads must not leak store batch.price when app_price is set."""
+    batches = data.get('batches')
+    if not isinstance(batches, list):
+        return
+    for row in batches:
+        if not isinstance(row, dict) or 'price' not in row:
+            continue
+        batch = SimpleNamespace(price=row.get('price'))
+        row['price'] = format_money(
+            resolve_channel_price(product, channel, batch=batch)
+        )
+
+
 def apply_channel_price_representation(data, product, context):
     """Rewrite shared product payloads so app callers cannot read store list."""
     if not isinstance(data, dict) or product is None:
         return data
-    channel = (context or {}).get('price_channel')
-    if channel is None:
-        channel = price_channel_from_request((context or {}).get('request'))
+    channel = channel_from_context(context)
     selling = resolve_channel_price(product, channel)
     formatted = format_money(selling)
     data['price'] = formatted
@@ -75,6 +97,7 @@ def apply_channel_price_representation(data, product, context):
         data.pop('app_price', None)
     else:
         data['app_price'] = format_money(getattr(product, 'app_price', None))
+    _rewrite_nested_batch_prices(data, product, channel)
     return data
 
 
