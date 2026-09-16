@@ -7,7 +7,7 @@ When stock arrives from a **supplier** (wholesaler, distributor, company van), r
 | Benefit | Explanation |
 |---------|-------------|
 | **Accurate stock** | Shelf quantity matches system |
-| **Cost tracking** | Know margin per product |
+| **Cost tracking** | Know margin per product. Purchase-role staff can see each supplier’s last billed cost for a product. If you have never bought that product from a supplier, the cost stays blank — it is not shown as zero. |
 | **Supplier khata** | Track what you owe each supplier |
 | **Batch history** | Link sales to purchase lots |
 

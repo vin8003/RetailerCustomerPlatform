@@ -27,7 +27,15 @@ from retailers.suppliers import (
 from products.models import PurchaseInvoice, PurchaseItem, SupplierLedger, Product, ProductBatch, ProductInventoryLog
 from orders.models import Order, OrderItem
 from django.db.models import Sum, Q, Count, F, Case, When, DecimalField
-from products.serializers import PurchaseInvoiceSerializer, SupplierLedgerSerializer
+from products.serializers import (
+    PurchaseInvoiceSerializer,
+    SkuLastSupplierCostsSerializer,
+    SupplierLedgerSerializer,
+)
+from products.supplier_last_costs import (
+    last_supplier_cost_rows_for_product,
+    require_purchase_role,
+)
 from orders.serializers import OrderDetailSerializer
 from common.permissions import IsRetailerOwner
 from authentication.utils import normalize_phone_number
@@ -244,6 +252,38 @@ class PurchaseInvoiceViewSet(viewsets.ModelViewSet):
             # 2. Delete invoice 
             # (Ledger entries cascade implicitly, and Signal updates balance_due automatically!)
             instance.delete()
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def sku_last_supplier_costs(request, product_id):
+    """
+    Last unit cost per supplier for a SKU, from purchase-invoice history.
+
+    Purchase-role only. Missing history is an empty list, not zero.
+    """
+    if getattr(request.user, 'user_type', None) != 'retailer':
+        return Response(
+            {'error': 'Only retailers can view supplier costs.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    org = get_organization_for_user(request.user)
+    denied = require_purchase_role(request.user, organization=org)
+    if denied is not None:
+        return denied
+    product = (
+        Product.objects.filter(pk=product_id, retailer__organization=org).first()
+    )
+    if product is None:
+        return Response(
+            {'error': 'Product not found'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    payload = {
+        'product_id': product.id,
+        'suppliers': last_supplier_cost_rows_for_product(product),
+    }
+    return Response(SkuLastSupplierCostsSerializer(payload).data)
 
 
 class SupplierLedgerViewSet(viewsets.ModelViewSet):
