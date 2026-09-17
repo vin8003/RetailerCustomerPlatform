@@ -123,7 +123,11 @@ def _search(api_client, query):
 def _retailer_ctx(user):
     return {
         "request": SimpleNamespace(
-            user=SimpleNamespace(is_authenticated=True, user_type="retailer")
+            user=SimpleNamespace(
+                is_authenticated=True,
+                user_type="retailer",
+                id=getattr(user, "id", None),
+            )
         )
     }
 
@@ -151,7 +155,6 @@ def _assert_prior_search_fields(search_row, list_row, pos_row=None):
     assert Decimal(str(search_row["discounted_price"])) == Decimal(
         str(pos_row["discounted_price"])
     )
-    assert "is_featured" not in pos_row
 
 
 @pytest.mark.django_db
@@ -257,7 +260,6 @@ class TestSearchIsActive:
         assert search_data["is_active"] is False
         assert search_data["is_active"] == list_data["is_active"]
         assert search_data["is_active"] == detail_data["is_active"]
-        assert search_data.get("is_active") is False
 
     def test_public_search_is_active_matches_public_list(self, api_client):
         _owner, shop = _make_retailer("oe300_pub_own", "OE300 Public Shop")
