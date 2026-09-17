@@ -1,3 +1,4 @@
+from datetime import timedelta
 from decimal import Decimal
 from rest_framework import viewsets, permissions, status
 from rest_framework.exceptions import ValidationError
@@ -28,6 +29,7 @@ from products.models import PurchaseInvoice, PurchaseItem, SupplierLedger, Produ
 from orders.models import Order, OrderItem
 from django.db.models import Sum, Q, Count, F, Case, When, DecimalField
 from products.serializers import (
+    ExpiringBatchListSerializer,
     PurchaseInvoiceSerializer,
     SkuLastSupplierCostsSerializer,
     SupplierLedgerSerializer,
@@ -848,6 +850,69 @@ def get_inventory_ledger(request):
         })
 
     return Response(data)
+
+
+DEFAULT_EXPIRY_WINDOW_DAYS = 30
+
+
+def _parse_expiry_window_days(raw):
+    """Default 30 when omitted. Reject negative or non-integer values."""
+    if raw is None:
+        return DEFAULT_EXPIRY_WINDOW_DAYS, None
+    try:
+        days = int(raw)
+    except (TypeError, ValueError):
+        return None, Response(
+            {'error': 'days must be a non-negative integer'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if days < 0:
+        return None, Response(
+            {'error': 'days must be a non-negative integer'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    return days, None
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def get_expiring_batches(request):
+    """
+    This shop's active on-hand batches with expiry_date <= today+N.
+
+    Default N=30 via ``days``. Includes already-expired lots still on the shelf.
+    """
+    if getattr(request.user, 'user_type', None) != 'retailer':
+        return Response(
+            {'error': 'Only retailers can view expiring batches.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    org = get_organization_for_user(request.user)
+    shop = resolve_supplier_home_retailer(request.user)
+    if org is None or shop is None:
+        return Response(
+            {'error': 'Shop not found or access denied'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    days, invalid = _parse_expiry_window_days(request.query_params.get('days'))
+    if invalid is not None:
+        return invalid
+
+    cutoff = timezone.localdate() + timedelta(days=days)
+    batches = (
+        ProductBatch.objects.filter(
+            retailer=shop,
+            retailer__organization=org,
+            is_active=True,
+            quantity__gt=0,
+            expiry_date__isnull=False,
+            expiry_date__lte=cutoff,
+        )
+        .select_related('product')
+        .order_by('expiry_date', 'id')
+    )
+    return Response(ExpiringBatchListSerializer(batches, many=True).data)
 
 
 @api_view(['GET'])

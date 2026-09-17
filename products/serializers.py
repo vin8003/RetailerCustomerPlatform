@@ -83,6 +83,19 @@ class ProductBatchSerializer(serializers.ModelSerializer):
         ]
 
 
+class ExpiringBatchListSerializer(ProductBatchSerializer):
+    """Shop expiry list (OE-210). Same batch fields plus product identity."""
+
+    product_id = serializers.IntegerField(read_only=True)
+    product_name = serializers.CharField(source='product.name', read_only=True)
+
+    class Meta(ProductBatchSerializer.Meta):
+        fields = list(ProductBatchSerializer.Meta.fields) + [
+            'product_id',
+            'product_name',
+        ]
+
+
 class ProductBrandSerializer(serializers.ModelSerializer):
     """
     Serializer for product brands

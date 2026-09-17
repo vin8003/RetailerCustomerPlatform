@@ -13,6 +13,11 @@ urlpatterns = [
     path('erp/search-pos-customers/', api_erp_views.search_pos_customers, name='search_pos_customers'),
     path('erp/inventory-ledger/', api_erp_views.get_inventory_ledger, name='get_inventory_ledger'),
     path(
+        'erp/expiring-batches/',
+        api_erp_views.get_expiring_batches,
+        name='erp-expiring-batches',
+    ),
+    path(
         'erp/products/<int:product_id>/last-supplier-costs/',
         api_erp_views.sku_last_supplier_costs,
         name='erp-sku-last-supplier-costs',
