@@ -389,7 +389,9 @@ def get_retailer_products(request):
         # Fast path for POS / Bulk Select All (all products, no pagination, lightweight serialization)
         if request.query_params.get('no_page') == 'true':
             pos_products = list(
-                products.select_related('category').prefetch_related(
+                products.select_related(
+                    'category', 'parent_bulk_product'
+                ).prefetch_related(
                     'batches',
                     Prefetch(
                         'fractional_children',
@@ -600,7 +602,7 @@ def search_products(request):
 
         # Limit results for search
         limit = int(request.query_params.get('limit', 50))
-        products = products.prefetch_related(
+        products = products.select_related('parent_bulk_product').prefetch_related(
             Prefetch(
                 'fractional_children',
                 queryset=Product.objects.filter(is_active=True).order_by('id'),

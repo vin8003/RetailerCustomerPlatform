@@ -33,7 +33,7 @@ This is not a kit/BOM. There is no assemble write and no explode-at-sale.
 
 Child rows are same-shop and `is_active=True` only. List/detail/search prefetch `fractional_children` so the helper does not query per parent. POS `no_page` uses the same prefetch on the hand-built payload.
 
-Retailer search and POS `no_page` also echo pack identity scalars already on list/detail: `is_parent_bulk`, `parent_bulk_product` (FK id), `conversion_factor`. Non-pack SKUs keep `false` / `null` / `null`. Public list/detail stay unchanged; public search uses the same search serializer so the three model fields appear there too.
+Retailer search and POS `no_page` also echo pack identity scalars already on list/detail: `is_parent_bulk`, `parent_bulk_product` (FK id), `conversion_factor`. Non-pack SKUs keep `false` / `null` / `null`. Those reads `select_related('parent_bulk_product')` so pack identity and the existing saleable-qty cache do not fetch the parent per child. Public list/detail stay unchanged; public search uses the same search serializer so the three model fields appear there too.
 
 Unauthenticated → **401**. Customer → **403**. Tenant B cannot read tenant A's parent (**404** on detail; absent from list/search/POS).
 
