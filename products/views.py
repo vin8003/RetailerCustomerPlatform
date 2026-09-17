@@ -446,6 +446,7 @@ def get_retailer_products(request):
                     'quantity': p.quantity,
                     'saleable_quantity': p.saleable_quantity(),
                     'track_inventory': p.track_inventory,
+                    'unit': p.unit,
                     'image': img_url,
                     'category_name': p.category.name if p.category else 'Uncategorized',
                     'barcode': p.barcode,

@@ -47,6 +47,7 @@ They are **not** automatically durable knowledge. Many pages are builder briefs,
 | [OE-191.md](OE-191.md) | durable | [pack-children-reads](../requirements/pack-children-reads.md) |
 | [OE-283.md](OE-283.md) | durable | [pack-children-reads](../requirements/pack-children-reads.md) |
 | [OE-285.md](OE-285.md) | durable | [pack-children-reads](../requirements/pack-children-reads.md) |
+| [OE-286.md](OE-286.md) | durable | [pos-nopage-unit](../requirements/pos-nopage-unit.md) |
 | [OE-192.md](OE-192.md) | durable | [group-variants-reads](../requirements/group-variants-reads.md) |
 | [OE-136.md](OE-136.md) | durable | [product-batch-expiry](../requirements/product-batch-expiry.md) |
 | [OE-144.md](OE-144.md) | durable | [product-batch-expiry](../requirements/product-batch-expiry.md) |
