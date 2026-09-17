@@ -32,7 +32,9 @@ from .serializers import (
     ProductReviewSerializer, ProductUploadSerializer, ProductBulkUploadSerializer,
     ProductStatsSerializer, MasterProductSerializer,
     ProductUploadSessionSerializer, UploadSessionItemSerializer,
-    ProductSearchSerializer
+    ProductSearchSerializer,
+    cache_group_siblings,
+    group_variants_payload,
 )
 from retailers.models import OrgAuditLog, RetailerProfile
 from common.permissions import IsRetailerOwner
@@ -384,6 +386,10 @@ def get_retailer_products(request):
                 products.select_related('category').prefetch_related('batches')[:10000]
             )  # OOM safety limit
             Product.cache_saleable_quantities(pos_products)
+            pos_variant_context = {
+                'request': request,
+                'group_siblings_by_key': cache_group_siblings(pos_products),
+            }
 
             data = []
             for p in pos_products:
@@ -424,7 +430,8 @@ def get_retailer_products(request):
                     'is_active': p.is_active,
                     'is_seasonal': p.is_seasonal,
                     'has_batches': p.has_batches,
-                    'batches': batches
+                    'batches': batches,
+                    'group_variants': group_variants_payload(p, pos_variant_context),
                 })
             return Response(data, status=status.HTTP_200_OK)
 
