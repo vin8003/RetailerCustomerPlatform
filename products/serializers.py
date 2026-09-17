@@ -574,6 +574,7 @@ class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
     Lightweight serializer for product search results
     """
     image = serializers.SerializerMethodField()
+    brand_name = serializers.SerializerMethodField()
     batches = serializers.SerializerMethodField()
     saleable_quantity = serializers.SerializerMethodField()
     fractional_children = serializers.SerializerMethodField()
@@ -584,7 +585,8 @@ class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
         model = Product
         list_serializer_class = GroupVariantsListSerializer
         fields = [
-            'id', 'name', 'price', 'app_price', 'unit', 'image', 'track_inventory',
+            'id', 'name', 'price', 'app_price', 'unit', 'image', 'brand_name',
+            'track_inventory',
             'quantity', 'saleable_quantity', 'margin_percent', 'has_batches', 'batches',
             'is_parent_bulk', 'parent_bulk_product', 'conversion_factor',
             'fractional_children', 'group_variants',
@@ -601,6 +603,13 @@ class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
             return obj.image_display_url
         except Exception as e:
             logger.error(f"Error getting search image: {e}")
+            return None
+
+    def get_brand_name(self, obj):
+        try:
+            return obj.brand.name if obj.brand else None
+        except Exception as e:
+            logger.error(f"Error getting brand name: {e}")
             return None
 
 class ProductDetailSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
