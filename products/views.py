@@ -380,8 +380,11 @@ def get_retailer_products(request):
 
         # Fast path for POS / Bulk Select All (all products, no pagination, lightweight serialization)
         if request.query_params.get('no_page') == 'true':
-            pos_products = products.select_related('category').prefetch_related('batches')[:10000]  # OOM safety limit
-            
+            pos_products = list(
+                products.select_related('category').prefetch_related('batches')[:10000]
+            )  # OOM safety limit
+            Product.cache_saleable_quantities(pos_products)
+
             data = []
             for p in pos_products:
                 batches = []
@@ -413,6 +416,7 @@ def get_retailer_products(request):
                     'discounted_price': p.discounted_price or p.price,
                     'original_price': p.original_price,
                     'quantity': p.quantity,
+                    'saleable_quantity': p.saleable_quantity(),
                     'track_inventory': p.track_inventory,
                     'image': img_url,
                     'category_name': p.category.name if p.category else 'Uncategorized',
@@ -448,9 +452,12 @@ def get_retailer_products(request):
         page = paginator.paginate_queryset(products, request)
 
         if page is not None:
+            Product.cache_saleable_quantities(page)
             serializer = ProductListSerializer(page, many=True, context={'request': request, 'active_offers': active_offers})
             return paginator.get_paginated_response(serializer.data)
 
+        products = list(products)
+        Product.cache_saleable_quantities(products)
         serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -525,7 +532,8 @@ def search_products(request):
 
         # Limit results for search
         limit = int(request.query_params.get('limit', 50))
-        products = products[:limit]
+        products = list(products[:limit])
+        Product.cache_saleable_quantities(products)
 
         serializer = ProductSearchSerializer(
             products, many=True, context={'request': request}
@@ -675,6 +683,7 @@ def get_product_detail(request, product_id):
             Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
         ).order_by('-priority').prefetch_related('targets'))
 
+        Product.cache_saleable_quantities([product])
         serializer = ProductDetailSerializer(product, context={'request': request, 'active_offers': active_offers, 'include_inactive_batches': True})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
