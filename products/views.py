@@ -453,12 +453,28 @@ def get_retailer_products(request):
 
         if page is not None:
             Product.cache_saleable_quantities(page)
-            serializer = ProductListSerializer(page, many=True, context={'request': request, 'active_offers': active_offers})
+            serializer = ProductListSerializer(
+                page,
+                many=True,
+                context={
+                    'request': request,
+                    'active_offers': active_offers,
+                    'include_saleable_quantity': True,
+                },
+            )
             return paginator.get_paginated_response(serializer.data)
 
         products = list(products)
         Product.cache_saleable_quantities(products)
-        serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
+        serializer = ProductListSerializer(
+            products,
+            many=True,
+            context={
+                'request': request,
+                'active_offers': active_offers,
+                'include_saleable_quantity': True,
+            },
+        )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     except Exception as e:
@@ -536,7 +552,9 @@ def search_products(request):
         Product.cache_saleable_quantities(products)
 
         serializer = ProductSearchSerializer(
-            products, many=True, context={'request': request}
+            products,
+            many=True,
+            context={'request': request, 'include_saleable_quantity': True},
         )
         return Response({
             'results': serializer.data,
@@ -666,9 +684,9 @@ def get_product_detail(request, product_id):
 
         # Optimize query with select_related and prefetch_related
         queryset = Product.objects.select_related(
-            'retailer', 'category', 'brand'
+            'retailer', 'category', 'brand', 'parent_bulk_product'
         ).prefetch_related(
-            'additional_images', 'reviews', 'reviews__customer'
+            'additional_images', 'reviews', 'reviews__customer', 'batches'
         )
         
         product = get_object_or_404(queryset, id=product_id, retailer=retailer)
@@ -683,8 +701,15 @@ def get_product_detail(request, product_id):
             Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
         ).order_by('-priority').prefetch_related('targets'))
 
-        Product.cache_saleable_quantities([product])
-        serializer = ProductDetailSerializer(product, context={'request': request, 'active_offers': active_offers, 'include_inactive_batches': True})
+        serializer = ProductDetailSerializer(
+            product,
+            context={
+                'request': request,
+                'active_offers': active_offers,
+                'include_inactive_batches': True,
+                'include_saleable_quantity': True,
+            },
+        )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     except Exception as e:

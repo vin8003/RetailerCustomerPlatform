@@ -11,7 +11,6 @@ from .models import (
 )
 from products.inventory_adjust import UNPARSEABLE_EXPIRY, parse_expiry_date
 from products.channel_price import (
-    CHANNEL_STORE,
     apply_channel_price_representation,
     channel_from_context,
     resolve_channel_price,
@@ -46,7 +45,7 @@ class SaleableQuantityReadMixin:
     saleable_quantity = serializers.SerializerMethodField()
 
     def _include_saleable_quantity(self):
-        return channel_from_context(self.context) == CHANNEL_STORE
+        return bool(self.context.get('include_saleable_quantity'))
 
     def get_saleable_quantity(self, obj):
         if not self._include_saleable_quantity():
@@ -177,6 +176,7 @@ class ProductListSerializer(SaleableQuantityReadMixin, ChannelPriceRepresentatio
     is_wishlisted = serializers.SerializerMethodField()
     batches = serializers.SerializerMethodField()
     quantity = serializers.SerializerMethodField()
+    saleable_quantity = serializers.SerializerMethodField()
     minimum_order_quantity = serializers.SerializerMethodField()
     maximum_order_quantity = serializers.SerializerMethodField()
     class Meta:
@@ -341,9 +341,9 @@ class ProductSearchSerializer(SaleableQuantityReadMixin, ChannelPriceRepresentat
     Lightweight serializer for product search results
     """
     image = serializers.SerializerMethodField()
-    
     batches = serializers.SerializerMethodField()
-    
+    saleable_quantity = serializers.SerializerMethodField()
+
     class Meta:
         model = Product
         fields = [
@@ -387,6 +387,7 @@ class ProductDetailSerializer(SaleableQuantityReadMixin, ChannelPriceRepresentat
     offers = serializers.SerializerMethodField()
     is_wishlisted = serializers.SerializerMethodField()
     quantity = serializers.SerializerMethodField()
+    saleable_quantity = serializers.SerializerMethodField()
     minimum_order_quantity = serializers.SerializerMethodField()
     maximum_order_quantity = serializers.SerializerMethodField()
     group_variants = serializers.SerializerMethodField()
