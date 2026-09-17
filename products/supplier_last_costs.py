@@ -2,6 +2,7 @@
 OE-112 / F-0045 — last supplier costs for a SKU from purchase-invoice history.
 OE-118 / F-0046 — purchase-role margin% preview from draft-or-last PI cost.
 OE-169 / F-0071 — same margin% on purchase-role catalog list/detail/search.
+OE-284 / F-0071 follow-on — same field on POS no_page.
 
 Thin EXTEND: read existing PurchaseItem.purchase_price + invoice.supplier,
 and Product.price / Product.purchase_price. No PO, quote, policy, or

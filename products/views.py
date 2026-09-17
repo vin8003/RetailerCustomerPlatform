@@ -73,7 +73,11 @@ from products.write_off import (
     parse_write_off_quantity,
     write_off_stock,
 )
-from products.supplier_last_costs import include_purchase_margin
+from products.supplier_last_costs import (
+    include_purchase_margin,
+    last_pi_unit_costs_by_product_id,
+    selling_margin_percent,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -398,6 +402,12 @@ def get_retailer_products(request):
                 'request': request,
                 'group_siblings_by_key': cache_group_siblings(pos_products),
             }
+            include_margin = include_purchase_margin(request.user)
+            last_pi_costs = (
+                last_pi_unit_costs_by_product_id(pos_products)
+                if include_margin
+                else {}
+            )
 
             data = []
             for p in pos_products:
@@ -424,7 +434,7 @@ def get_retailer_products(request):
                 except Exception:
                     img_url = p.image_url
 
-                data.append({
+                row = {
                     'id': p.id,
                     'name': p.name,
                     'price': p.price,
@@ -445,7 +455,17 @@ def get_retailer_products(request):
                     'fractional_children': fractional_children_payload(
                         p, pos_variant_context
                     ),
-                })
+                }
+                if include_margin:
+                    if p.purchase_price is not None:
+                        cost = p.purchase_price
+                    else:
+                        cost = last_pi_costs.get(p.id)
+                    margin = selling_margin_percent(p.price, cost)
+                    row['margin_percent'] = (
+                        format(margin, 'f') if margin is not None else None
+                    )
+                data.append(row)
             return Response(data, status=status.HTTP_200_OK)
 
         # Apply expensive annotations for normal paginated path
