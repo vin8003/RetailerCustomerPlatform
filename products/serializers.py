@@ -59,6 +59,63 @@ class SaleableQuantityReadMixin:
         return data
 
 
+class FractionalChildReadSerializer(serializers.ModelSerializer):
+    """Active pack child on a parent SKU retailer read (OE-191)."""
+
+    saleable_quantity = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Product
+        fields = ('id', 'name', 'conversion_factor', 'saleable_quantity')
+
+    def get_saleable_quantity(self, obj):
+        parent = self.context.get('pack_parent')
+        factor = obj.conversion_factor
+        if parent is None:
+            return json_qty(obj.saleable_quantity())
+        if factor and factor > 0:
+            return json_qty(parent.saleable_quantity() / factor)
+        return json_qty(Decimal('0'))
+
+
+class FractionalChildrenReadMixin:
+    """Retailer reads expose active pack children on parent SKUs; else []."""
+
+    fractional_children = serializers.SerializerMethodField()
+
+    def _include_fractional_children(self):
+        return bool(self.context.get('include_saleable_quantity'))
+
+    def _active_fractional_children(self, obj):
+        cached = getattr(obj, '_prefetched_objects_cache', {}).get(
+            'fractional_children'
+        )
+        if cached is not None:
+            children = cached
+        else:
+            children = obj.fractional_children.filter(is_active=True)
+        return [
+            child
+            for child in children
+            if child.is_active and child.retailer_id == obj.retailer_id
+        ]
+
+    def get_fractional_children(self, obj):
+        if not self._include_fractional_children() or not obj.is_parent_bulk:
+            return []
+        return FractionalChildReadSerializer(
+            self._active_fractional_children(obj),
+            many=True,
+            context={**self.context, 'pack_parent': obj},
+        ).data
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if not self._include_fractional_children():
+            data.pop('fractional_children', None)
+        return data
+
+
 def parent_bulk_cycle_exists(child_pk, parent_product):
     """True when parent_bulk_product would loop back to child_pk or itself."""
     if parent_product is None:
@@ -160,7 +217,7 @@ class ProductReviewSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'customer_name', 'is_verified_purchase', 'created_at']
 
 
-class ProductListSerializer(SaleableQuantityReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductListSerializer(SaleableQuantityReadMixin, FractionalChildrenReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product list view
     """
@@ -190,7 +247,8 @@ class ProductListSerializer(SaleableQuantityReadMixin, ChannelPriceRepresentatio
             'is_in_stock', 'is_featured', 'is_active', 'is_seasonal', 'is_available',
             'average_rating', 'review_count', 'created_at', 'product_group',
             'active_offer_text', 'is_wishlisted', 'barcode', 'has_batches', 'batches',
-            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor'
+            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor',
+            'fractional_children',
         ]
 
     def get_quantity(self, obj):
@@ -364,7 +422,7 @@ class ProductSearchSerializer(SaleableQuantityReadMixin, ChannelPriceRepresentat
             logger.error(f"Error getting search image: {e}")
             return None
 
-class ProductDetailSerializer(SaleableQuantityReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductDetailSerializer(SaleableQuantityReadMixin, FractionalChildrenReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product detail view
     """
@@ -405,7 +463,8 @@ class ProductDetailSerializer(SaleableQuantityReadMixin, ChannelPriceRepresentat
             'is_in_stock', 'is_featured', 'is_active', 'is_seasonal', 'is_available', 
             'average_rating', 'review_count', 'created_at', 'updated_at',
             'product_group', 'active_offer_text', 'offers', 'is_wishlisted', 'barcode',
-            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor', 'group_variants'
+            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor',
+            'fractional_children', 'group_variants'
         ]
 
     def get_quantity(self, obj):

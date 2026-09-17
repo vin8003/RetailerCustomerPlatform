@@ -33,6 +33,8 @@ Selling `N` child units deducts `N * conversion_factor` from the parent (factor 
 
 `conversion_factor == 0` (and any non-positive value) is **400**. Echoing the current factor on a full product save does not require the perm. Cross-tenant product id is **404**; pointing `parent_bulk_product` at another shop's SKU is **400**.
 
+Retailer GET of a parent SKU also returns active `fractional_children` — see [pack-children-reads.md](pack-children-reads.md).
+
 ## Cycle policy
 
 Simple reject: a product cannot be its own parent, and a parent pointer chain cannot loop. No auto-break.

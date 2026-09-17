@@ -3,7 +3,7 @@ from rest_framework.decorators import api_view, parser_classes, permission_class
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Q, Avg, Count, Sum, Max
-from django.db.models import Q, Avg, Count, Sum, Max, F, Value, Case, When, FloatField, TextField, IntegerField, DecimalField
+from django.db.models import Q, Avg, Count, Sum, Max, F, Value, Case, When, FloatField, TextField, IntegerField, DecimalField, Prefetch
 from django.db.models.functions import Coalesce, Greatest, Cast
 from django.contrib.postgres.search import SearchVector, SearchQuery, SearchRank
 from django.shortcuts import get_object_or_404
@@ -431,6 +431,11 @@ def get_retailer_products(request):
         # Apply expensive annotations for normal paginated path
         products = products.select_related(
             'retailer', 'category', 'brand', 'master_product'
+        ).prefetch_related(
+            Prefetch(
+                'fractional_children',
+                queryset=Product.objects.filter(is_active=True).order_by('id'),
+            )
         ).annotate(
             average_rating_annotated=Avg('reviews__rating'),
             review_count_annotated=Count('reviews')
@@ -686,10 +691,20 @@ def get_product_detail(request, product_id):
         queryset = Product.objects.select_related(
             'retailer', 'category', 'brand', 'parent_bulk_product'
         ).prefetch_related(
-            'additional_images', 'reviews', 'reviews__customer', 'batches'
+            'additional_images', 'reviews', 'reviews__customer', 'batches',
+            Prefetch(
+                'fractional_children',
+                queryset=Product.objects.filter(is_active=True).order_by('id'),
+            ),
         )
-        
-        product = get_object_or_404(queryset, id=product_id, retailer=retailer)
+
+        try:
+            product = queryset.get(id=product_id, retailer=retailer)
+        except Product.DoesNotExist:
+            return Response(
+                {'error': 'Product not found'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
         # Pre-fetch active offers for optimization
         from offers.models import Offer
         from django.utils import timezone
