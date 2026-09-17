@@ -107,16 +107,14 @@ def _row_by_id(payload, product_id):
 
 
 def _child_lookups(queries):
-    """Per-parent fractional_children hits (prefetch uses IN, not =)."""
+    """fractional_children fetches. Prefetch uses IN; N+1 uses =."""
     hits = []
     for query in queries:
         sql = query["sql"]
         lowered = sql.lower()
-        if "parent_bulk_product_id" not in lowered:
+        if "parent_bulk_product_id" not in lowered or " where " not in lowered:
             continue
-        if " where " not in lowered:
-            continue
-        where = lowered.split(" where ", 1)[1]
+        where = lowered.split(" where ", 1)[1].split(" group by ", 1)[0]
         if "parent_bulk_product_id" not in where:
             continue
         hits.append(sql)

@@ -234,6 +234,7 @@ class ProductListSerializer(SaleableQuantityReadMixin, FractionalChildrenReadMix
     batches = serializers.SerializerMethodField()
     quantity = serializers.SerializerMethodField()
     saleable_quantity = serializers.SerializerMethodField()
+    fractional_children = serializers.SerializerMethodField()
     minimum_order_quantity = serializers.SerializerMethodField()
     maximum_order_quantity = serializers.SerializerMethodField()
     class Meta:
@@ -446,6 +447,7 @@ class ProductDetailSerializer(SaleableQuantityReadMixin, FractionalChildrenReadM
     is_wishlisted = serializers.SerializerMethodField()
     quantity = serializers.SerializerMethodField()
     saleable_quantity = serializers.SerializerMethodField()
+    fractional_children = serializers.SerializerMethodField()
     minimum_order_quantity = serializers.SerializerMethodField()
     maximum_order_quantity = serializers.SerializerMethodField()
     group_variants = serializers.SerializerMethodField()
