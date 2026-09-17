@@ -55,6 +55,7 @@ They are **not** automatically durable knowledge. Many pages are builder briefs,
 | [OE-146.md](OE-146.md) | durable | [block-negative-stock](../requirements/block-negative-stock.md) |
 | [OE-170.md](OE-170.md) | durable | [additional-barcodes-lookup](../requirements/additional-barcodes-lookup.md) |
 | [OE-112.md](OE-112.md) | durable | [compare-supplier-cost](../requirements/compare-supplier-cost.md) |
+| [OE-118.md](OE-118.md) | durable | [purchase-margin-preview](../requirements/purchase-margin-preview.md) |
 | [OE-210.md](OE-210.md) | durable | [expiry-batch-list](../requirements/expiry-batch-list.md) |
 | [OE-132.md](OE-132.md) | durable | [saleable-quantity-reads](../requirements/saleable-quantity-reads.md) |
 

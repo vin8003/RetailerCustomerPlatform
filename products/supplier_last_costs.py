@@ -1,10 +1,14 @@
 """
 OE-112 / F-0045 — last supplier costs for a SKU from purchase-invoice history.
+OE-118 / F-0046 — purchase-role margin% preview from draft-or-last PI cost.
 
-Thin EXTEND: read existing PurchaseItem.purchase_price + invoice.supplier.
-No PO, quote, or cost-model tables. Missing history stays empty (not 0).
+Thin EXTEND: read existing PurchaseItem.purchase_price + invoice.supplier,
+and Product.price / Product.purchase_price. No PO, quote, policy, or
+cost-model tables. Missing history/cost stays empty/null (not 0).
 Purchase-role gate reuses purchasing.terms (OE-100).
 """
+from decimal import Decimal
+
 from rest_framework import status
 from rest_framework.response import Response
 
@@ -92,3 +96,56 @@ def last_supplier_cost_rows_for_product(product):
         })
     rows.sort(key=lambda row: ((row['supplier_name'] or '').lower(), row['supplier_id']))
     return rows
+
+
+def last_pi_unit_cost_for_product(product):
+    """
+    Latest PurchaseItem.purchase_price for this shop SKU, or None.
+
+    One query. Missing history stays None — callers must not invent 0.
+    A stored 0.00 line is real history and is returned.
+    """
+    return (
+        PurchaseItem.objects.filter(
+            product_id=product.id,
+            invoice__retailer_id=product.retailer_id,
+        )
+        .order_by(
+            '-invoice__invoice_date',
+            '-invoice__created_at',
+            '-pk',
+        )
+        .values_list('purchase_price', flat=True)
+        .first()
+    )
+
+
+def draft_or_last_pi_cost(product):
+    """
+    SKU purchase_price (draft) if set, else last PI unit cost.
+
+    Returns (cost, source) where source is 'draft', 'last_pi', or None.
+    Missing stays (None, None) — callers must not invent 0.
+    """
+    if product.purchase_price is not None:
+        return product.purchase_price, 'draft'
+    last = last_pi_unit_cost_for_product(product)
+    if last is None:
+        return None, None
+    return last, 'last_pi'
+
+
+def selling_margin_percent(selling_price, cost):
+    """
+    Gross margin % = (sell - cost) / sell * 100.
+
+    Missing cost or zero/absent sell → None (not 0).
+    """
+    if cost is None or selling_price is None:
+        return None
+    sell = Decimal(selling_price)
+    if sell == 0:
+        return None
+    return ((sell - Decimal(cost)) * Decimal('100') / sell).quantize(
+        Decimal('0.01')
+    )
