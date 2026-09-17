@@ -465,6 +465,7 @@ def get_retailer_products(request):
                     'request': request,
                     'active_offers': active_offers,
                     'include_saleable_quantity': True,
+                    'include_fractional_children': True,
                 },
             )
             return paginator.get_paginated_response(serializer.data)
@@ -478,6 +479,7 @@ def get_retailer_products(request):
                 'request': request,
                 'active_offers': active_offers,
                 'include_saleable_quantity': True,
+                'include_fractional_children': True,
             },
         )
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -723,6 +725,7 @@ def get_product_detail(request, product_id):
                 'active_offers': active_offers,
                 'include_inactive_batches': True,
                 'include_saleable_quantity': True,
+                'include_fractional_children': True,
             },
         )
         return Response(serializer.data, status=status.HTTP_200_OK)

@@ -4,16 +4,18 @@ OE-191 / F-0019 — active fractional_children on retailer parent SKU reads.
 Thin EXTEND only. Non-parent → []. Cross-tenant detail → 404.
 No BOM / assemble write. Search and POS no_page stay unchanged.
 """
+from datetime import timedelta
 from decimal import Decimal
 
 import pytest
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework import status
 
 from authentication.models import User
-from products.models import Product, ProductCategory
+from products.models import Product, ProductBatch, ProductCategory
 from retailers.models import RetailerProfile
 from retailers.organization import ensure_organization_for_profile
 
@@ -232,6 +234,69 @@ class TestFractionalChildrenRetailerReads:
         assert public.status_code == status.HTTP_200_OK
         row = _row_by_id(public.data, parent.id)
         assert "fractional_children" not in row
+        public_detail = api_client.get(
+            reverse("get_product_detail_public", args=[shop.id, parent.id])
+        )
+        assert public_detail.status_code == status.HTTP_200_OK
+        assert "fractional_children" not in public_detail.data
+
+    def test_child_saleable_follows_parent_saleable_not_gross(self, api_client):
+        owner, shop = _make_retailer("oe191_sale_own", "OE191 Saleable Shop")
+        category = _make_category(shop, "OE191 Saleable Cat")
+        parent = _make_simple_product(
+            shop,
+            category,
+            "OE191 Batched Case",
+            Decimal("0"),
+            is_parent_bulk=True,
+            has_batches=True,
+            unit="case",
+            price=Decimal("100.00"),
+        )
+        today = timezone.localdate()
+        ProductBatch.objects.create(
+            product=parent,
+            retailer=shop,
+            batch_number="EXP",
+            price=parent.price,
+            quantity=Decimal("10.000"),
+            is_active=True,
+            expiry_date=today - timedelta(days=1),
+        )
+        ProductBatch.objects.create(
+            product=parent,
+            retailer=shop,
+            batch_number="FRESH",
+            price=parent.price,
+            quantity=Decimal("4.000"),
+            is_active=True,
+            expiry_date=today + timedelta(days=5),
+        )
+        parent.sync_inventory_from_batches()
+        parent.refresh_from_db()
+        child = _make_simple_product(
+            shop,
+            category,
+            "OE191 Batched Piece",
+            Decimal("0"),
+            parent_bulk_product=parent,
+            conversion_factor=Decimal("0.1000"),
+            price=Decimal("12.00"),
+        )
+        child.refresh_from_db()
+        assert parent.quantity == Decimal("14.000")
+        assert parent.saleable_quantity() == Decimal("4.000")
+        assert child.saleable_quantity() == Decimal("40")
+
+        api_client.force_authenticate(user=owner)
+        detail = api_client.get(reverse("get_product_detail", args=[parent.id]))
+        assert detail.status_code == status.HTTP_200_OK
+        children = detail.data["fractional_children"]
+        assert len(children) == 1
+        assert _qty(children[0]["saleable_quantity"]) == Decimal("40")
+        assert _qty(children[0]["saleable_quantity"]) != (
+            parent.quantity / Decimal("0.1000")
+        )
 
     def test_search_and_pos_omit_fractional_children(self, api_client):
         owner, shop = _make_retailer("oe191_pos_own", "OE191 POS Shop")

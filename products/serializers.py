@@ -70,21 +70,22 @@ class FractionalChildReadSerializer(serializers.ModelSerializer):
 
     def get_saleable_quantity(self, obj):
         parent = self.context.get('pack_parent')
-        factor = obj.conversion_factor
-        if parent is None:
-            return json_qty(obj.saleable_quantity())
-        if factor and factor > 0:
-            return json_qty(parent.saleable_quantity() / factor)
-        return json_qty(Decimal('0'))
+        if parent is not None:
+            obj.parent_bulk_product = parent
+        return json_qty(obj.saleable_quantity())
 
 
 class FractionalChildrenReadMixin:
-    """Retailer reads expose active pack children on parent SKUs; else []."""
+    """Retailer reads expose active pack children on parent SKUs; else [].
+
+    Subclasses must redeclare ``fractional_children`` as a
+    SerializerMethodField. A plain mixin attribute is not collected by DRF.
+    """
 
     fractional_children = serializers.SerializerMethodField()
 
     def _include_fractional_children(self):
-        return bool(self.context.get('include_saleable_quantity'))
+        return bool(self.context.get('include_fractional_children'))
 
     def _active_fractional_children(self, obj):
         cached = getattr(obj, '_prefetched_objects_cache', {}).get(
