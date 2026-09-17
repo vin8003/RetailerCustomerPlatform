@@ -210,21 +210,25 @@ class TestSearchPosProductGroup:
         assert unset_detail.status_code == status.HTTP_200_OK
         assert blank_detail.status_code == status.HTTP_200_OK
 
-        for product, detail in (
-            (unset, unset_detail.data),
-            (blank, blank_detail.data),
-        ):
-            list_row = _row_by_id(listed.data, product.id)
-            search_row = _row_by_id(search.data, product.id)
-            pos_row = _row_by_id(pos.data, product.id)
-            assert "product_group" in search_row
-            assert "product_group" in pos_row
-            assert search_row["product_group"] == list_row["product_group"]
-            assert search_row["product_group"] == pos_row["product_group"]
-            assert search_row["product_group"] == detail["product_group"]
-            assert search_row["product_group"] == product.product_group
-            assert search_row["product_group"] in (None, "")
-            assert pos_row["product_group"] in (None, "")
+        unset_list = _row_by_id(listed.data, unset.id)
+        unset_search = _row_by_id(search.data, unset.id)
+        unset_pos = _row_by_id(pos.data, unset.id)
+        assert "product_group" in unset_search
+        assert "product_group" in unset_pos
+        assert unset_search["product_group"] is None
+        assert unset_pos["product_group"] is None
+        assert unset_list["product_group"] is None
+        assert unset_detail.data["product_group"] is None
+
+        blank_list = _row_by_id(listed.data, blank.id)
+        blank_search = _row_by_id(search.data, blank.id)
+        blank_pos = _row_by_id(pos.data, blank.id)
+        assert "product_group" in blank_search
+        assert "product_group" in blank_pos
+        assert blank_search["product_group"] == ""
+        assert blank_pos["product_group"] == ""
+        assert blank_list["product_group"] == ""
+        assert blank_detail.data["product_group"] == ""
 
     def test_public_search_product_group_matches_public_list(self, api_client):
         _owner, shop = _make_retailer("oe295_pub_own", "OE295 Public Shop")
@@ -267,7 +271,7 @@ class TestSearchPosProductGroup:
         assert grouped_search["product_group"] == grouped_list["product_group"]
         assert grouped_search["product_group"] == GROUP_ATTA
         assert loose_search["product_group"] == loose_list["product_group"]
-        assert loose_search["product_group"] in (None, "")
+        assert loose_search["product_group"] is None
         # Shared serializer still echoes OE-287 / OE-290 / OE-291 / OE-293 / OE-294.
         assert grouped_search["brand_name"] == grouped_list["brand_name"]
         assert grouped_search["barcode"] == grouped_list["barcode"] == PRIMARY_A
@@ -288,11 +292,15 @@ class TestSearchPosProductGroup:
         customer = _make_customer("oe295_auth_cust")
 
         anon_search = _search(api_client, "OE295")
+        anon_pos = _pos(api_client)
         assert anon_search.status_code == status.HTTP_401_UNAUTHORIZED
+        assert anon_pos.status_code == status.HTTP_401_UNAUTHORIZED
 
         api_client.force_authenticate(user=customer)
         cust_search = _search(api_client, "OE295")
+        cust_pos = _pos(api_client)
         assert cust_search.status_code == status.HTTP_403_FORBIDDEN
+        assert cust_pos.status_code == status.HTTP_403_FORBIDDEN
 
     def test_search_stays_shop_scoped(self, api_client):
         _owner_a, shop_a = _make_retailer("oe295_ten_a", "OE295 Tenant A")
