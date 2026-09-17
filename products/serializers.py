@@ -28,6 +28,37 @@ class ChannelPriceRepresentationMixin:
         return apply_channel_price_representation(data, instance, self.context)
 
 
+def json_qty(val):
+    """Match existing quantity SerializerMethodField JSON shape."""
+    if val is None:
+        return 0
+    if isinstance(val, Decimal):
+        if val == val.to_integral_value():
+            return int(val)
+        return float(val.normalize())
+    return val
+
+
+class SaleableQuantityReadMixin:
+    """Retailer/POS reads expose saleable qty; customer/public omit the field."""
+
+    saleable_quantity = serializers.SerializerMethodField()
+
+    def _include_saleable_quantity(self):
+        return bool(self.context.get('include_saleable_quantity'))
+
+    def get_saleable_quantity(self, obj):
+        if not self._include_saleable_quantity():
+            return None
+        return json_qty(obj.saleable_quantity())
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if not self._include_saleable_quantity():
+            data.pop('saleable_quantity', None)
+        return data
+
+
 def parent_bulk_cycle_exists(child_pk, parent_product):
     """True when parent_bulk_product would loop back to child_pk or itself."""
     if parent_product is None:
@@ -129,7 +160,7 @@ class ProductReviewSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'customer_name', 'is_verified_purchase', 'created_at']
 
 
-class ProductListSerializer(ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductListSerializer(SaleableQuantityReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product list view
     """
@@ -145,13 +176,15 @@ class ProductListSerializer(ChannelPriceRepresentationMixin, serializers.ModelSe
     is_wishlisted = serializers.SerializerMethodField()
     batches = serializers.SerializerMethodField()
     quantity = serializers.SerializerMethodField()
+    saleable_quantity = serializers.SerializerMethodField()
     minimum_order_quantity = serializers.SerializerMethodField()
     maximum_order_quantity = serializers.SerializerMethodField()
     class Meta:
         model = Product
         fields = [
             'id', 'name', 'description', 'price', 'app_price', 'purchase_price', 'discounted_price',
-            'original_price', 'discount_percentage', 'quantity', 'track_inventory', 'unit',
+            'original_price', 'discount_percentage', 'quantity', 'saleable_quantity',
+            'track_inventory', 'unit',
             'minimum_order_quantity', 'maximum_order_quantity',
             'image', 'image_url', 'category_name', 'brand_name', 'retailer_name',
             'is_in_stock', 'is_featured', 'is_active', 'is_seasonal', 'is_available',
@@ -303,17 +336,20 @@ class ProductListSerializer(ChannelPriceRepresentationMixin, serializers.ModelSe
             return False
 
 
-class ProductSearchSerializer(ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductSearchSerializer(SaleableQuantityReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Lightweight serializer for product search results
     """
     image = serializers.SerializerMethodField()
-    
     batches = serializers.SerializerMethodField()
-    
+    saleable_quantity = serializers.SerializerMethodField()
+
     class Meta:
         model = Product
-        fields = ['id', 'name', 'price', 'app_price', 'unit', 'image', 'track_inventory', 'quantity', 'has_batches', 'batches']
+        fields = [
+            'id', 'name', 'price', 'app_price', 'unit', 'image', 'track_inventory',
+            'quantity', 'saleable_quantity', 'has_batches', 'batches',
+        ]
         
     def get_batches(self, obj):
         if obj.has_batches:
@@ -328,7 +364,7 @@ class ProductSearchSerializer(ChannelPriceRepresentationMixin, serializers.Model
             logger.error(f"Error getting search image: {e}")
             return None
 
-class ProductDetailSerializer(ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductDetailSerializer(SaleableQuantityReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product detail view
     """
@@ -351,6 +387,7 @@ class ProductDetailSerializer(ChannelPriceRepresentationMixin, serializers.Model
     offers = serializers.SerializerMethodField()
     is_wishlisted = serializers.SerializerMethodField()
     quantity = serializers.SerializerMethodField()
+    saleable_quantity = serializers.SerializerMethodField()
     minimum_order_quantity = serializers.SerializerMethodField()
     maximum_order_quantity = serializers.SerializerMethodField()
     group_variants = serializers.SerializerMethodField()
@@ -359,7 +396,8 @@ class ProductDetailSerializer(ChannelPriceRepresentationMixin, serializers.Model
         model = Product
         fields = [
             'id', 'name', 'description', 'price', 'app_price', 'purchase_price', 'discounted_price',
-            'original_price', 'discount_percentage', 'savings', 'quantity', 'track_inventory',
+            'original_price', 'discount_percentage', 'savings', 'quantity', 'saleable_quantity',
+            'track_inventory',
             'unit', 'minimum_order_quantity', 'maximum_order_quantity', 'has_batches', 'batches',
             'image', 'image_url', 'images', 'additional_images', 'category', 
             'category_name', 'brand', 'brand_name',

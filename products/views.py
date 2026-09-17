@@ -380,8 +380,11 @@ def get_retailer_products(request):
 
         # Fast path for POS / Bulk Select All (all products, no pagination, lightweight serialization)
         if request.query_params.get('no_page') == 'true':
-            pos_products = products.select_related('category').prefetch_related('batches')[:10000]  # OOM safety limit
-            
+            pos_products = list(
+                products.select_related('category').prefetch_related('batches')[:10000]
+            )  # OOM safety limit
+            Product.cache_saleable_quantities(pos_products)
+
             data = []
             for p in pos_products:
                 batches = []
@@ -413,6 +416,7 @@ def get_retailer_products(request):
                     'discounted_price': p.discounted_price or p.price,
                     'original_price': p.original_price,
                     'quantity': p.quantity,
+                    'saleable_quantity': p.saleable_quantity(),
                     'track_inventory': p.track_inventory,
                     'image': img_url,
                     'category_name': p.category.name if p.category else 'Uncategorized',
@@ -448,10 +452,29 @@ def get_retailer_products(request):
         page = paginator.paginate_queryset(products, request)
 
         if page is not None:
-            serializer = ProductListSerializer(page, many=True, context={'request': request, 'active_offers': active_offers})
+            Product.cache_saleable_quantities(page)
+            serializer = ProductListSerializer(
+                page,
+                many=True,
+                context={
+                    'request': request,
+                    'active_offers': active_offers,
+                    'include_saleable_quantity': True,
+                },
+            )
             return paginator.get_paginated_response(serializer.data)
 
-        serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
+        products = list(products)
+        Product.cache_saleable_quantities(products)
+        serializer = ProductListSerializer(
+            products,
+            many=True,
+            context={
+                'request': request,
+                'active_offers': active_offers,
+                'include_saleable_quantity': True,
+            },
+        )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     except Exception as e:
@@ -525,10 +548,13 @@ def search_products(request):
 
         # Limit results for search
         limit = int(request.query_params.get('limit', 50))
-        products = products[:limit]
+        products = list(products[:limit])
+        Product.cache_saleable_quantities(products)
 
         serializer = ProductSearchSerializer(
-            products, many=True, context={'request': request}
+            products,
+            many=True,
+            context={'request': request, 'include_saleable_quantity': True},
         )
         return Response({
             'results': serializer.data,
@@ -658,9 +684,9 @@ def get_product_detail(request, product_id):
 
         # Optimize query with select_related and prefetch_related
         queryset = Product.objects.select_related(
-            'retailer', 'category', 'brand'
+            'retailer', 'category', 'brand', 'parent_bulk_product'
         ).prefetch_related(
-            'additional_images', 'reviews', 'reviews__customer'
+            'additional_images', 'reviews', 'reviews__customer', 'batches'
         )
         
         product = get_object_or_404(queryset, id=product_id, retailer=retailer)
@@ -675,7 +701,15 @@ def get_product_detail(request, product_id):
             Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
         ).order_by('-priority').prefetch_related('targets'))
 
-        serializer = ProductDetailSerializer(product, context={'request': request, 'active_offers': active_offers, 'include_inactive_batches': True})
+        serializer = ProductDetailSerializer(
+            product,
+            context={
+                'request': request,
+                'active_offers': active_offers,
+                'include_inactive_batches': True,
+                'include_saleable_quantity': True,
+            },
+        )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     except Exception as e:
