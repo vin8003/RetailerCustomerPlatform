@@ -205,6 +205,34 @@ class TestPosNoPageMarginPercent:
         assert pos.status_code == status.HTTP_200_OK, pos.data
         assert _row_by_id(pos.data, product.id)["margin_percent"] == "100.00"
 
+    def test_draft_cost_wins_over_last_pi(self, api_client):
+        owner, shop = _make_retailer("oe284_draft_own", "OE284 Draft Shop")
+        product = _make_product(
+            shop, "OE284 Draft Oil", purchase_price=Decimal("10.00")
+        )
+        vendor = _make_supplier(shop, "Draft Vendor")
+        _add_pi_line(
+            shop, vendor, product, Decimal("8.00"), date(2026, 5, 1), "INV-DRAFT"
+        )
+
+        api_client.force_authenticate(user=owner)
+        pos = _pos(api_client)
+        assert pos.status_code == status.HTTP_200_OK, pos.data
+        assert _row_by_id(pos.data, product.id)["margin_percent"] == "50.00"
+
+    def test_last_pi_zero_cost_is_real_not_missing(self, api_client):
+        owner, shop = _make_retailer("oe284_pi0_own", "OE284 PI Zero Shop")
+        product = _make_product(shop, "OE284 Free Sample")
+        vendor = _make_supplier(shop, "Free Vendor")
+        _add_pi_line(
+            shop, vendor, product, Decimal("0.00"), date(2026, 6, 1), "INV-FREE"
+        )
+
+        api_client.force_authenticate(user=owner)
+        pos = _pos(api_client)
+        assert pos.status_code == status.HTTP_200_OK, pos.data
+        assert _row_by_id(pos.data, product.id)["margin_percent"] == "100.00"
+
     def test_cashier_omits_field(self, api_client):
         owner, shop = _make_retailer("oe284_cash_own", "OE284 Cash Shop")
         cashier = _make_staff(shop.organization, "oe284_cashier", [])
