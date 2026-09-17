@@ -3,6 +3,7 @@
 - **Ticket:** [OE-192](https://vin8003.atlassian.net/browse/OE-192) · backlog `F-0018` (thin slice) · [snapshot](../tickets/OE-192.md)
 - **Implementation:** EXTEND (reuse detail `group_variants`)
 - **Depends on:** [app-vs-pos-prices.md](app-vs-pos-prices.md)
+- **Related:** [search-product-group.md](search-product-group.md) (OE-295 top-level `product_group` echo)
 
 When `product_group` is set, retailer/POS **list**, **search**, and **`no_page`** include the same sibling `group_variants` rows that product detail already returned. Empty group (unset, or no other active/available siblings) → `[]`.
 

@@ -453,6 +453,7 @@ def get_retailer_products(request):
                     'barcode': p.barcode,
                     'is_active': p.is_active,
                     'is_seasonal': p.is_seasonal,
+                    'product_group': p.product_group,
                     'has_batches': p.has_batches,
                     'batches': batches,
                     'group_variants': safe_group_variants_payload(p, pos_variant_context),
