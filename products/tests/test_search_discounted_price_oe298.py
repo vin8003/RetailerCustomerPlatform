@@ -187,7 +187,7 @@ class TestSearchDiscountedPrice:
                 str(pos_row["discounted_price"])
             )
             assert search_row["discounted_price"] == detail["discounted_price"]
-            assert search_row["discounted_price"] == search_row["price"]
+            assert search_row["discounted_price"] == list_row["price"]
             # Store channel: app override must not replace search discounted_price.
             if product.id == atta.id:
                 assert search_row["app_price"] == "18.00"
@@ -208,13 +208,12 @@ class TestSearchDiscountedPrice:
             assert search_row["product_group"] == list_row["product_group"]
             assert search_row["product_group"] == pos_row["product_group"]
 
-    def test_null_discounted_price_mirrors_list_detail(self):
+    def test_null_discounted_price_mirrors_list_detail(self, monkeypatch):
         """If the property is null, list/detail still emit channel selling price.
 
         ChannelPriceRepresentationMixin rewrites `discounted_price` to the
-        channel price (same result as POS `discounted_price or price`).
-        Search must match list/detail. Product.price is required on persisted
-        rows, so this is an in-memory property override only.
+        channel selling price. Search must match list/detail. Product.price
+        is required on persisted rows, so this is an in-memory override only.
         """
         owner, shop = _make_retailer("oe298_null_own", "OE298 Null Shop")
         category = _make_category(shop, "OE298 Null Cat")
@@ -223,26 +222,18 @@ class TestSearchDiscountedPrice:
         assert loose.discounted_price == loose.price
 
         ctx = _retailer_ctx(owner)
-
-        def _none(_self):
-            return None
-
-        original = Product.discounted_price
-        try:
-            Product.discounted_price = property(_none)
-            loose_refreshed = Product.objects.get(pk=loose.pk)
-            assert loose_refreshed.discounted_price is None
-            list_data = ProductListSerializer(loose_refreshed, context=ctx).data
-            detail_data = ProductDetailSerializer(loose_refreshed, context=ctx).data
-            search_data = ProductSearchSerializer(loose_refreshed, context=ctx).data
-            assert "discounted_price" in search_data
-            assert search_data["discounted_price"] == list_data["discounted_price"]
-            assert search_data["discounted_price"] == detail_data["discounted_price"]
-            # Mixin / POS fallback both surface store price, not a silent omit.
-            assert search_data["discounted_price"] == "20.00"
-            assert Decimal(str(search_data["discounted_price"])) == loose_refreshed.price
-        finally:
-            Product.discounted_price = original
+        monkeypatch.setattr(Product, "discounted_price", property(lambda _self: None))
+        loose_refreshed = Product.objects.get(pk=loose.pk)
+        assert loose_refreshed.discounted_price is None
+        list_data = ProductListSerializer(loose_refreshed, context=ctx).data
+        detail_data = ProductDetailSerializer(loose_refreshed, context=ctx).data
+        search_data = ProductSearchSerializer(loose_refreshed, context=ctx).data
+        assert "discounted_price" in search_data
+        assert search_data["discounted_price"] == list_data["discounted_price"]
+        assert search_data["discounted_price"] == detail_data["discounted_price"]
+        # Mixin surfaces store selling price; do not omit the key.
+        assert search_data["discounted_price"] == "20.00"
+        assert Decimal(str(search_data["discounted_price"])) == loose_refreshed.price
 
     def test_public_search_discounted_price_matches_public_list(self, api_client):
         _owner, shop = _make_retailer("oe298_pub_own", "OE298 Public Shop")

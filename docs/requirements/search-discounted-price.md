@@ -28,7 +28,7 @@ Retailer product search includes top-level `discounted_price` with the same valu
 | GET | `/api/products/retailer/<id>/` (public) | Customer / anonymous | EXISTING |
 | GET | `/api/products/retailer/<id>/search/` (public) | Customer / anonymous | Additive via shared search serializer (same value as public list) |
 
-`Product.price` is required, so a persisted SKU never has a null `discounted_price`. List/detail and search go through `ChannelPriceRepresentationMixin`, which rewrites `discounted_price` to the channel selling price when the key is present. If the property were null, that mixin (and POS `discounted_price or price`) both surface `price`. Search mirrors list/detail; POS is Decimal-equal.
+`Product.price` is required, so a persisted SKU never has a null `discounted_price`. List/detail and search go through `ChannelPriceRepresentationMixin`, which rewrites `discounted_price` to the channel selling price when the key is present. If the property were null, the mixin surfaces `resolve_channel_price` (store `price` for retailer APIs; `app_price` or `price` for public/app). POS `no_page` uses `discounted_price or price` (store list only). Search mirrors list/detail; retailer search vs POS is Decimal-equal.
 
 Public / app channel still hides `app_price` and rewrites selling fields (including `discounted_price`) to the app list. Retailer / store channel keeps store `discounted_price` and still exposes `app_price`.
 
