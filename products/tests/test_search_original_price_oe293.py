@@ -252,3 +252,42 @@ class TestSearchOriginalPrice:
         api_client.force_authenticate(user=customer)
         cust_search = _search(api_client, "OE293")
         assert cust_search.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_search_stays_shop_scoped(self, api_client):
+        _owner_a, shop_a = _make_retailer("oe293_ten_a", "OE293 Tenant A")
+        owner_b, shop_b = _make_retailer("oe293_ten_b", "OE293 Tenant B")
+        cat_a = _make_category(shop_a, "OE293 A Cat")
+        cat_b = _make_category(shop_b, "OE293 B Cat")
+        product_a = _make_product(
+            shop_a,
+            cat_a,
+            "OE293 A SKU",
+            brand=_make_brand("OE293 Brand A"),
+            original_price=MRP_ATTA,
+        )
+        product_b = _make_product(
+            shop_b,
+            cat_b,
+            "OE293 B SKU",
+            brand=_make_brand("OE293 Brand B"),
+            original_price=MRP_BISCUITS,
+        )
+
+        api_client.force_authenticate(user=owner_b)
+        pos = _pos(api_client)
+        search = _search(api_client, "OE293")
+        detail_a = _detail(api_client, product_a.id)
+
+        assert pos.status_code == status.HTTP_200_OK
+        assert search.status_code == status.HTTP_200_OK
+        assert detail_a.status_code == status.HTTP_404_NOT_FOUND
+        pos_ids = {row["id"] for row in pos.data}
+        search_ids = {row["id"] for row in search.data["results"]}
+        assert product_a.id not in pos_ids
+        assert product_a.id not in search_ids
+        assert product_b.id in pos_ids
+        assert product_b.id in search_ids
+        assert _row_by_id(search.data, product_b.id)["original_price"] == "40.00"
+        assert Decimal(str(_row_by_id(pos.data, product_b.id)["original_price"])) == (
+            MRP_BISCUITS
+        )
