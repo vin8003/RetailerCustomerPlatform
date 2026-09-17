@@ -15,6 +15,11 @@ from products.channel_price import (
     channel_from_context,
     resolve_channel_price,
 )
+from products.supplier_last_costs import (
+    draft_or_last_pi_cost,
+    last_pi_unit_costs_by_product_id,
+    selling_margin_percent,
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -37,6 +42,45 @@ def json_qty(val):
             return int(val)
         return float(val.normalize())
     return val
+
+
+_MARGIN_PERCENT = serializers.DecimalField(
+    max_digits=10, decimal_places=2, allow_null=True
+)
+
+
+class PurchaseMarginReadMixin:
+    """Purchase-role catalog reads expose margin%; cashiers/public omit it.
+
+    Subclasses must redeclare ``margin_percent`` as a SerializerMethodField.
+    """
+
+    margin_percent = serializers.SerializerMethodField()
+
+    def _include_margin_percent(self):
+        return bool(self.context.get('include_margin_percent'))
+
+    def get_margin_percent(self, obj):
+        if not self._include_margin_percent():
+            return None
+        cache = self.context.get('last_pi_cost_by_product_id')
+        if cache is not None:
+            if obj.purchase_price is not None:
+                cost = obj.purchase_price
+            else:
+                cost = cache.get(obj.id)
+        else:
+            cost, _source = draft_or_last_pi_cost(obj)
+        margin = selling_margin_percent(obj.price, cost)
+        if margin is None:
+            return None
+        return _MARGIN_PERCENT.to_representation(margin)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if not self._include_margin_percent():
+            data.pop('margin_percent', None)
+        return data
 
 
 class SaleableQuantityReadMixin:
@@ -206,6 +250,13 @@ class GroupVariantsListSerializer(serializers.ListSerializer):
         products = list(data)
         if self.context.get('group_siblings_by_key') is None:
             self.context['group_siblings_by_key'] = cache_group_siblings(products)
+        if (
+            self.context.get('include_margin_percent')
+            and self.context.get('last_pi_cost_by_product_id') is None
+        ):
+            self.context['last_pi_cost_by_product_id'] = (
+                last_pi_unit_costs_by_product_id(products)
+            )
         return super().to_representation(products)
 
 
@@ -328,7 +379,7 @@ class ProductReviewSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'customer_name', 'is_verified_purchase', 'created_at']
 
 
-class ProductListSerializer(SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product list view
     """
@@ -347,6 +398,7 @@ class ProductListSerializer(SaleableQuantityReadMixin, FractionalChildrenReadMix
     saleable_quantity = serializers.SerializerMethodField()
     fractional_children = serializers.SerializerMethodField()
     group_variants = serializers.SerializerMethodField()
+    margin_percent = serializers.SerializerMethodField()
     minimum_order_quantity = serializers.SerializerMethodField()
     maximum_order_quantity = serializers.SerializerMethodField()
     class Meta:
@@ -355,6 +407,7 @@ class ProductListSerializer(SaleableQuantityReadMixin, FractionalChildrenReadMix
         fields = [
             'id', 'name', 'description', 'price', 'app_price', 'purchase_price', 'discounted_price',
             'original_price', 'discount_percentage', 'quantity', 'saleable_quantity',
+            'margin_percent',
             'track_inventory', 'unit',
             'minimum_order_quantity', 'maximum_order_quantity',
             'image', 'image_url', 'category_name', 'brand_name', 'retailer_name',
@@ -508,7 +561,7 @@ class ProductListSerializer(SaleableQuantityReadMixin, FractionalChildrenReadMix
             return False
 
 
-class ProductSearchSerializer(SaleableQuantityReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Lightweight serializer for product search results
     """
@@ -516,13 +569,14 @@ class ProductSearchSerializer(SaleableQuantityReadMixin, GroupVariantsReadMixin,
     batches = serializers.SerializerMethodField()
     saleable_quantity = serializers.SerializerMethodField()
     group_variants = serializers.SerializerMethodField()
+    margin_percent = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
         list_serializer_class = GroupVariantsListSerializer
         fields = [
             'id', 'name', 'price', 'app_price', 'unit', 'image', 'track_inventory',
-            'quantity', 'saleable_quantity', 'has_batches', 'batches',
+            'quantity', 'saleable_quantity', 'margin_percent', 'has_batches', 'batches',
             'group_variants',
         ]
         
@@ -539,7 +593,7 @@ class ProductSearchSerializer(SaleableQuantityReadMixin, GroupVariantsReadMixin,
             logger.error(f"Error getting search image: {e}")
             return None
 
-class ProductDetailSerializer(SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductDetailSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product detail view
     """
@@ -567,12 +621,14 @@ class ProductDetailSerializer(SaleableQuantityReadMixin, FractionalChildrenReadM
     minimum_order_quantity = serializers.SerializerMethodField()
     maximum_order_quantity = serializers.SerializerMethodField()
     group_variants = serializers.SerializerMethodField()
+    margin_percent = serializers.SerializerMethodField()
     
     class Meta:
         model = Product
         fields = [
             'id', 'name', 'description', 'price', 'app_price', 'purchase_price', 'discounted_price',
             'original_price', 'discount_percentage', 'savings', 'quantity', 'saleable_quantity',
+            'margin_percent',
             'track_inventory',
             'unit', 'minimum_order_quantity', 'maximum_order_quantity', 'has_batches', 'batches',
             'image', 'image_url', 'images', 'additional_images', 'category', 
