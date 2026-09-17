@@ -2,7 +2,7 @@
 
 - **Ticket:** [OE-287](https://vin8003.atlassian.net/browse/OE-287) · [snapshot](../tickets/OE-287.md)
 - **Implementation:** EXTEND (echo existing `Product.brand.name` on search + POS `no_page`)
-- **Related:** [search-barcode.md](search-barcode.md) (OE-290), [search-category-name.md](search-category-name.md) (OE-291), [search-original-price.md](search-original-price.md) (OE-293), [search-product-group.md](search-product-group.md) (OE-295), [search-discounted-price.md](search-discounted-price.md) (OE-298)
+- **Related:** [search-barcode.md](search-barcode.md) (OE-290), [search-category-name.md](search-category-name.md) (OE-291), [search-original-price.md](search-original-price.md) (OE-293), [search-product-group.md](search-product-group.md) (OE-295), [search-discounted-price.md](search-discounted-price.md) (OE-298), [search-is-featured.md](search-is-featured.md) (OE-299)
 
 Retailer product search and POS `GET /api/products/?no_page=true` include top-level `brand_name` with the same value already returned by list/detail (`Product.brand.name`). This is a field echo, not brand CRUD.
 

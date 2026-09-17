@@ -590,6 +590,7 @@ class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
             'id', 'name', 'price', 'app_price', 'discounted_price', 'original_price', 'unit', 'image',
             'category_name', 'brand_name',
             'barcode',
+            'is_featured',
             'is_seasonal',
             'product_group',
             'track_inventory',

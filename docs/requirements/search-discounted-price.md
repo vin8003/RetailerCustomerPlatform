@@ -2,7 +2,7 @@
 
 - **Ticket:** [OE-298](https://vin8003.atlassian.net/browse/OE-298) · [snapshot](../tickets/OE-298.md)
 - **Implementation:** EXTEND (echo existing `Product.discounted_price` on search)
-- **Related:** [search-product-group.md](search-product-group.md) (OE-295), [search-is-seasonal.md](search-is-seasonal.md) (OE-294), [search-original-price.md](search-original-price.md) (OE-293), [search-category-name.md](search-category-name.md) (OE-291), [search-barcode.md](search-barcode.md) (OE-290), [search-pos-brand-name.md](search-pos-brand-name.md) (OE-287), [app-vs-pos-prices.md](app-vs-pos-prices.md) (OE-106)
+- **Related:** [search-is-featured.md](search-is-featured.md) (OE-299), [search-product-group.md](search-product-group.md) (OE-295), [search-is-seasonal.md](search-is-seasonal.md) (OE-294), [search-original-price.md](search-original-price.md) (OE-293), [search-category-name.md](search-category-name.md) (OE-291), [search-barcode.md](search-barcode.md) (OE-290), [search-pos-brand-name.md](search-pos-brand-name.md) (OE-287), [app-vs-pos-prices.md](app-vs-pos-prices.md) (OE-106)
 
 Retailer product search includes top-level `discounted_price` with the same value already returned by list/detail (`Product.discounted_price`, a property that returns `Product.price`). This is a field echo, not price write.
 
