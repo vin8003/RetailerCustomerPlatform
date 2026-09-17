@@ -21,6 +21,7 @@ Ticket snapshots (acceptance context, ship notes) stay in [`../tickets/`](../tic
 | [inventory-adjust-permission.md](inventory-adjust-permission.md) | OE-127 |
 | [parent-child-pack-skus.md](parent-child-pack-skus.md) | OE-103 |
 | [pack-children-reads.md](pack-children-reads.md) | OE-191 |
+| [group-variants-reads.md](group-variants-reads.md) | OE-192 |
 | [product-batch-expiry.md](product-batch-expiry.md) | OE-136 |
 | [damage-expiry-write-off.md](damage-expiry-write-off.md) | OE-141 |
 | [app-vs-pos-prices.md](app-vs-pos-prices.md) | OE-106 |

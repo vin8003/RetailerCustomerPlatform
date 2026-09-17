@@ -117,6 +117,110 @@ class FractionalChildrenReadMixin:
         return data
 
 
+def group_sibling_queryset(retailer_ids, product_groups):
+    """Active, available siblings for the given shops and group names."""
+    return Product.objects.filter(
+        retailer_id__in=retailer_ids,
+        product_group__in=product_groups,
+        is_active=True,
+        is_available=True,
+    ).select_related('master_product')
+
+
+def cache_group_siblings(products):
+    """One shop-scoped query of group siblings, keyed by (retailer_id, group)."""
+    groups = {product.product_group for product in products if product.product_group}
+    if not groups:
+        return {}
+    retailer_ids = {product.retailer_id for product in products}
+    by_key = {}
+    for sibling in group_sibling_queryset(retailer_ids, groups):
+        by_key.setdefault((sibling.retailer_id, sibling.product_group), []).append(sibling)
+    return by_key
+
+
+def serialize_group_variant(sibling, channel):
+    selling = resolve_channel_price(sibling, channel)
+    return {
+        'id': sibling.id,
+        'name': sibling.name,
+        'unit': sibling.unit,
+        'price': float(selling),
+        'original_price': float(sibling.original_price) if sibling.original_price else float(selling),
+        'image': sibling.image_display_url,
+        'minimum_order_quantity': float(sibling.minimum_order_quantity) if sibling.minimum_order_quantity else 1,
+        'maximum_order_quantity': float(sibling.maximum_order_quantity) if sibling.maximum_order_quantity else None,
+        'track_inventory': sibling.track_inventory,
+        'quantity': float(sibling.quantity) if sibling.quantity else 0,
+    }
+
+
+def sort_group_siblings(siblings):
+    return sorted(
+        siblings,
+        key=lambda sibling: (
+            0 if (sibling.is_parent_bulk or sibling.parent_bulk_product_id is not None) else 1,
+            sibling.id,
+        ),
+    )
+
+
+def group_variants_payload(obj, context):
+    """Same sibling rows detail already returns. Empty group → []."""
+    if not obj.product_group:
+        return []
+    context = context or {}
+    cache = context.get('group_siblings_by_key')
+    if cache is not None:
+        siblings = [
+            sibling
+            for sibling in cache.get((obj.retailer_id, obj.product_group), [])
+            if sibling.id != obj.id
+        ]
+    else:
+        siblings = list(
+            group_sibling_queryset([obj.retailer_id], [obj.product_group]).exclude(
+                id=obj.id
+            )
+        )
+    channel = channel_from_context(context)
+    return [
+        serialize_group_variant(sibling, channel)
+        for sibling in sort_group_siblings(siblings)
+    ]
+
+
+def safe_group_variants_payload(obj, context):
+    """Same as group_variants_payload; catalog reads stay [] on helper errors."""
+    try:
+        return group_variants_payload(obj, context)
+    except Exception as e:
+        logger.error(f"Error getting group variants: {e}")
+        return []
+
+
+class GroupVariantsListSerializer(serializers.ListSerializer):
+    """Prefetch group siblings once for a multi-product payload."""
+
+    def to_representation(self, data):
+        products = list(data)
+        if self.context.get('group_siblings_by_key') is None:
+            self.context['group_siblings_by_key'] = cache_group_siblings(products)
+        return super().to_representation(products)
+
+
+class GroupVariantsReadMixin:
+    """Same-shop product_group siblings; empty group → [].
+
+    Subclasses must redeclare ``group_variants`` as a SerializerMethodField.
+    """
+
+    group_variants = serializers.SerializerMethodField()
+
+    def get_group_variants(self, obj):
+        return safe_group_variants_payload(obj, self.context)
+
+
 def parent_bulk_cycle_exists(child_pk, parent_product):
     """True when parent_bulk_product would loop back to child_pk or itself."""
     if parent_product is None:
@@ -218,7 +322,7 @@ class ProductReviewSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'customer_name', 'is_verified_purchase', 'created_at']
 
 
-class ProductListSerializer(SaleableQuantityReadMixin, FractionalChildrenReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductListSerializer(SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product list view
     """
@@ -236,10 +340,12 @@ class ProductListSerializer(SaleableQuantityReadMixin, FractionalChildrenReadMix
     quantity = serializers.SerializerMethodField()
     saleable_quantity = serializers.SerializerMethodField()
     fractional_children = serializers.SerializerMethodField()
+    group_variants = serializers.SerializerMethodField()
     minimum_order_quantity = serializers.SerializerMethodField()
     maximum_order_quantity = serializers.SerializerMethodField()
     class Meta:
         model = Product
+        list_serializer_class = GroupVariantsListSerializer
         fields = [
             'id', 'name', 'description', 'price', 'app_price', 'purchase_price', 'discounted_price',
             'original_price', 'discount_percentage', 'quantity', 'saleable_quantity',
@@ -250,7 +356,7 @@ class ProductListSerializer(SaleableQuantityReadMixin, FractionalChildrenReadMix
             'average_rating', 'review_count', 'created_at', 'product_group',
             'active_offer_text', 'is_wishlisted', 'barcode', 'has_batches', 'batches',
             'is_parent_bulk', 'parent_bulk_product', 'conversion_factor',
-            'fractional_children',
+            'fractional_children', 'group_variants',
         ]
 
     def get_quantity(self, obj):
@@ -396,19 +502,22 @@ class ProductListSerializer(SaleableQuantityReadMixin, FractionalChildrenReadMix
             return False
 
 
-class ProductSearchSerializer(SaleableQuantityReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductSearchSerializer(SaleableQuantityReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Lightweight serializer for product search results
     """
     image = serializers.SerializerMethodField()
     batches = serializers.SerializerMethodField()
     saleable_quantity = serializers.SerializerMethodField()
+    group_variants = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
+        list_serializer_class = GroupVariantsListSerializer
         fields = [
             'id', 'name', 'price', 'app_price', 'unit', 'image', 'track_inventory',
             'quantity', 'saleable_quantity', 'has_batches', 'batches',
+            'group_variants',
         ]
         
     def get_batches(self, obj):
@@ -424,7 +533,7 @@ class ProductSearchSerializer(SaleableQuantityReadMixin, ChannelPriceRepresentat
             logger.error(f"Error getting search image: {e}")
             return None
 
-class ProductDetailSerializer(SaleableQuantityReadMixin, FractionalChildrenReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductDetailSerializer(SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product detail view
     """
@@ -678,49 +787,6 @@ class ProductDetailSerializer(SaleableQuantityReadMixin, FractionalChildrenReadM
             return False
         except Exception:
             return False
-
-    def get_group_variants(self, obj):
-        """Get all other active products in the same group for this retailer, sorting parent/child first"""
-        try:
-            if obj.product_group:
-                siblings = Product.objects.filter(
-                    retailer=obj.retailer,
-                    product_group=obj.product_group,
-                    is_active=True,
-                    is_available=True
-                ).exclude(id=obj.id).only(
-                    'id', 'name', 'unit', 'price', 'app_price', 'original_price',
-                    'is_parent_bulk', 'parent_bulk_product'
-                )
-                
-                # Sort: items where is_parent_bulk is True or parent_bulk_product_id is not None come first
-                sorted_siblings = sorted(
-                    list(siblings),
-                    key=lambda s: (0 if (s.is_parent_bulk or s.parent_bulk_product_id is not None) else 1, s.id)
-                )
-                channel = channel_from_context(self.context)
-                
-                variants = []
-                for s in sorted_siblings:
-                    selling = resolve_channel_price(s, channel)
-                    variants.append({
-                        'id': s.id,
-                        'name': s.name,
-                        'unit': s.unit,
-                        'price': float(selling),
-                        'original_price': float(s.original_price) if s.original_price else float(selling),
-                        'image': s.image_display_url,
-                        'minimum_order_quantity': float(s.minimum_order_quantity) if s.minimum_order_quantity else 1,
-                        'maximum_order_quantity': float(s.maximum_order_quantity) if s.maximum_order_quantity else None,
-                        'track_inventory': s.track_inventory,
-                        'quantity': float(s.quantity) if s.quantity else 0
-                    })
-                return variants
-            return []
-        except Exception as e:
-            logger.error(f"Error getting group variants: {e}")
-            return []
-
 
 class MasterProductSerializer(serializers.ModelSerializer):
     """
