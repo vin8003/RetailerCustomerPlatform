@@ -2,7 +2,7 @@
 OE-191 / F-0019 — active fractional_children on retailer parent SKU reads.
 
 Thin EXTEND only. Non-parent → []. Cross-tenant detail → 404.
-No BOM / assemble write. Search and POS no_page stay unchanged.
+No BOM / assemble write. Search + POS no_page follow-on: OE-283.
 """
 from datetime import timedelta
 from decimal import Decimal
@@ -297,23 +297,6 @@ class TestFractionalChildrenRetailerReads:
         assert _qty(children[0]["saleable_quantity"]) != (
             parent.quantity / Decimal("0.1000")
         )
-
-    def test_search_and_pos_omit_fractional_children(self, api_client):
-        owner, shop = _make_retailer("oe191_pos_own", "OE191 POS Shop")
-        category = _make_category(shop, "OE191 POS Cat")
-        parent, _child = _make_pack(shop, category, "OE191 POS")
-
-        api_client.force_authenticate(user=owner)
-        pos = api_client.get(
-            reverse("get_retailer_products"), {"no_page": "true"}
-        )
-        search = api_client.get(
-            reverse("search_products"), {"search": "OE191 POS Case"}
-        )
-        assert pos.status_code == status.HTTP_200_OK
-        assert search.status_code == status.HTTP_200_OK
-        assert "fractional_children" not in _row_by_id(pos.data, parent.id)
-        assert "fractional_children" not in _row_by_id(search.data, parent.id)
 
     def test_list_avoids_per_parent_child_lookup(self, api_client):
         owner, shop = _make_retailer("oe191_q_own", "OE191 Query Shop")

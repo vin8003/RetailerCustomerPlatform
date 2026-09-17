@@ -34,6 +34,7 @@ from .serializers import (
     ProductUploadSessionSerializer, UploadSessionItemSerializer,
     ProductSearchSerializer,
     cache_group_siblings,
+    fractional_children_payload,
     safe_group_variants_payload,
 )
 from retailers.models import OrgAuditLog, RetailerProfile
@@ -384,7 +385,13 @@ def get_retailer_products(request):
         # Fast path for POS / Bulk Select All (all products, no pagination, lightweight serialization)
         if request.query_params.get('no_page') == 'true':
             pos_products = list(
-                products.select_related('category').prefetch_related('batches')[:10000]
+                products.select_related('category').prefetch_related(
+                    'batches',
+                    Prefetch(
+                        'fractional_children',
+                        queryset=Product.objects.filter(is_active=True).order_by('id'),
+                    ),
+                )[:10000]
             )  # OOM safety limit
             Product.cache_saleable_quantities(pos_products)
             pos_variant_context = {
@@ -435,6 +442,9 @@ def get_retailer_products(request):
                     'has_batches': p.has_batches,
                     'batches': batches,
                     'group_variants': safe_group_variants_payload(p, pos_variant_context),
+                    'fractional_children': fractional_children_payload(
+                        p, pos_variant_context
+                    ),
                 })
             return Response(data, status=status.HTTP_200_OK)
 
@@ -567,6 +577,12 @@ def search_products(request):
 
         # Limit results for search
         limit = int(request.query_params.get('limit', 50))
+        products = products.prefetch_related(
+            Prefetch(
+                'fractional_children',
+                queryset=Product.objects.filter(is_active=True).order_by('id'),
+            )
+        )
         products = list(products[:limit])
         Product.cache_saleable_quantities(products)
 
@@ -576,6 +592,7 @@ def search_products(request):
             context={
                 'request': request,
                 'include_saleable_quantity': True,
+                'include_fractional_children': True,
                 'include_margin_percent': include_purchase_margin(request.user),
             },
         )
