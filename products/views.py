@@ -604,7 +604,9 @@ def search_products(request):
 
         # Limit results for search
         limit = int(request.query_params.get('limit', 50))
-        products = products.select_related('parent_bulk_product', 'brand').prefetch_related(
+        products = products.select_related(
+            'parent_bulk_product', 'brand', 'category'
+        ).prefetch_related(
             Prefetch(
                 'fractional_children',
                 queryset=Product.objects.filter(is_active=True).order_by('id'),
@@ -1503,7 +1505,7 @@ def search_products_public(request, retailer_id):
 
         # Limit results for search
         limit = int(request.query_params.get('limit', 50))
-        products = products.select_related('brand')[:limit]
+        products = products.select_related('brand', 'category')[:limit]
 
         serializer = ProductSearchSerializer(products, many=True)
         return Response({
