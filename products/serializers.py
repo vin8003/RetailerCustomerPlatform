@@ -581,12 +581,13 @@ class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
     fractional_children = serializers.SerializerMethodField()
     group_variants = serializers.SerializerMethodField()
     margin_percent = serializers.SerializerMethodField()
+    discounted_price = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
 
     class Meta:
         model = Product
         list_serializer_class = GroupVariantsListSerializer
         fields = [
-            'id', 'name', 'price', 'app_price', 'original_price', 'unit', 'image',
+            'id', 'name', 'price', 'app_price', 'discounted_price', 'original_price', 'unit', 'image',
             'category_name', 'brand_name',
             'barcode',
             'is_seasonal',

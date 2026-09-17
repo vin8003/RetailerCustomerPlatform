@@ -2,7 +2,7 @@
 
 - **Ticket:** [OE-293](https://vin8003.atlassian.net/browse/OE-293) · [snapshot](../tickets/OE-293.md)
 - **Implementation:** EXTEND (echo existing `Product.original_price` on search)
-- **Related:** [search-pos-brand-name.md](search-pos-brand-name.md) (OE-287), [search-barcode.md](search-barcode.md) (OE-290), [search-category-name.md](search-category-name.md) (OE-291), [search-is-seasonal.md](search-is-seasonal.md) (OE-294), [search-product-group.md](search-product-group.md) (OE-295)
+- **Related:** [search-pos-brand-name.md](search-pos-brand-name.md) (OE-287), [search-barcode.md](search-barcode.md) (OE-290), [search-category-name.md](search-category-name.md) (OE-291), [search-is-seasonal.md](search-is-seasonal.md) (OE-294), [search-product-group.md](search-product-group.md) (OE-295), [search-discounted-price.md](search-discounted-price.md) (OE-298)
 
 Retailer product search includes top-level `original_price` with the same value already returned by list/detail/POS `no_page` (`Product.original_price`). This is a field echo, not price write.
 
