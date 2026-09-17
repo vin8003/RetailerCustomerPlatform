@@ -1,6 +1,6 @@
 # ProductBatch expiry and FIFO pick
 
-- **Ticket:** [OE-136](https://vin8003.atlassian.net/browse/OE-136) · backlog `F-0030` · [snapshot](../tickets/OE-136.md)
+- **Ticket:** [OE-136](https://vin8003.atlassian.net/browse/OE-136) · backlog `F-0030` · [snapshot](../tickets/OE-136.md); POS `no_page` echo [OE-144](https://vin8003.atlassian.net/browse/OE-144) · [snapshot](../tickets/OE-144.md)
 - **Implementation:** EXTEND (`ProductBatch.expiry_date` + sale/pick on `Product.reduce_quantity`)
 - **Depends on:** [inventory-adjust-permission.md](inventory-adjust-permission.md), [inventory-and-batches.md](../07-KEY-FLOWS/inventory-and-batches.md)
 
@@ -17,6 +17,7 @@ Batches can store an optional expiry date. At sale/pick, FIFO consumes the earli
 | Default policy: forbid selling `expiry_date < today` | EXTEND (no org policy model) |
 | Null-expiry batches remain saleable | EXISTING, locked |
 | Expiry create/change on product update requires `inventory.adjust` | EXTEND |
+| POS `no_page` active batch rows include `expiry_date` (null OK) | EXTEND (OE-144; same as `ProductBatchSerializer`) |
 | Cross-tenant product get/update still retailer-scoped | EXISTING, locked |
 | `mfg_date`, LIFO/MRP engines, org FIFO flag, FE pickers, `StockMovement` | Out of scope |
 
@@ -28,7 +29,7 @@ Eligible batch: `is_active`, and (`expiry_date` is null **or** `expiry_date >= t
 
 Sort: `expiry_date ASC NULLS LAST`, then `created_at ASC`.
 
-`Product.quantity` still sums all **active** batches (expired qty remains on the product total until written off — [OE-141](damage-expiry-write-off.md)). `Product.saleable_quantity()` / `can_order_quantity` exclude expired lots. Customer `place_order` and cart stock checks use saleable qty; a failed `reduce_quantity` aborts the order. Purchase returns pass `forbid_expired=False` so expired lots can still be sent back to the supplier. Retailer/POS product **reads** expose that helper as `saleable_quantity` next to gross `quantity` — [saleable-quantity-reads.md](saleable-quantity-reads.md) (OE-132).
+`Product.quantity` still sums all **active** batches (expired qty remains on the product total until written off — [OE-141](damage-expiry-write-off.md)). `Product.saleable_quantity()` / `can_order_quantity` exclude expired lots. Customer `place_order` and cart stock checks use saleable qty; a failed `reduce_quantity` aborts the order. Purchase returns pass `forbid_expired=False` so expired lots can still be sent back to the supplier. Retailer/POS product **reads** expose that helper as `saleable_quantity` next to gross `quantity` — [saleable-quantity-reads.md](saleable-quantity-reads.md) (OE-132). POS `GET /api/products/?no_page=true` active batch rows also echo `expiry_date` (null OK), matching `ProductBatchSerializer`. That read does not change sale/pick policy.
 
 ## API
 
