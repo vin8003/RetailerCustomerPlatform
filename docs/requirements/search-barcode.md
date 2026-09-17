@@ -2,7 +2,7 @@
 
 - **Ticket:** [OE-290](https://vin8003.atlassian.net/browse/OE-290) · [snapshot](../tickets/OE-290.md)
 - **Implementation:** EXTEND (echo existing `Product.barcode` on search)
-- **Related:** [additional-barcodes-lookup.md](additional-barcodes-lookup.md) (OE-170 query match), [search-original-price.md](search-original-price.md) (OE-293), [search-product-group.md](search-product-group.md) (OE-295), [search-discounted-price.md](search-discounted-price.md) (OE-298), [search-is-featured.md](search-is-featured.md) (OE-299)
+- **Related:** [additional-barcodes-lookup.md](additional-barcodes-lookup.md) (OE-170 query match), [search-original-price.md](search-original-price.md) (OE-293), [search-product-group.md](search-product-group.md) (OE-295), [search-discounted-price.md](search-discounted-price.md) (OE-298), [search-is-featured.md](search-is-featured.md) (OE-299), [search-is-active.md](search-is-active.md) (OE-300)
 
 Retailer product search includes top-level `barcode` with the same value already returned by list/detail/POS `no_page` (`Product.barcode`). This is a field echo, not barcode write and not additional-barcode invent.
 
