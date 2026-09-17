@@ -390,7 +390,7 @@ def get_retailer_products(request):
         if request.query_params.get('no_page') == 'true':
             pos_products = list(
                 products.select_related(
-                    'category', 'parent_bulk_product'
+                    'category', 'parent_bulk_product', 'brand'
                 ).prefetch_related(
                     'batches',
                     Prefetch(
@@ -449,6 +449,7 @@ def get_retailer_products(request):
                     'unit': p.unit,
                     'image': img_url,
                     'category_name': p.category.name if p.category else 'Uncategorized',
+                    'brand_name': p.brand.name if p.brand else None,
                     'barcode': p.barcode,
                     'is_active': p.is_active,
                     'is_seasonal': p.is_seasonal,
@@ -603,7 +604,7 @@ def search_products(request):
 
         # Limit results for search
         limit = int(request.query_params.get('limit', 50))
-        products = products.select_related('parent_bulk_product').prefetch_related(
+        products = products.select_related('parent_bulk_product', 'brand').prefetch_related(
             Prefetch(
                 'fractional_children',
                 queryset=Product.objects.filter(is_active=True).order_by('id'),
