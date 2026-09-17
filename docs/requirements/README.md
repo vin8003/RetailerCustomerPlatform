@@ -33,7 +33,7 @@ Ticket snapshots (acceptance context, ship notes) stay in [`../tickets/`](../tic
 | [block-negative-stock.md](block-negative-stock.md) | OE-146 |
 | [additional-barcodes-lookup.md](additional-barcodes-lookup.md) | OE-170 |
 | [compare-supplier-cost.md](compare-supplier-cost.md) | OE-112 |
-| [purchase-margin-preview.md](purchase-margin-preview.md) | OE-118, OE-169 |
+| [purchase-margin-preview.md](purchase-margin-preview.md) | OE-118, OE-169, OE-284 |
 | [expiry-batch-list.md](expiry-batch-list.md) | OE-210 |
 | [retailer-web-mobile.md](retailer-web-mobile.md) | KAN-11 |
 | [customer-retailer-city-map.md](customer-retailer-city-map.md) | KAN-69 |

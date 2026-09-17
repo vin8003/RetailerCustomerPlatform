@@ -2,8 +2,8 @@
 OE-169 / F-0071 — purchase-role margin_percent on catalog reads (thin EXTEND).
 
 List/detail/search reuse OE-118 draft-or-last-PI math. Missing cost is
-null, not 0. Non-purchase omits the field. Tenant-scoped. No POS till
-block / PIN / threshold invent.
+null, not 0. Non-purchase omits the field. Tenant-scoped. POS no_page
+follow-on is OE-284. No POS till block / PIN / threshold invent.
 """
 from datetime import date, timedelta
 from decimal import Decimal
@@ -326,20 +326,6 @@ class TestCatalogMarginPercentReads:
         )
         assert public.status_code == status.HTTP_200_OK
         row = _row_by_id(public.data, product.id)
-        assert "margin_percent" not in row
-
-    def test_pos_no_page_omits_field(self, api_client):
-        owner, shop = _make_retailer("oe169_pos_own", "OE169 POS Shop")
-        product = _make_product(
-            shop, "OE169 POS Oil", purchase_price=Decimal("4.00")
-        )
-
-        api_client.force_authenticate(user=owner)
-        pos = api_client.get(
-            reverse("get_retailer_products"), {"no_page": "true"}
-        )
-        assert pos.status_code == status.HTTP_200_OK
-        row = _row_by_id(pos.data, product.id)
         assert "margin_percent" not in row
 
     def test_unauthenticated_and_customer_denied(self, api_client):
