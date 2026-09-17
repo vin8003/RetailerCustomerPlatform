@@ -1437,3 +1437,17 @@ class SkuLastSupplierCostsSerializer(serializers.Serializer):
     product_id = serializers.IntegerField()
     suppliers = SkuSupplierLastCostSerializer(many=True)
 
+
+class SkuMarginPreviewSerializer(serializers.Serializer):
+    """Purchase-role margin% preview. Missing cost → null, not 0."""
+
+    product_id = serializers.IntegerField()
+    selling_price = serializers.DecimalField(max_digits=10, decimal_places=2)
+    cost = serializers.DecimalField(
+        max_digits=10, decimal_places=2, allow_null=True
+    )
+    cost_source = serializers.CharField(allow_null=True, allow_blank=True)
+    margin_percent = serializers.DecimalField(
+        max_digits=10, decimal_places=2, allow_null=True
+    )
+

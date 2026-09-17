@@ -29,3 +29,5 @@ Query is one `PurchaseItem` select with `select_related('invoice', 'invoice__sup
 ## Not in this change
 
 PO invent, quote invent, FE compare UI, reorder_level (OE-149), GST / #103, Jira Done, live `*.ordereasy.win`.
+
+See also: [purchase-margin-preview.md](purchase-margin-preview.md) (OE-118 SKU margin% from draft-or-last PI cost).

@@ -32,11 +32,14 @@ from products.serializers import (
     ExpiringBatchListSerializer,
     PurchaseInvoiceSerializer,
     SkuLastSupplierCostsSerializer,
+    SkuMarginPreviewSerializer,
     SupplierLedgerSerializer,
 )
 from products.supplier_last_costs import (
+    draft_or_last_pi_cost,
     last_supplier_cost_rows_for_product,
     require_purchase_role,
+    selling_margin_percent,
 )
 from orders.serializers import OrderDetailSerializer
 from common.permissions import IsRetailerOwner
@@ -286,6 +289,42 @@ def sku_last_supplier_costs(request, product_id):
         'suppliers': last_supplier_cost_rows_for_product(product),
     }
     return Response(SkuLastSupplierCostsSerializer(payload).data)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def sku_margin_preview(request, product_id):
+    """
+    Margin % for a SKU from selling price vs draft-or-last PI cost.
+
+    Purchase-role only. Missing cost is null, not zero.
+    """
+    if getattr(request.user, 'user_type', None) != 'retailer':
+        return Response(
+            {'error': 'Only retailers can view purchase margin.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    org = get_organization_for_user(request.user)
+    denied = require_purchase_role(request.user, organization=org)
+    if denied is not None:
+        return denied
+    product = (
+        Product.objects.filter(pk=product_id, retailer__organization=org).first()
+    )
+    if product is None:
+        return Response(
+            {'error': 'Product not found'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    cost, cost_source = draft_or_last_pi_cost(product)
+    payload = {
+        'product_id': product.id,
+        'selling_price': product.price,
+        'cost': cost,
+        'cost_source': cost_source,
+        'margin_percent': selling_margin_percent(product.price, cost),
+    }
+    return Response(SkuMarginPreviewSerializer(payload).data)
 
 
 class SupplierLedgerViewSet(viewsets.ModelViewSet):
