@@ -407,6 +407,7 @@ def get_retailer_products(request):
                                 'is_active': b.is_active,
                                 'show_on_app': b.show_on_app,
                                 'expiry_date': b.expiry_date,
+                                'is_expired': b.is_expired(),
                             })
                 
                 img_url = None

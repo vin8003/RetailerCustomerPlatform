@@ -12,6 +12,7 @@ Retailer-authenticated callers can list **this shop’s** active batches that ex
 |-------|--------|
 | `ProductBatch.expiry_date`, saleable helpers, FIFO | EXISTING (OE-136) |
 | `ProductBatchSerializer.expiry_date` | EXISTING |
+| `ProductBatchSerializer.is_expired` | EXISTING (OE-149; inherited on this list) |
 | `GET /api/products/erp/expiring-batches/` | EXTEND — shop list read |
 | Alerts, FE dashboards, `StockMovement`, full F-0125 MIS | Out of scope |
 
@@ -21,7 +22,7 @@ Retailer-authenticated callers can list **this shop’s** active batches that ex
 |--------|------|-----|----------|
 | GET | `/api/products/erp/expiring-batches/?days=N` | Authenticated retailer (owner or staff) | Active batches for **this shop** with `expiry_date <= localdate() + N` and `quantity > 0`. Default **N=30** when `days` is omitted. |
 
-Rows reuse batch fields (`id`, `batch_number`, `barcode`, prices, `quantity`, `is_active`, `show_on_app`, `expiry_date`) plus `product_id` / `product_name`. Ordered by `expiry_date`, then id.
+Rows reuse batch fields (`id`, `batch_number`, `barcode`, prices, `quantity`, `is_active`, `show_on_app`, `expiry_date`, `is_expired`) plus `product_id` / `product_name`. Ordered by `expiry_date`, then id. `is_expired` is the same `ProductBatch.is_expired()` flag as other batch reads (OE-149).
 
 | Filter | Included | Excluded |
 |--------|----------|----------|
