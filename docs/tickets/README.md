@@ -55,6 +55,7 @@ They are **not** automatically durable knowledge. Many pages are builder briefs,
 | [OE-294.md](OE-294.md) | durable | [search-is-seasonal](../requirements/search-is-seasonal.md) |
 | [OE-295.md](OE-295.md) | durable | [search-product-group](../requirements/search-product-group.md) |
 | [OE-298.md](OE-298.md) | durable | [search-discounted-price](../requirements/search-discounted-price.md) |
+| [OE-299.md](OE-299.md) | durable | [search-is-featured](../requirements/search-is-featured.md) |
 | [OE-192.md](OE-192.md) | durable | [group-variants-reads](../requirements/group-variants-reads.md) |
 | [OE-136.md](OE-136.md) | durable | [product-batch-expiry](../requirements/product-batch-expiry.md) |
 | [OE-144.md](OE-144.md) | durable | [product-batch-expiry](../requirements/product-batch-expiry.md) |
