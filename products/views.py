@@ -1503,7 +1503,7 @@ def search_products_public(request, retailer_id):
 
         # Limit results for search
         limit = int(request.query_params.get('limit', 50))
-        products = products[:limit]
+        products = products.select_related('brand')[:limit]
 
         serializer = ProductSearchSerializer(products, many=True)
         return Response({

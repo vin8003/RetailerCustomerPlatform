@@ -7,6 +7,8 @@ Same value as list/detail Product.brand.name. No brand → null
 from decimal import Decimal
 
 import pytest
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from rest_framework import status
 
@@ -96,6 +98,18 @@ def _detail(api_client, product_id):
 
 def _search(api_client, query):
     return api_client.get(reverse("search_products"), {"search": query})
+
+
+def _brand_pk_lookups(queries):
+    hits = []
+    for query in queries:
+        sql = query["sql"].lower()
+        if "from \"product_brand\"" not in sql and "from product_brand" not in sql:
+            continue
+        if " join " in sql:
+            continue
+        hits.append(query["sql"])
+    return hits
 
 
 @pytest.mark.django_db
@@ -225,12 +239,21 @@ class TestSearchPosBrandName:
         public = api_client.get(
             reverse("get_retailer_products_public", args=[shop.id])
         )
+        public_search = api_client.get(
+            reverse("search_products_public", args=[shop.id]),
+            {"search": "OE287 Public"},
+        )
         assert public.status_code == status.HTTP_200_OK
+        assert public_search.status_code == status.HTTP_200_OK
         row = _row_by_id(public.data, product.id)
+        search_row = _row_by_id(public_search.data, product.id)
         assert row["brand_name"] == "OE287 Public Brand"
+        assert search_row["brand_name"] == row["brand_name"]
         assert row["unit"] == "liter"
         assert "saleable_quantity" not in row
         assert "margin_percent" not in row
+        assert "saleable_quantity" not in search_row
+        assert "margin_percent" not in search_row
 
     def test_pos_keeps_oe286_unit(self, api_client):
         owner, shop = _make_retailer("oe287_unit_own", "OE287 Unit Shop")
@@ -307,3 +330,32 @@ class TestSearchPosBrandName:
         assert Decimal(str(pos_child["conversion_factor"])) == Decimal("0.1000")
         assert search_parent["is_parent_bulk"] is True
         assert search_child["parent_bulk_product"] == parent.id
+
+    def test_search_and_pos_join_brand_not_per_row(self, api_client):
+        owner, shop = _make_retailer("oe287_q_own", "OE287 Query Shop")
+        category = _make_category(shop, "OE287 Query Cat")
+        products = []
+        for i in range(3):
+            brand = _make_brand(f"OE287 Query Brand {i}")
+            products.append(
+                _make_product(
+                    shop,
+                    category,
+                    f"OE287 Query SKU {i}",
+                    brand=brand,
+                )
+            )
+
+        api_client.force_authenticate(user=owner)
+        with CaptureQueriesContext(connection) as search_ctx:
+            search = _search(api_client, "OE287 Query")
+        with CaptureQueriesContext(connection) as pos_ctx:
+            pos = _pos(api_client)
+
+        assert search.status_code == status.HTTP_200_OK
+        assert pos.status_code == status.HTTP_200_OK
+        assert _brand_pk_lookups(search_ctx.captured_queries) == []
+        assert _brand_pk_lookups(pos_ctx.captured_queries) == []
+        for product in products:
+            assert _row_by_id(search.data, product.id)["brand_name"] == product.brand.name
+            assert _row_by_id(pos.data, product.id)["brand_name"] == product.brand.name

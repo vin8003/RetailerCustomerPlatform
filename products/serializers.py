@@ -585,10 +585,11 @@ class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
         model = Product
         list_serializer_class = GroupVariantsListSerializer
         fields = [
-            'id', 'name', 'price', 'app_price', 'unit', 'image', 'track_inventory',
+            'id', 'name', 'price', 'app_price', 'unit', 'image', 'brand_name',
+            'track_inventory',
             'quantity', 'saleable_quantity', 'margin_percent', 'has_batches', 'batches',
             'is_parent_bulk', 'parent_bulk_product', 'conversion_factor',
-            'fractional_children', 'group_variants', 'brand_name',
+            'fractional_children', 'group_variants',
         ]
         
     def get_batches(self, obj):

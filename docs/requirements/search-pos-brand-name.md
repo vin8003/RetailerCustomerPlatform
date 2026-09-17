@@ -23,6 +23,7 @@ Retailer product search and POS `GET /api/products/?no_page=true` include top-le
 | GET | `/api/products/` | Authenticated retailer | EXISTING |
 | GET | `/api/products/<id>/` | Authenticated retailer | EXISTING |
 | GET | `/api/products/retailer/<id>/` (public) | Customer / anonymous | Unchanged (already has `brand_name`) |
+| GET | `/api/products/retailer/<id>/search/` (public) | Customer / anonymous | Additive via shared search serializer (same value as public list); `select_related('brand')` |
 
 No brand → `null` (same as list getter). POS `select_related` includes `brand` so the echo is one join, not per-row.
 
