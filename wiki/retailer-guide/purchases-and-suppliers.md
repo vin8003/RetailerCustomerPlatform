@@ -7,7 +7,7 @@ When stock arrives from a **supplier** (wholesaler, distributor, company van), r
 | Benefit | Explanation |
 |---------|-------------|
 | **Accurate stock** | Shelf quantity matches system |
-| **Cost tracking** | Know margin per product. Purchase-role staff can see each supplier’s last billed cost for a product, and a margin% preview from the selling price versus the product’s draft cost or last purchase cost. If there is no cost yet, margin stays blank — it is not shown as zero. |
+| **Cost tracking** | Know margin per product. Purchase-role staff can see each supplier’s last billed cost for a product, and a margin% on the product list, product detail, and a dedicated preview — selling price versus the product’s draft cost or last purchase cost. If there is no cost yet, margin stays blank — it is not shown as zero. Cashiers do not see margin on the catalog. |
 | **Supplier khata** | Track what you owe each supplier |
 | **Batch history** | Link sales to purchase lots |
 

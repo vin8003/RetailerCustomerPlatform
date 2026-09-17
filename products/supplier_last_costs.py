@@ -1,6 +1,7 @@
 """
 OE-112 / F-0045 — last supplier costs for a SKU from purchase-invoice history.
 OE-118 / F-0046 — purchase-role margin% preview from draft-or-last PI cost.
+OE-169 / F-0071 — same margin% on purchase-role catalog list/detail/search.
 
 Thin EXTEND: read existing PurchaseItem.purchase_price + invoice.supplier,
 and Product.price / Product.purchase_price. No PO, quote, policy, or
@@ -9,6 +10,7 @@ Purchase-role gate reuses purchasing.terms (OE-100).
 """
 from decimal import Decimal
 
+from django.db.models import F
 from rest_framework import status
 from rest_framework.response import Response
 
@@ -32,6 +34,11 @@ def purchase_role_denied_response():
         {'error': PURCHASE_ROLE_COST_DENIED},
         status=status.HTTP_403_FORBIDDEN,
     )
+
+
+def include_purchase_margin(user, organization=None):
+    """True when catalog reads may include margin_percent."""
+    return require_purchase_role(user, organization=organization) is None
 
 
 def require_purchase_role(user, organization=None):
@@ -118,6 +125,40 @@ def last_pi_unit_cost_for_product(product):
         .values_list('purchase_price', flat=True)
         .first()
     )
+
+
+def last_pi_unit_costs_by_product_id(products):
+    """
+    Latest PurchaseItem.purchase_price per SKU that has no draft cost.
+
+    One query. SKUs with a draft purchase_price or no PI history are
+    omitted — callers must not invent 0. A stored 0.00 line is returned.
+    """
+    need_last_pi = [
+        product for product in products if product.purchase_price is None
+    ]
+    ids = [product.id for product in need_last_pi]
+    if not ids:
+        return {}
+    items = (
+        PurchaseItem.objects.filter(
+            product_id__in=ids,
+            invoice__retailer_id=F('product__retailer_id'),
+        )
+        .order_by(
+            'product_id',
+            '-invoice__invoice_date',
+            '-invoice__created_at',
+            '-pk',
+        )
+        .values_list('product_id', 'purchase_price')
+    )
+    seen = {}
+    for product_id, purchase_price in items:
+        if product_id in seen:
+            continue
+        seen[product_id] = purchase_price
+    return seen
 
 
 def draft_or_last_pi_cost(product):

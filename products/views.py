@@ -72,6 +72,7 @@ from products.write_off import (
     parse_write_off_quantity,
     write_off_stock,
 )
+from products.supplier_last_costs import include_purchase_margin
 
 logger = logging.getLogger(__name__)
 
@@ -475,6 +476,7 @@ def get_retailer_products(request):
                     'active_offers': active_offers,
                     'include_saleable_quantity': True,
                     'include_fractional_children': True,
+                    'include_margin_percent': include_purchase_margin(request.user),
                 },
             )
             return paginator.get_paginated_response(serializer.data)
@@ -489,6 +491,7 @@ def get_retailer_products(request):
                 'active_offers': active_offers,
                 'include_saleable_quantity': True,
                 'include_fractional_children': True,
+                'include_margin_percent': include_purchase_margin(request.user),
             },
         )
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -570,7 +573,11 @@ def search_products(request):
         serializer = ProductSearchSerializer(
             products,
             many=True,
-            context={'request': request, 'include_saleable_quantity': True},
+            context={
+                'request': request,
+                'include_saleable_quantity': True,
+                'include_margin_percent': include_purchase_margin(request.user),
+            },
         )
         return Response({
             'results': serializer.data,
@@ -735,6 +742,7 @@ def get_product_detail(request, product_id):
                 'include_inactive_batches': True,
                 'include_saleable_quantity': True,
                 'include_fractional_children': True,
+                'include_margin_percent': include_purchase_margin(request.user),
             },
         )
         return Response(serializer.data, status=status.HTTP_200_OK)
