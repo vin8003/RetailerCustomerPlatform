@@ -1,0 +1,35 @@
+# Seasonal flag on retailer product search
+
+- **Ticket:** [OE-294](https://vin8003.atlassian.net/browse/OE-294) · [snapshot](../tickets/OE-294.md)
+- **Implementation:** EXTEND (echo existing `Product.is_seasonal` on search)
+- **Related:** [search-pos-brand-name.md](search-pos-brand-name.md) (OE-287), [search-barcode.md](search-barcode.md) (OE-290), [search-category-name.md](search-category-name.md) (OE-291), [search-original-price.md](search-original-price.md) (OE-293)
+
+Retailer product search includes top-level `is_seasonal` with the same value already returned by list/detail/POS `no_page` (`Product.is_seasonal`). This is a field echo, not seasonal write or policy.
+
+## EXISTING / EXTEND / NEW
+
+| Piece | Status |
+|-------|--------|
+| `is_seasonal` on list / detail serializers | EXISTING |
+| `is_seasonal` on POS `?no_page=true` row dict | EXISTING |
+| `is_seasonal` on `ProductSearchSerializer` | EXTEND (OE-294) |
+| Seasonal write / policy APIs | Out of scope |
+
+## API
+
+| Method | Path | Who | `is_seasonal` |
+|--------|------|-----|---------------|
+| GET | `/api/products/search/` | Authenticated retailer | Same as list/detail/POS (`Product.is_seasonal`) |
+| GET | `/api/products/` | Authenticated retailer | EXISTING |
+| GET | `/api/products/<id>/` | Authenticated retailer | EXISTING |
+| GET | `/api/products/?no_page=true` | Authenticated retailer | EXISTING |
+| GET | `/api/products/retailer/<id>/` (public) | Customer / anonymous | EXISTING |
+| GET | `/api/products/retailer/<id>/search/` (public) | Customer / anonymous | Additive via shared search serializer (same value as public list) |
+
+`false` stays `false` (same as list). Do not omit the key when false.
+
+Unauthenticated retailer search → **401**. Customer → **403**. Tenant B cannot read tenant A's SKU.
+
+## Not in this change
+
+Seasonal write/policy, FE, GST, pack write, inventory.adjust, timeline/OFD/khata/UPI/slots, Jira Done, live `*.ordereasy.win`.
