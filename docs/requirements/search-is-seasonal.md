@@ -2,7 +2,7 @@
 
 - **Ticket:** [OE-294](https://vin8003.atlassian.net/browse/OE-294) · [snapshot](../tickets/OE-294.md)
 - **Implementation:** EXTEND (echo existing `Product.is_seasonal` on search)
-- **Related:** [search-pos-brand-name.md](search-pos-brand-name.md) (OE-287), [search-barcode.md](search-barcode.md) (OE-290), [search-category-name.md](search-category-name.md) (OE-291), [search-original-price.md](search-original-price.md) (OE-293), [search-product-group.md](search-product-group.md) (OE-295)
+- **Related:** [search-pos-brand-name.md](search-pos-brand-name.md) (OE-287), [search-barcode.md](search-barcode.md) (OE-290), [search-category-name.md](search-category-name.md) (OE-291), [search-original-price.md](search-original-price.md) (OE-293), [search-product-group.md](search-product-group.md) (OE-295), [search-discounted-price.md](search-discounted-price.md) (OE-298)
 
 Retailer product search includes top-level `is_seasonal` with the same value already returned by list/detail/POS `no_page` (`Product.is_seasonal`). This is a field echo, not seasonal write or policy.
 
