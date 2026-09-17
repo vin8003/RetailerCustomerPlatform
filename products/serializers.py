@@ -267,13 +267,19 @@ class ProductBatchSerializer(serializers.ModelSerializer):
     """
     Serializer for product batches
     """
+    is_expired = serializers.SerializerMethodField()
+
     class Meta:
         model = ProductBatch
         fields = [
             'id', 'batch_number', 'barcode', 'purchase_price',
             'price', 'original_price', 'quantity', 'is_active', 'show_on_app',
             'expiry_date',
+            'is_expired',
         ]
+
+    def get_is_expired(self, obj):
+        return obj.is_expired()
 
 
 class ExpiringBatchListSerializer(ProductBatchSerializer):
