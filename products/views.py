@@ -452,6 +452,9 @@ def get_retailer_products(request):
                     'has_batches': p.has_batches,
                     'batches': batches,
                     'group_variants': safe_group_variants_payload(p, pos_variant_context),
+                    'is_parent_bulk': p.is_parent_bulk,
+                    'parent_bulk_product': p.parent_bulk_product_id,
+                    'conversion_factor': p.conversion_factor,
                     'fractional_children': fractional_children_payload(
                         p, pos_variant_context
                     ),
