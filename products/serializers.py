@@ -118,6 +118,33 @@ class FractionalChildReadSerializer(serializers.ModelSerializer):
         return json_qty(obj.saleable_quantity())
 
 
+def active_fractional_children(obj):
+    """Same-shop active pack children; uses prefetch when present."""
+    cached = getattr(obj, '_prefetched_objects_cache', {}).get(
+        'fractional_children'
+    )
+    if cached is not None:
+        children = cached
+    else:
+        children = obj.fractional_children.filter(is_active=True)
+    return [
+        child
+        for child in children
+        if child.is_active and child.retailer_id == obj.retailer_id
+    ]
+
+
+def fractional_children_payload(obj, context=None):
+    """Same child rows list/detail return. Non-parent → []."""
+    if not obj.is_parent_bulk:
+        return []
+    return FractionalChildReadSerializer(
+        active_fractional_children(obj),
+        many=True,
+        context={**(context or {}), 'pack_parent': obj},
+    ).data
+
+
 class FractionalChildrenReadMixin:
     """Retailer reads expose active pack children on parent SKUs; else [].
 
@@ -130,28 +157,10 @@ class FractionalChildrenReadMixin:
     def _include_fractional_children(self):
         return bool(self.context.get('include_fractional_children'))
 
-    def _active_fractional_children(self, obj):
-        cached = getattr(obj, '_prefetched_objects_cache', {}).get(
-            'fractional_children'
-        )
-        if cached is not None:
-            children = cached
-        else:
-            children = obj.fractional_children.filter(is_active=True)
-        return [
-            child
-            for child in children
-            if child.is_active and child.retailer_id == obj.retailer_id
-        ]
-
     def get_fractional_children(self, obj):
-        if not self._include_fractional_children() or not obj.is_parent_bulk:
+        if not self._include_fractional_children():
             return []
-        return FractionalChildReadSerializer(
-            self._active_fractional_children(obj),
-            many=True,
-            context={**self.context, 'pack_parent': obj},
-        ).data
+        return fractional_children_payload(obj, self.context)
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -560,13 +569,14 @@ class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, 
             return False
 
 
-class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Lightweight serializer for product search results
     """
     image = serializers.SerializerMethodField()
     batches = serializers.SerializerMethodField()
     saleable_quantity = serializers.SerializerMethodField()
+    fractional_children = serializers.SerializerMethodField()
     group_variants = serializers.SerializerMethodField()
     margin_percent = serializers.SerializerMethodField()
 
@@ -576,7 +586,7 @@ class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
         fields = [
             'id', 'name', 'price', 'app_price', 'unit', 'image', 'track_inventory',
             'quantity', 'saleable_quantity', 'margin_percent', 'has_batches', 'batches',
-            'group_variants',
+            'fractional_children', 'group_variants',
         ]
         
     def get_batches(self, obj):
