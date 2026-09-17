@@ -12,7 +12,7 @@ from rest_framework import status
 
 from authentication.models import User
 from products.models import Product, ProductCategory
-from retailers.models import RetailerProfile
+from retailers.models import OrgRole, OrgStaffMembership, RetailerProfile
 from retailers.organization import ensure_organization_for_profile
 
 
@@ -43,6 +43,43 @@ def _make_customer(username):
         email=f"{username}@test.com",
         password="TestPass123!",
         user_type="customer",
+        is_active=True,
+    )
+
+
+def _make_staff(org, username, permissions):
+    user = User.objects.create_user(
+        username=username,
+        email=f"{username}@test.com",
+        password="TestPass123!",
+        user_type="retailer",
+        is_active=True,
+    )
+    role = OrgRole.objects.create(
+        organization=org,
+        slug=f"role_{username}",
+        name=f"Role {username}",
+        permissions=list(permissions),
+        is_system=False,
+    )
+    OrgStaffMembership.objects.create(
+        organization=org,
+        user=user,
+        role=role,
+        is_active=True,
+    )
+    return user
+
+
+def _make_location_profile(user, org, shop_name):
+    return RetailerProfile.objects.create(
+        user=user,
+        organization=org,
+        shop_name=shop_name,
+        address_line1="2 Side",
+        city="City",
+        state="State",
+        pincode="110002",
         is_active=True,
     )
 
@@ -101,12 +138,14 @@ class TestPosNoPageUnit:
         api_client.force_authenticate(user=owner)
         listed = _list(api_client)
         pos = _pos(api_client)
+        search = api_client.get(reverse("search_products"), {"search": "OE286"})
         kg_detail = _detail(api_client, kg.id)
         pack_detail = _detail(api_client, pack.id)
         default_detail = _detail(api_client, default.id)
 
         assert listed.status_code == status.HTTP_200_OK
         assert pos.status_code == status.HTTP_200_OK
+        assert search.status_code == status.HTTP_200_OK
         assert kg_detail.status_code == status.HTTP_200_OK
         assert pack_detail.status_code == status.HTTP_200_OK
         assert default_detail.status_code == status.HTTP_200_OK
@@ -117,10 +156,12 @@ class TestPosNoPageUnit:
             (default, "piece", default_detail.data),
         ):
             list_row = _row_by_id(listed.data, product.id)
+            search_row = _row_by_id(search.data, product.id)
             pos_row = _row_by_id(pos.data, product.id)
             assert "unit" in pos_row
             assert pos_row["unit"] == expected
             assert pos_row["unit"] == list_row["unit"]
+            assert pos_row["unit"] == search_row["unit"]
             assert pos_row["unit"] == detail["unit"]
 
     def test_empty_unit_stays_empty_like_list(self, api_client):
@@ -189,6 +230,8 @@ class TestPosNoPageUnit:
         assert public.status_code == status.HTTP_200_OK
         row = _row_by_id(public.data, product.id)
         assert row["unit"] == "liter"
+        assert "saleable_quantity" not in row
+        assert "margin_percent" not in row
 
     def test_pos_keeps_oe285_pack_identity(self, api_client):
         owner, shop = _make_retailer("oe286_pack_own", "OE286 Pack Shop")
@@ -232,6 +275,26 @@ class TestPosNoPageUnit:
         assert pos_child["is_parent_bulk"] is False
         assert pos_child["parent_bulk_product"] == parent.id
         assert Decimal(str(pos_child["conversion_factor"])) == Decimal("0.1000")
+
+    def test_cashier_sees_unit_omits_margin(self, api_client):
+        owner, shop = _make_retailer("oe286_cash_own", "OE286 Cash Shop")
+        cashier = _make_staff(shop.organization, "oe286_cashier", [])
+        loc = _make_location_profile(cashier, shop.organization, "OE286 Cash Loc")
+        category = _make_category(loc, "OE286 Cash Cat")
+        product = _make_product(
+            loc,
+            category,
+            "OE286 Cash Sugar",
+            unit="kg",
+            purchase_price=Decimal("7.00"),
+        )
+
+        api_client.force_authenticate(user=cashier)
+        pos = _pos(api_client)
+        assert pos.status_code == status.HTTP_200_OK
+        row = _row_by_id(pos.data, product.id)
+        assert row["unit"] == "kg"
+        assert "margin_percent" not in row
 
     def test_pos_keeps_oe284_margin_percent(self, api_client):
         owner, shop = _make_retailer("oe286_margin_own", "OE286 Margin Shop")
