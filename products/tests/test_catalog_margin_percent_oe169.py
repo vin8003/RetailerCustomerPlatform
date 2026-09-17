@@ -254,10 +254,18 @@ class TestCatalogMarginPercentReads:
         api_client.force_authenticate(user=owner)
         listed = api_client.get(reverse("get_retailer_products"))
         detail = api_client.get(reverse("get_product_detail", args=[product.id]))
+        search = api_client.get(
+            reverse("search_products"), {"search": "OE169 Unbought"}
+        )
 
         assert listed.status_code == status.HTTP_200_OK, listed.data
         assert detail.status_code == status.HTTP_200_OK, detail.data
-        for row in (_row_by_id(listed.data, product.id), detail.data):
+        assert search.status_code == status.HTTP_200_OK, search.data
+        for row in (
+            _row_by_id(listed.data, product.id),
+            detail.data,
+            _row_by_id(search.data, product.id),
+        ):
             assert "margin_percent" in row
             assert row["margin_percent"] is None
             assert row["margin_percent"] != 0

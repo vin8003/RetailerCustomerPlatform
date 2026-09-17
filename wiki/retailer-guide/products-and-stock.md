@@ -16,7 +16,6 @@ Open **Products** to see everything in your catalog. Each product typically has:
 | Category | Organisation and browsing |
 | Stock quantity | Total on-hand (includes expired lots still on the shelf) |
 | Saleable quantity | How many can be sold now (excludes expired lots) |
-| Margin % | Purchase-role only. Selling price versus draft cost or last purchase cost. Blank when cost is unknown — not shown as zero |
 | Images | Photos for customer app |
 | Active / inactive | Hide without deleting |
 

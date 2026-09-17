@@ -64,11 +64,10 @@ class PurchaseMarginReadMixin:
         if not self._include_margin_percent():
             return None
         cache = self.context.get('last_pi_cost_by_product_id')
-        if cache is not None:
-            if obj.purchase_price is not None:
-                cost = obj.purchase_price
-            else:
-                cost = cache.get(obj.id)
+        if obj.purchase_price is not None:
+            cost = obj.purchase_price
+        elif cache is not None:
+            cost = cache.get(obj.id)
         else:
             cost, _source = draft_or_last_pi_cost(obj)
         margin = selling_margin_percent(obj.price, cost)
