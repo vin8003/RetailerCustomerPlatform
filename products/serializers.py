@@ -190,6 +190,15 @@ def group_variants_payload(obj, context):
     ]
 
 
+def safe_group_variants_payload(obj, context):
+    """Same as group_variants_payload; catalog reads stay [] on helper errors."""
+    try:
+        return group_variants_payload(obj, context)
+    except Exception as e:
+        logger.error(f"Error getting group variants: {e}")
+        return []
+
+
 class GroupVariantsListSerializer(serializers.ListSerializer):
     """Prefetch group siblings once for a multi-product payload."""
 
@@ -209,11 +218,7 @@ class GroupVariantsReadMixin:
     group_variants = serializers.SerializerMethodField()
 
     def get_group_variants(self, obj):
-        try:
-            return group_variants_payload(obj, self.context)
-        except Exception as e:
-            logger.error(f"Error getting group variants: {e}")
-            return []
+        return safe_group_variants_payload(obj, self.context)
 
 
 def parent_bulk_cycle_exists(child_pk, parent_product):

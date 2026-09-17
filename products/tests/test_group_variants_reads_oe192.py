@@ -155,6 +155,13 @@ class TestGroupVariantsRetailerList:
             product_group="oe192-rice",
             is_active=False,
         )
+        unavailable = _make_product(
+            shop,
+            category,
+            "OE192 Rice hold",
+            product_group="oe192-rice",
+            is_available=False,
+        )
 
         api_client.force_authenticate(user=owner)
         detail = api_client.get(reverse("get_product_detail", args=[rice_1.id]))
@@ -166,6 +173,7 @@ class TestGroupVariantsRetailerList:
         _assert_same_shape_as_detail(list_row, detail.data)
         assert _variant_ids(list_row) == [rice_5.id]
         assert inactive.id not in _variant_ids(list_row)
+        assert unavailable.id not in _variant_ids(list_row)
         sibling = list_row["group_variants"][0]
         assert sibling["name"] == rice_5.name
         assert sibling["unit"] == rice_5.unit
@@ -217,7 +225,6 @@ class TestGroupVariantsRetailerList:
         assert cust_list.status_code == status.HTTP_403_FORBIDDEN
         assert cust_search.status_code == status.HTTP_403_FORBIDDEN
         assert cust_pos.status_code == status.HTTP_403_FORBIDDEN
-        assert product.id
 
     def test_no_cross_tenant_siblings(self, api_client):
         _owner_a, shop_a = _make_retailer("oe192_ten_a", "OE192 Tenant A")
@@ -337,6 +344,29 @@ class TestGroupVariantsSearchAndPos:
         assert pos_ids == [b2.id]
         assert a1.id not in search_ids
         assert a1.id not in pos_ids
+
+    def test_search_avoids_per_product_sibling_lookup(self, api_client):
+        owner, shop = _make_retailer("oe192_search_q", "OE192 Search Query")
+        category = _make_category(shop, "OE192 Search Query Cat")
+        grouped = []
+        for i in range(3):
+            grouped.extend(
+                _make_group(
+                    shop, category, f"OE192 SQ{i + 1}", f"oe192-sq{i + 1}"
+                )
+            )
+
+        api_client.force_authenticate(user=owner)
+        with CaptureQueriesContext(connection) as search_ctx:
+            search = api_client.get(reverse("search_products"))
+
+        assert search.status_code == status.HTTP_200_OK
+        lookups = _group_sibling_lookups(search_ctx.captured_queries)
+        assert len(lookups) == 1
+        assert " in (" in lookups[0].lower()
+        for product in grouped:
+            row = _row_by_id(search.data, product.id)
+            assert len(row["group_variants"]) == 1
 
     def test_pos_avoids_per_product_sibling_lookup(self, api_client):
         owner, shop = _make_retailer("oe192_pos_q", "OE192 POS Query")

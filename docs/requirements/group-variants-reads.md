@@ -27,6 +27,8 @@ This is not a size/color matrix. There is no variant SKU generator.
 | GET | `/api/products/` | Authenticated retailer | Same (paginated list) |
 | GET | `/api/products/?no_page=true` | Authenticated retailer | Same (POS catalog) |
 | GET | `/api/products/search/` | Authenticated retailer | Same |
+| GET | `/api/products/retailer/<id>/` (public) | Customer / anonymous | Same field via shared list serializer |
+| GET | `/api/products/retailer/<id>/search/` (public) | Customer / anonymous | Same field via shared search serializer |
 
 Sibling rows are same-shop, `is_active=True`, and `is_available=True`. The current SKU is omitted. List/search use one `product_group IN (...)` cache so the helper does not query per product. POS `no_page` uses the same cache on the hand-built payload.
 

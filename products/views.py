@@ -34,7 +34,7 @@ from .serializers import (
     ProductUploadSessionSerializer, UploadSessionItemSerializer,
     ProductSearchSerializer,
     cache_group_siblings,
-    group_variants_payload,
+    safe_group_variants_payload,
 )
 from retailers.models import OrgAuditLog, RetailerProfile
 from common.permissions import IsRetailerOwner
@@ -431,7 +431,7 @@ def get_retailer_products(request):
                     'is_seasonal': p.is_seasonal,
                     'has_batches': p.has_batches,
                     'batches': batches,
-                    'group_variants': group_variants_payload(p, pos_variant_context),
+                    'group_variants': safe_group_variants_payload(p, pos_variant_context),
                 })
             return Response(data, status=status.HTTP_200_OK)
 
