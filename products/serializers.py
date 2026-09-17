@@ -591,6 +591,7 @@ class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
             'category_name', 'brand_name',
             'barcode',
             'is_featured',
+            'is_active',
             'is_seasonal',
             'product_group',
             'track_inventory',

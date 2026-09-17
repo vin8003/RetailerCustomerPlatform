@@ -2,7 +2,7 @@
 
 - **Ticket:** [OE-295](https://vin8003.atlassian.net/browse/OE-295) · [snapshot](../tickets/OE-295.md)
 - **Implementation:** EXTEND (echo existing `Product.product_group` on search + POS `no_page`)
-- **Related:** [group-variants-reads.md](group-variants-reads.md) (OE-192), [search-is-seasonal.md](search-is-seasonal.md) (OE-294), [search-original-price.md](search-original-price.md) (OE-293), [search-category-name.md](search-category-name.md) (OE-291), [search-barcode.md](search-barcode.md) (OE-290), [search-pos-brand-name.md](search-pos-brand-name.md) (OE-287), [search-discounted-price.md](search-discounted-price.md) (OE-298), [search-is-featured.md](search-is-featured.md) (OE-299)
+- **Related:** [group-variants-reads.md](group-variants-reads.md) (OE-192), [search-is-seasonal.md](search-is-seasonal.md) (OE-294), [search-original-price.md](search-original-price.md) (OE-293), [search-category-name.md](search-category-name.md) (OE-291), [search-barcode.md](search-barcode.md) (OE-290), [search-pos-brand-name.md](search-pos-brand-name.md) (OE-287), [search-discounted-price.md](search-discounted-price.md) (OE-298), [search-is-featured.md](search-is-featured.md) (OE-299), [search-is-active.md](search-is-active.md) (OE-300)
 
 Retailer product search and POS `GET /api/products/?no_page=true` include top-level `product_group` with the same value already returned by list/detail (`Product.product_group`). This is a field echo, not a group matrix and not variant SKU invent. Sibling `group_variants` already ships (OE-192).
 
