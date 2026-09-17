@@ -586,6 +586,7 @@ class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
         list_serializer_class = GroupVariantsListSerializer
         fields = [
             'id', 'name', 'price', 'app_price', 'unit', 'image', 'brand_name',
+            'barcode',
             'track_inventory',
             'quantity', 'saleable_quantity', 'margin_percent', 'has_batches', 'batches',
             'is_parent_bulk', 'parent_bulk_product', 'conversion_factor',
