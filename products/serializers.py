@@ -34,6 +34,30 @@ class ChannelPriceRepresentationMixin:
         return apply_channel_price_representation(data, instance, self.context)
 
 
+def product_model_has_is_perishable():
+    """True when Product declares an ``is_perishable`` model field."""
+    try:
+        Product._meta.get_field('is_perishable')
+    except FieldDoesNotExist:
+        return False
+    return True
+
+
+class OptionalIsPerishableReadMixin:
+    """Echo ``is_perishable`` only when the Product model field exists.
+
+    Do not list this key on Meta.fields — ModelSerializer would bind a
+    missing column and crash on environments that have not added it.
+    """
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if not product_model_has_is_perishable():
+            return data
+        data['is_perishable'] = bool(getattr(instance, 'is_perishable', False))
+        return data
+
+
 def json_qty(val):
     """Match existing quantity SerializerMethodField JSON shape."""
     if val is None:
@@ -267,30 +291,6 @@ class GroupVariantsListSerializer(serializers.ListSerializer):
                 last_pi_unit_costs_by_product_id(products)
             )
         return super().to_representation(products)
-
-
-def product_model_has_is_perishable():
-    """True when Product has a concrete ``is_perishable`` model field."""
-    try:
-        Product._meta.get_field('is_perishable')
-    except FieldDoesNotExist:
-        return False
-    return True
-
-
-class OptionalIsPerishableReadMixin:
-    """Echo ``is_perishable`` only when the Product model field exists.
-
-    Do not list this key on Meta.fields — ModelSerializer would bind a
-    missing column and crash on environments that have not added it.
-    """
-
-    def to_representation(self, instance):
-        data = super().to_representation(instance)
-        if not product_model_has_is_perishable():
-            return data
-        data['is_perishable'] = bool(getattr(instance, 'is_perishable', False))
-        return data
 
 
 class GroupVariantsReadMixin:

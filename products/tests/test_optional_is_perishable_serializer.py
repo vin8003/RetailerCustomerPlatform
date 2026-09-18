@@ -135,7 +135,13 @@ class TestOptionalIsPerishableSerializers:
         assert "is_perishable" not in serializer_cls.Meta.fields
 
     @pytest.mark.parametrize("serializer_cls", READ_SERIALIZERS)
-    def test_omits_key_when_model_field_missing(self, serializer_cls, product):
+    def test_omits_key_when_model_field_missing(
+        self, serializer_cls, product, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "products.serializers.product_model_has_is_perishable",
+            lambda: False,
+        )
         product.image_url = DUMMY_IMAGE_URL
         product.save(update_fields=["image_url"])
         product.is_perishable = True
@@ -191,7 +197,13 @@ class TestOptionalIsPerishableSerializers:
 
 @pytest.mark.django_db
 class TestOptionalIsPerishableHttpSmoke:
-    def test_retailer_list_and_search_omit_key_and_stay_dummy(self, api_client):
+    def test_retailer_list_and_search_omit_key_and_stay_dummy(
+        self, api_client, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "products.serializers.product_model_has_is_perishable",
+            lambda: False,
+        )
         owner, shop = _make_retailer("isp_list_own", "ISP Dummy Shop")
         category = _make_category(shop, "ISP Dummy Cat")
         sku = _make_dummy_product(shop, category, "ISP Dummy Milk")
