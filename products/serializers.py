@@ -387,6 +387,18 @@ class ProductReviewSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'customer_name', 'is_verified_purchase', 'created_at']
 
 
+def product_color(product):
+    """Echo Product.color when the attribute exists; otherwise None.
+
+    Product has no color column on this stack (size/color matrix is out of
+    scope). Missing attribute, missing product, and stored null all pass
+    through as None. Empty string stays empty — do not invent a color.
+    """
+    if product is None:
+        return None
+    return getattr(product, "color", None)
+
+
 class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product list view
@@ -409,6 +421,8 @@ class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, 
     margin_percent = serializers.SerializerMethodField()
     minimum_order_quantity = serializers.SerializerMethodField()
     maximum_order_quantity = serializers.SerializerMethodField()
+    # Optional echo when Product.color exists. Null/missing → null.
+    color = serializers.SerializerMethodField()
     class Meta:
         model = Product
         list_serializer_class = GroupVariantsListSerializer
@@ -424,7 +438,11 @@ class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, 
             'active_offer_text', 'is_wishlisted', 'barcode', 'has_batches', 'batches',
             'is_parent_bulk', 'parent_bulk_product', 'conversion_factor',
             'fractional_children', 'group_variants',
+            'color',
         ]
+
+    def get_color(self, obj):
+        return product_color(obj)
 
     def get_quantity(self, obj):
         val = obj.quantity
