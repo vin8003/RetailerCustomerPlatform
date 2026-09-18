@@ -2,7 +2,7 @@ from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
-from django.db.models import Q, Sum
+from django.db.models import Prefetch, Q, Sum
 from decimal import Decimal
 from .models import SalesReturn, PurchaseReturn, SalesReturnItem, PurchaseReturnItem
 from .serializers import SalesReturnSerializer, PurchaseReturnSerializer
@@ -17,7 +17,12 @@ class SalesReturnViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         retailer = RetailerProfile.objects.get(user=self.request.user)
-        return SalesReturn.objects.filter(retailer=retailer)
+        return SalesReturn.objects.filter(retailer=retailer).prefetch_related(
+            Prefetch(
+                'items',
+                queryset=SalesReturnItem.objects.select_related('product', 'batch'),
+            )
+        )
 
     @action(detail=False, methods=['get'])
     def search_order(self, request):
