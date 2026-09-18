@@ -22,6 +22,8 @@ Retailer product **list** may include top-level `gross_weight`. If the product i
 | GET | `/api/products/` | Authenticated retailer | Present only when `hasattr(product, 'gross_weight')` |
 | GET | `/api/products/retailer/<id>/` (public) | Customer / anonymous | Same omit-if-missing via shared list serializer |
 
+Other `ProductListSerializer` callers (featured / seasonal / similar catalog list routes) inherit the same optional key. POS `?no_page=true` is a hand-built dict and stays without `gross_weight`.
+
 Missing attribute → key omitted. Null stays null. Do not coerce to `0`.
 
 Unauthenticated retailer list → **401**. Customer → **403**. Tenant B cannot read tenant A's SKU.

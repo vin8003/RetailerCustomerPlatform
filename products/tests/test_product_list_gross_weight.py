@@ -8,6 +8,7 @@ Does not touch ProductSearchSerializer Meta, POS no_page, or detail.
 Dummy / local only — never *.ordereasy.win.
 """
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -115,7 +116,6 @@ def _product_table_reads(captured):
     ]
 
 
-@pytest.mark.django_db
 class TestProductGrossWeightHelper:
     def test_missing_attribute_is_absent(self):
         assert not hasattr(Product, "gross_weight")
@@ -138,6 +138,11 @@ class TestProductGrossWeightHelper:
         assert product_gross_weight(dummy) is None
         assert product_gross_weight(dummy) != 0
         assert product_gross_weight(dummy) != Decimal("0")
+
+    def test_stored_zero_is_echoed(self):
+        dummy = SimpleNamespace(gross_weight=Decimal("0"))
+        assert product_has_gross_weight(dummy) is True
+        assert product_gross_weight(dummy) == Decimal("0")
 
 
 @pytest.mark.django_db
@@ -181,6 +186,16 @@ class TestProductListGrossWeight:
         assert data["gross_weight"] is None
         assert data["gross_weight"] != 0
         assert data["gross_weight"] != "0.00"
+
+    def test_serializer_echoes_stored_zero(self):
+        owner, shop = _make_retailer("list_gw_zero_own", "List GW Zero Shop")
+        category = _make_category(shop, "List GW Zero Cat")
+        product = _make_product(shop, category, "List GW Zero Oil")
+        product.gross_weight = Decimal("0")
+
+        data = ProductListSerializer(product).data
+        assert "gross_weight" in data
+        assert Decimal(str(data["gross_weight"])) == Decimal("0")
 
     def test_unauthenticated_and_customer_denied(self, api_client):
         owner, shop = _make_retailer("list_gw_auth_own", "List GW Auth Shop")
@@ -261,6 +276,10 @@ class TestProductListGrossWeight:
         assert "gross_weight" not in detail.data
         assert "gross_weight" not in ProductDetailSerializer(product).data
         assert "gross_weight" not in ProductSearchSerializer(product).data
+
+    def test_pos_view_source_does_not_assign_gross_weight(self):
+        source = Path("products/views.py").read_text(encoding="utf-8")
+        assert "gross_weight" not in source
 
     def test_public_list_omits_key_when_field_missing(self, api_client):
         _owner, shop = _make_retailer("list_gw_pub_own", "List GW Public Shop")
