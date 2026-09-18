@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from decimal import Decimal
+from django.core.exceptions import FieldDoesNotExist
 from django.db import transaction
 from django.db.models import Avg, F, Sum
 from returns.models import PurchaseReturnItem
@@ -268,6 +269,30 @@ class GroupVariantsListSerializer(serializers.ListSerializer):
         return super().to_representation(products)
 
 
+def product_model_has_is_perishable():
+    """True when Product has a concrete ``is_perishable`` model field."""
+    try:
+        Product._meta.get_field('is_perishable')
+    except FieldDoesNotExist:
+        return False
+    return True
+
+
+class OptionalIsPerishableReadMixin:
+    """Echo ``is_perishable`` only when the Product model field exists.
+
+    Do not list this key on Meta.fields — ModelSerializer would bind a
+    missing column and crash on environments that have not added it.
+    """
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if not product_model_has_is_perishable():
+            return data
+        data['is_perishable'] = bool(getattr(instance, 'is_perishable', False))
+        return data
+
+
 class GroupVariantsReadMixin:
     """Same-shop product_group siblings; empty group → [].
 
@@ -387,7 +412,7 @@ class ProductReviewSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'customer_name', 'is_verified_purchase', 'created_at']
 
 
-class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductListSerializer(OptionalIsPerishableReadMixin, PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product list view
     """
@@ -569,7 +594,7 @@ class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, 
             return False
 
 
-class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductSearchSerializer(OptionalIsPerishableReadMixin, PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Lightweight serializer for product search results
     """
@@ -627,7 +652,7 @@ class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
             logger.error(f"Error getting brand name: {e}")
             return None
 
-class ProductDetailSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductDetailSerializer(OptionalIsPerishableReadMixin, PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product detail view
     """
