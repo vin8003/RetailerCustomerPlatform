@@ -49,6 +49,38 @@ _MARGIN_PERCENT = serializers.DecimalField(
 )
 
 
+_NET_WEIGHT = serializers.DecimalField(
+    max_digits=12, decimal_places=3, allow_null=True
+)
+
+
+def product_net_weight(product):
+    """Echo Product.net_weight when the attribute exists; otherwise None.
+
+    Product has no net_weight column on this stack. Missing attribute and
+    stored null pass through as None. Do not invent a weight.
+    """
+    if product is None:
+        return None
+    value = getattr(product, "net_weight", None)
+    if value is None:
+        return None
+    return _NET_WEIGHT.to_representation(value)
+
+
+class OptionalNetWeightReadMixin:
+    """Include net_weight without declaring it on Meta.fields.
+
+    Search Meta is locked and the model field is not present. Inject after
+    the standard representation so list/search/detail stay aligned.
+    """
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["net_weight"] = product_net_weight(instance)
+        return data
+
+
 class PurchaseMarginReadMixin:
     """Purchase-role catalog reads expose margin%; cashiers/public omit it.
 
@@ -387,7 +419,7 @@ class ProductReviewSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'customer_name', 'is_verified_purchase', 'created_at']
 
 
-class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductListSerializer(OptionalNetWeightReadMixin, PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product list view
     """
@@ -569,7 +601,7 @@ class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, 
             return False
 
 
-class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductSearchSerializer(OptionalNetWeightReadMixin, PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Lightweight serializer for product search results
     """
@@ -627,7 +659,7 @@ class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
             logger.error(f"Error getting brand name: {e}")
             return None
 
-class ProductDetailSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductDetailSerializer(OptionalNetWeightReadMixin, PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product detail view
     """
