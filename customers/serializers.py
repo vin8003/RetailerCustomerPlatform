@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
+from django.core.exceptions import FieldDoesNotExist
 from .models import CustomerProfile, CustomerAddress, CustomerWishlist, CustomerNotification
 from products.channel_price import (
     channel_from_context,
@@ -10,6 +11,49 @@ from products.models import Product
 from retailers.models import CustomerLedger
 
 User = get_user_model()
+
+
+def model_has_locality(model):
+    """True when the Django model declares a `locality` field."""
+    if model is None:
+        return False
+    try:
+        model._meta.get_field('locality')
+    except (FieldDoesNotExist, AttributeError):
+        return False
+    return True
+
+
+def customer_locality(*candidates):
+    """Echo locality when the attribute exists; otherwise None.
+
+    None candidate, missing attribute, and stored null all pass through
+    as None. Empty string stays empty — do not invent a locality.
+    """
+    for obj in candidates:
+        if obj is None:
+            continue
+        if hasattr(obj, 'locality'):
+            return getattr(obj, 'locality')
+    return None
+
+
+def resolve_customer_detail_locality(user, mapping=None, profile=None):
+    """Detail-only locality. Skip address lookup when no model has the field."""
+    loaded = customer_locality(mapping, profile, user)
+    if any(
+        obj is not None and hasattr(obj, 'locality')
+        for obj in (mapping, profile, user)
+    ):
+        return loaded
+    if model_has_locality(CustomerAddress):
+        address = (
+            CustomerAddress.objects.filter(customer=user, is_active=True)
+            .order_by('-is_default', '-id')
+            .first()
+        )
+        return customer_locality(address)
+    return None
 
 
 class CustomerProfileSerializer(serializers.ModelSerializer):
@@ -223,6 +267,8 @@ class RetailerCustomerDetailSerializer(serializers.Serializer):
     credit_limit = serializers.DecimalField(max_digits=12, decimal_places=2)
     current_balance = serializers.DecimalField(max_digits=12, decimal_places=2)
     credit_due_days = serializers.IntegerField(allow_null=True, required=False)
+    # Optional echo when mapping/profile/user/address has locality. Missing → null.
+    locality = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     
     # Additional detail fields
     recent_orders = serializers.ListField()

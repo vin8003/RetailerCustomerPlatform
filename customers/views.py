@@ -18,7 +18,7 @@ from .serializers import (
     CustomerProfileSerializer, CustomerAddressSerializer, CustomerAddressUpdateSerializer,
     CustomerWishlistSerializer, CustomerNotificationSerializer, CustomerDashboardSerializer,
     RetailerCustomerListSerializer, RetailerCustomerDetailSerializer,
-    CustomerLedgerSerializer,
+    CustomerLedgerSerializer, resolve_customer_detail_locality,
 )
 from retailers.models import RetailerProfile, RetailerRewardConfig, RetailerBlacklist, RetailerCustomerMapping, CustomerLedger
 from retailers.serializers import RetailerRewardConfigSerializer
@@ -1200,6 +1200,7 @@ def get_customer_details_for_retailer(request, customer_id):
             'credit_limit': mapping.credit_limit,
             'current_balance': mapping.current_balance,
             'credit_due_days': mapping.credit_due_days,
+            'locality': resolve_customer_detail_locality(user, mapping, profile),
             'recent_orders': recent_orders_data,
             'reward_history': reward_history,
             'retailer_ratings': my_ratings
