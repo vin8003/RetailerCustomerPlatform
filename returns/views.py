@@ -56,6 +56,7 @@ class SalesReturnViewSet(viewsets.ModelViewSet):
                     'available_qty': max(0, item.quantity - returned_qty),
                     'unit_price': item.unit_price,
                     'batch_id': item.batch_id,
+                    'unit': item.product.unit,
                 })
 
             results.append({
