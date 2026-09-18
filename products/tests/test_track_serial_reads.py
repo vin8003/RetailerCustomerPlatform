@@ -6,7 +6,6 @@ Product has no such column. Do not add Meta.fields (that would crash
 if the field is missing). Dummy objects only — no live *.ordereasy.win.
 """
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
 from django.core.exceptions import FieldDoesNotExist
@@ -119,29 +118,39 @@ def test_list_detail_search_echo_dummy_true_when_helper_true(product, monkeypatc
 
 
 @pytest.mark.django_db
-def test_list_serializer_false_dummy_value_when_helper_true(product, monkeypatch):
+def test_list_detail_search_echo_dummy_false_when_helper_true(product, monkeypatch):
     monkeypatch.setattr(
         'products.serializers.product_has_track_serial_field',
         lambda model=None: True,
     )
     product.track_serial = False
-    data = ProductListSerializer(product).data
-    assert data['track_serial'] is False
+    for serializer_cls in (
+        ProductListSerializer,
+        ProductDetailSerializer,
+        ProductSearchSerializer,
+    ):
+        data = serializer_cls(product).data
+        assert data['track_serial'] is False
 
 
 @pytest.mark.django_db
-def test_list_serializer_null_dummy_value_when_helper_true(product, monkeypatch):
+def test_list_detail_search_echo_dummy_null_when_helper_true(product, monkeypatch):
     monkeypatch.setattr(
         'products.serializers.product_has_track_serial_field',
         lambda model=None: True,
     )
     product.track_serial = None
-    data = ProductListSerializer(product).data
-    assert data['track_serial'] is None
+    for serializer_cls in (
+        ProductListSerializer,
+        ProductDetailSerializer,
+        ProductSearchSerializer,
+    ):
+        data = serializer_cls(product).data
+        assert data['track_serial'] is None
 
 
-def test_mixin_does_not_hit_live_hosts():
-    """Guard: this slice stays dummy/local — never call *.ordereasy.win."""
+def test_dummy_payload_stays_local():
+    """Dummy objects only — never call or embed *.ordereasy.win."""
     dummy = SimpleNamespace(track_serial=True)
     data = attach_track_serial(
         {'name': 'Dummy Serial Rice'},
@@ -149,13 +158,5 @@ def test_mixin_does_not_hit_live_hosts():
         model=_dummy_model({'track_serial'}),
     )
     assert data['track_serial'] is True
+    assert data['name'] == 'Dummy Serial Rice'
     assert 'ordereasy.win' not in str(data)
-
-
-def test_attach_does_not_use_request_mocks_for_hosts():
-    request = MagicMock()
-    request.url = 'http://testserver/api/products/'
-    dummy = SimpleNamespace(track_serial=False)
-    data = attach_track_serial({}, dummy, model=_dummy_model({'track_serial'}))
-    request.get.assert_not_called()
-    assert data['track_serial'] is False

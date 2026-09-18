@@ -1,7 +1,7 @@
 # Optional track_serial on product reads
 
 - **Implementation:** EXTEND (echo `Product.track_serial` on list / detail / search **only if the model field exists**)
-- **Related:** [search-is-active.md](search-is-active.md) (optional catalog flags), [saleable-quantity-reads.md](saleable-quantity-reads.md)
+- **Related:** [search-is-active.md](search-is-active.md) (list / detail / search share the same product serializers), [saleable-quantity-reads.md](saleable-quantity-reads.md)
 
 Retailer product **reads** may include top-level `track_serial` when `Product` actually has that field. This repo's `Product` model does not declare it yet, so current payloads **omit** the key. Do not add the name to serializer `Meta.fields` — a missing model field would raise at import/bind time.
 
@@ -24,9 +24,12 @@ When the field exists, `false` stays `false` (do not omit). Null stays `null` (n
 | GET | `/api/products/` | Authenticated retailer | Present only if the model field exists |
 | GET | `/api/products/<id>/` | Authenticated retailer | Same |
 | GET | `/api/products/search/` | Authenticated retailer | Same (shared mixin; not a Meta field) |
+| GET | `/api/products/retailer/<id>/` (public) | Customer / anonymous | Same mixin on shared list serializer |
+| GET | `/api/products/retailer/<id>/search/` (public) | Customer / anonymous | Same mixin on shared search serializer |
+| GET | `/api/products/retailer/<id>/<id>/` (public) | Customer / anonymous | Same mixin on shared detail serializer |
 | GET | `/api/products/?no_page=true` | Authenticated retailer | Unchanged (hand-built POS dict) |
 
-Unauthenticated / customer / tenancy rules are unchanged. No live `*.ordereasy.win` in tests — dummy objects only.
+Public list / search / detail share these serializers, so the optional key appears there too when the model field exists. Unauthenticated / customer / tenancy rules are unchanged. No live `*.ordereasy.win` in tests — dummy objects only.
 
 ## Not in this change
 

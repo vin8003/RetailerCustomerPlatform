@@ -59,7 +59,11 @@ def product_has_track_serial_field(model=None):
 
 
 def attach_track_serial(data, instance, model=None):
-    """Echo track_serial only when the model field exists. False stays false."""
+    """Echo track_serial only when the model field exists.
+
+    Missing field → omit the key. False stays false. Null stays null
+    (do not invent False).
+    """
     if not product_has_track_serial_field(model):
         return data
     data['track_serial'] = getattr(instance, 'track_serial', None)
