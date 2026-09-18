@@ -25,6 +25,27 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def product_is_fragile(product):
+    """Echo Product.is_fragile when the attribute exists; otherwise None.
+
+    Product has no is_fragile column on this stack. Missing attribute,
+    missing product, and stored null all pass through as None. False stays
+    False — do not invent fragility. Do not add this key to Meta.fields.
+    """
+    if product is None:
+        return None
+    return getattr(product, "is_fragile", None)
+
+
+class FragileProductReadMixin:
+    """Optional is_fragile echo without Meta.fields (OE-362 / Avoid Meta)."""
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["is_fragile"] = product_is_fragile(instance)
+        return data
+
+
 class ChannelPriceRepresentationMixin:
     """POS/retailer sees store price + app_price; app callers see app list only."""
 
@@ -387,7 +408,7 @@ class ProductReviewSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'customer_name', 'is_verified_purchase', 'created_at']
 
 
-class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductListSerializer(FragileProductReadMixin, PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product list view
     """
@@ -627,7 +648,7 @@ class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
             logger.error(f"Error getting brand name: {e}")
             return None
 
-class ProductDetailSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductDetailSerializer(FragileProductReadMixin, PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product detail view
     """
