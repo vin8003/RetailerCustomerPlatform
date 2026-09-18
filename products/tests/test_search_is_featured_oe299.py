@@ -2,9 +2,8 @@
 OE-299 / F follow-on — is_featured on retailer search.
 
 Same Product.is_featured as list/detail. False stays false (do not
-omit). POS no_page does not expose this field; this slice does not
-add it there. Public search shares the serializer.
-Auth/tenancy unchanged. READ only.
+omit). POS no_page echo of this field is OE-302. Public search
+shares the serializer. Auth/tenancy unchanged. READ only.
 """
 from decimal import Decimal
 
@@ -191,7 +190,9 @@ class TestSearchIsFeatured:
             assert search_row["is_featured"] is expected
             assert search_row["is_featured"] == list_row["is_featured"]
             assert search_row["is_featured"] == detail["is_featured"]
-            assert "is_featured" not in pos_row
+            assert "is_featured" in pos_row
+            assert pos_row["is_featured"] is expected
+            assert pos_row["is_featured"] == list_row["is_featured"]
             _assert_prior_search_fields(search_row, list_row, pos_row)
 
     def test_false_is_featured_stays_false(self, api_client):
@@ -329,4 +330,4 @@ class TestSearchIsFeatured:
         assert product_b.id in pos_ids
         assert product_b.id in search_ids
         assert _row_by_id(search.data, product_b.id)["is_featured"] is False
-        assert "is_featured" not in _row_by_id(pos.data, product_b.id)
+        assert _row_by_id(pos.data, product_b.id)["is_featured"] is False
