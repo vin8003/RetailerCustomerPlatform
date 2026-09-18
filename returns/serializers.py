@@ -4,6 +4,10 @@ from .models import SalesReturn, SalesReturnItem, PurchaseReturn, PurchaseReturn
 class SalesReturnItemSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='product.name', read_only=True)
     batch_number = serializers.CharField(source='batch.batch_number', read_only=True)
+    # OE-343 no-op: optional barcode passthrough is deferred.
+    # Product.barcode already exists, but SalesReturnItem has no barcode column.
+    # OE-313 unit is not on tip 9e697ed (#147); this serializer is still hot
+    # (PR #145). Do not echo barcode until unit lands. Do not invent a field.
 
     class Meta:
         model = SalesReturnItem
