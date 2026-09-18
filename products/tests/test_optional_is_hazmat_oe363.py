@@ -63,16 +63,25 @@ def test_detail_omits_is_hazmat_when_product_has_no_attribute(product):
 
 
 @pytest.mark.django_db
-def test_list_echoes_true_and_false_when_dummy_attribute_set(product):
+def test_list_echoes_true_false_and_null_when_dummy_attribute_set(product):
     product.is_hazmat = True
     assert ProductListSerializer(product).data["is_hazmat"] is True
 
     product.is_hazmat = False
     assert ProductListSerializer(product).data["is_hazmat"] is False
 
+    product.is_hazmat = None
+    assert ProductListSerializer(product).data["is_hazmat"] is None
+
 
 @pytest.mark.django_db
-def test_detail_echoes_null_when_dummy_attribute_set(product):
+def test_detail_echoes_true_false_and_null_when_dummy_attribute_set(product):
+    product.is_hazmat = True
+    assert ProductDetailSerializer(product).data["is_hazmat"] is True
+
+    product.is_hazmat = False
+    assert ProductDetailSerializer(product).data["is_hazmat"] is False
+
     product.is_hazmat = None
     assert ProductDetailSerializer(product).data["is_hazmat"] is None
 
