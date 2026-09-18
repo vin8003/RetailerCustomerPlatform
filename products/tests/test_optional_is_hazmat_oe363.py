@@ -9,43 +9,47 @@ from types import SimpleNamespace
 import pytest
 
 from products.serializers import (
+    ProductCreateSerializer,
     ProductDetailSerializer,
     ProductListSerializer,
     ProductSearchSerializer,
-    echo_optional_is_hazmat,
+    ProductUpdateSerializer,
+    _echo_optional_is_hazmat,
 )
 
 
 def test_helper_omits_key_when_attribute_missing():
-    payload = echo_optional_is_hazmat({}, SimpleNamespace(name="dummy-sku"))
+    payload = _echo_optional_is_hazmat({}, SimpleNamespace(name="dummy-sku"))
     assert "is_hazmat" not in payload
 
 
 def test_helper_echoes_true_when_attribute_present():
     dummy = SimpleNamespace(is_hazmat=True)
-    assert echo_optional_is_hazmat({}, dummy)["is_hazmat"] is True
+    assert _echo_optional_is_hazmat({}, dummy)["is_hazmat"] is True
 
 
 def test_helper_echoes_false_when_attribute_present():
     dummy = SimpleNamespace(is_hazmat=False)
-    assert echo_optional_is_hazmat({}, dummy)["is_hazmat"] is False
+    assert _echo_optional_is_hazmat({}, dummy)["is_hazmat"] is False
 
 
 def test_helper_echoes_null_when_attribute_present():
     dummy = SimpleNamespace(is_hazmat=None)
-    assert echo_optional_is_hazmat({}, dummy)["is_hazmat"] is None
+    assert _echo_optional_is_hazmat({}, dummy)["is_hazmat"] is None
 
 
 def test_helper_does_not_use_invented_false_on_empty_dict():
     dummy = SimpleNamespace()
-    payload = echo_optional_is_hazmat({"name": "dummy-rice"}, dummy)
+    payload = _echo_optional_is_hazmat({"name": "dummy-rice"}, dummy)
     assert payload == {"name": "dummy-rice"}
 
 
-def test_list_and_detail_meta_do_not_include_is_hazmat():
+def test_read_and_write_meta_do_not_include_is_hazmat():
     assert "is_hazmat" not in ProductListSerializer.Meta.fields
     assert "is_hazmat" not in ProductDetailSerializer.Meta.fields
     assert "is_hazmat" not in ProductSearchSerializer.Meta.fields
+    assert "is_hazmat" not in ProductCreateSerializer.Meta.fields
+    assert "is_hazmat" not in ProductUpdateSerializer.Meta.fields
 
 
 @pytest.mark.django_db

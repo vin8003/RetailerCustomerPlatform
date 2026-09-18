@@ -4,7 +4,7 @@
 - **Implementation:** EXTEND (echo instance `is_hazmat` when the attribute exists)
 - **Related:** list/detail field echoes; do not stack onto [search-is-featured.md](search-is-featured.md) Meta
 
-Retailer product list and detail include top-level `is_hazmat` only when the product instance already has that attribute (`hasattr` / `getattr`). This is a read echo, not a Product column, migration, or write path.
+Retailer product list and detail include top-level `is_hazmat` only when the product instance already has that attribute (`hasattr` / `getattr`). Public catalog list/featured/detail reuse the same serializers, so they follow the same omit/echo rule (today the key is omitted because Product has no attribute). This is a read echo, not a Product column, migration, or write path.
 
 Missing attribute → omit the key (do not invent `false`). Present `false` stays `false`. Present `null` stays `null`.
 
@@ -26,6 +26,8 @@ Do not add `is_hazmat` to serializer `Meta.fields`. Do not use model `_meta` to 
 |--------|------|-----|-------------|
 | GET | `/api/products/` | Authenticated retailer | Present only when instance has the attribute |
 | GET | `/api/products/<id>/` | Authenticated retailer | Present only when instance has the attribute |
+| GET | `/api/products/retailer/<id>/` and `/featured/` | Customer / anonymous | Same list serializer — omit today; would echo if the attribute appears |
+| GET | `/api/products/retailer/<id>/<product_id>/` | Customer / anonymous | Same detail serializer — omit today; would echo if the attribute appears |
 | GET | `/api/products/search/` | Authenticated retailer | Unchanged (no Meta add) |
 | GET | `/api/products/?no_page=true` | Authenticated retailer | Unchanged |
 

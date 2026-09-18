@@ -33,7 +33,7 @@ class ChannelPriceRepresentationMixin:
         return apply_channel_price_representation(data, instance, self.context)
 
 
-def echo_optional_is_hazmat(data, instance):
+def _echo_optional_is_hazmat(data, instance):
     """Echo is_hazmat only when the instance already has the attribute.
 
     Avoid Meta.fields and model ``_meta`` lookups. Missing attribute → omit
@@ -52,7 +52,7 @@ class OptionalIsHazmatReadMixin:
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        return echo_optional_is_hazmat(data, instance)
+        return _echo_optional_is_hazmat(data, instance)
 
 
 def json_qty(val):
