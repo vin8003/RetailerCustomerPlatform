@@ -864,7 +864,7 @@ def get_inventory_ledger(request):
 
     logs = ProductInventoryLog.objects.filter(
         product__retailer=retailer
-    ).select_related('created_by')
+    ).select_related('product', 'created_by')
     if product_id:
         try:
             product = Product.objects.get(id=product_id, retailer=retailer)
@@ -878,6 +878,9 @@ def get_inventory_ledger(request):
     for log in logs.order_by('-created_at')[:100]:
         data.append({
             'id': log.id,
+            'product_id': log.product_id,
+            'product_name': log.product.name,
+            'barcode': log.product.barcode,
             'log_type': log.log_type,
             'batch_id': log.batch_id,
             'quantity_change': log.quantity_change,
