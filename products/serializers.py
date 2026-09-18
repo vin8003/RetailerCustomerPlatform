@@ -33,6 +33,28 @@ class ChannelPriceRepresentationMixin:
         return apply_channel_price_representation(data, instance, self.context)
 
 
+def echo_optional_is_hazmat(data, instance):
+    """Echo is_hazmat only when the instance already has the attribute.
+
+    Avoid Meta.fields and model ``_meta`` lookups. Missing attribute → omit
+    (do not invent False). Present False stays False. Null stays null.
+    """
+    if hasattr(instance, 'is_hazmat'):
+        data['is_hazmat'] = getattr(instance, 'is_hazmat')
+    return data
+
+
+class OptionalIsHazmatReadMixin:
+    """Read-only is_hazmat when the product instance has the attribute.
+
+    Do not add is_hazmat to Meta.fields — Product may not have the column.
+    """
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        return echo_optional_is_hazmat(data, instance)
+
+
 def json_qty(val):
     """Match existing quantity SerializerMethodField JSON shape."""
     if val is None:
@@ -387,7 +409,7 @@ class ProductReviewSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'customer_name', 'is_verified_purchase', 'created_at']
 
 
-class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductListSerializer(OptionalIsHazmatReadMixin, PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product list view
     """
@@ -627,7 +649,7 @@ class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
             logger.error(f"Error getting brand name: {e}")
             return None
 
-class ProductDetailSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductDetailSerializer(OptionalIsHazmatReadMixin, PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product detail view
     """
