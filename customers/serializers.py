@@ -198,6 +198,10 @@ class RetailerCustomerListSerializer(serializers.Serializer):
     is_phone_verified = serializers.BooleanField(required=False)
     nickname = serializers.CharField(required=False, allow_null=True)
     current_balance = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
+    email = serializers.EmailField(allow_blank=True, allow_null=True)
+    notes = serializers.CharField(allow_null=True, allow_blank=True)
+    credit_limit = serializers.DecimalField(max_digits=12, decimal_places=2, allow_null=True)
+    credit_due_days = serializers.IntegerField(allow_null=True, required=False)
 
 
 class RetailerCustomerDetailSerializer(serializers.Serializer):
