@@ -19,7 +19,6 @@ Batches can store an optional expiry date. At sale/pick, FIFO consumes the earli
 | Expiry create/change on product update requires `inventory.adjust` | EXTEND |
 | POS `no_page` active batch rows include `expiry_date` (null OK) | EXTEND (OE-144; same as `ProductBatchSerializer`) |
 | Batch reads include boolean `is_expired` | EXTEND (OE-149; `ProductBatch.is_expired()`, null → false) |
-| Optional `reorder_level` on product list / detail / search | EXTEND (OE-149 follow-on; echo only if the model field exists; not Meta) |
 | Cross-tenant product get/update still retailer-scoped | EXISTING, locked |
 | `mfg_date`, LIFO/MRP engines, org FIFO flag, FE pickers, `StockMovement` | Out of scope |
 

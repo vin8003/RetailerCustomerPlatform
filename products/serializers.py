@@ -58,9 +58,20 @@ def product_has_reorder_level_field(model=None):
     return True
 
 
-def attach_reorder_level(data, instance, model=None):
+def caller_is_retailer(context):
+    """Shop JWT only. Missing / anonymous / customer callers are omitted."""
+    request = (context or {}).get('request')
+    user = getattr(request, 'user', None)
+    return bool(
+        user is not None
+        and getattr(user, 'is_authenticated', False)
+        and getattr(user, 'user_type', None) == 'retailer'
+    )
+
+
+def attach_reorder_level(data, instance, model=None, include=True):
     """Echo reorder_level only when the model field exists. Null stays null."""
-    if not product_has_reorder_level_field(model):
+    if not include or not product_has_reorder_level_field(model):
         return data
     value = getattr(instance, 'reorder_level', None)
     data['reorder_level'] = json_qty(value) if value is not None else None
@@ -68,11 +79,15 @@ def attach_reorder_level(data, instance, model=None):
 
 
 class ReorderLevelReadMixin:
-    """Optional reorder_level on product reads. Not declared on Meta.fields."""
+    """Optional reorder_level on retailer product reads. Not on Meta.fields."""
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        return attach_reorder_level(data, instance)
+        return attach_reorder_level(
+            data,
+            instance,
+            include=caller_is_retailer(self.context),
+        )
 
 
 _MARGIN_PERCENT = serializers.DecimalField(
