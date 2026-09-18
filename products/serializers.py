@@ -1,6 +1,5 @@
 from rest_framework import serializers
 from decimal import Decimal
-from django.core.exceptions import FieldDoesNotExist
 from django.db import transaction
 from django.db.models import Avg, F, Sum
 from returns.models import PurchaseReturnItem
@@ -49,13 +48,14 @@ CASE_QTY_FIELD_NAME = 'case_qty'
 
 
 def product_has_case_qty_field(model=None):
-    """True when the product model defines a case_qty column."""
+    """True when the product model defines a case_qty field."""
     model = model or Product
-    try:
-        model._meta.get_field(CASE_QTY_FIELD_NAME)
-    except FieldDoesNotExist:
+    meta = getattr(model, '_meta', None)
+    if meta is None:
         return False
-    return True
+    return any(
+        field.name == CASE_QTY_FIELD_NAME for field in meta.concrete_fields
+    )
 
 
 class OptionalCaseQtyReadMixin:

@@ -3,9 +3,11 @@
 - **Implementation:** EXTEND (echo `case_qty` only when the Product model has that field)
 - **Related:** [parent-child-pack-skus.md](parent-child-pack-skus.md), [pack-children-reads.md](pack-children-reads.md)
 
-Retailer product **list**, **detail**, and **search** serializers include top-level `case_qty` when the Product model defines a `case_qty` field. The key is injected in `to_representation`. It is **not** declared on serializer `Meta.fields` (a Meta listing would fail if the column is absent).
+Retailer product **list**, **detail**, and **search** serializers include top-level `case_qty` when the Product model defines a `case_qty` field. The key is injected in `to_representation`. It is **not** declared on serializer `Meta.fields` (a Meta listing would fail if the **model field** is absent).
 
-This repo's Product model does not currently define `case_qty`. Until a later migration adds the column, payloads omit the key. An instance attribute alone is not enough.
+This repo's Product model does not currently define `case_qty`. Until a later change adds the model field, payloads omit the key. An instance attribute alone is not enough.
+
+When `Product.case_qty` is added, flip the absence tests in `products/tests/test_case_qty_reads.py` (helper-false-on-Product, serializer omit, HTTP omit) to include/present-key asserts. Keep the Meta-avoidance tests. POS `no_page` is a hand-built dict and will still omit `case_qty` until a separate EXTEND.
 
 JSON shape matches existing quantity fields (`json_qty`): null → `0`, whole Decimal → int, fractional Decimal → float.
 
@@ -15,7 +17,7 @@ This is a read echo, not a write path, not a case-break engine, and not a POS `n
 
 | Piece | Status |
 |-------|--------|
-| `Product.case_qty` model field / migration | Out of scope (may be absent) |
+| `Product.case_qty` model field / migration | Out of scope (model field may be absent) |
 | List / detail / search `Meta.fields` | EXISTING, unchanged — do not add `case_qty` |
 | `case_qty` on list / detail / search when the model field exists | EXTEND |
 | Create / update serializers, POS `no_page` dict, cart, orders | Out of scope |

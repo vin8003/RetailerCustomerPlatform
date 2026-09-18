@@ -4,19 +4,24 @@ Optional case_qty on product read serializers (thin EXTEND).
 Include the key only when Product (or the instance model) has a case_qty
 field. Do not declare it on serializer Meta. Dummy shops only — no live
 *.ordereasy.win.
+
+When a later PR adds Product.case_qty, flip:
+- test_helper_false_on_real_product
+- test_omits_case_qty_when_model_field_absent
+- TestCaseQtyHttpOmit.test_list_search_detail_omit_when_field_absent
+Those become include / present-key asserts. Keep the Meta-avoidance tests.
 """
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import Mock
 
 import pytest
-from django.core.exceptions import FieldDoesNotExist
 from django.urls import reverse
 from rest_framework import status
 
 from authentication.models import User
 from products.models import Product, ProductCategory
 from products.serializers import (
+    OptionalCaseQtyReadMixin,
     ProductCreateSerializer,
     ProductDetailSerializer,
     ProductListSerializer,
@@ -32,6 +37,19 @@ READ_SERIALIZERS = (
     ProductDetailSerializer,
     ProductSearchSerializer,
 )
+
+
+class _CaseQtyField:
+    name = "case_qty"
+
+
+def _install_case_qty_field(monkeypatch):
+    """Make the real helper see case_qty on Product without a migration."""
+    monkeypatch.setattr(
+        Product._meta,
+        "concrete_fields",
+        tuple(Product._meta.concrete_fields) + (_CaseQtyField(),),
+    )
 
 
 def _make_retailer(username, shop_name):
@@ -70,22 +88,29 @@ def _make_product(retailer, name):
     )
 
 
+def _rows(payload):
+    return payload if isinstance(payload, list) else payload.get("results") or []
+
+
 def test_helper_false_on_real_product():
     assert product_has_case_qty_field(Product) is False
     assert product_has_case_qty_field() is False
 
 
-def test_helper_true_when_get_field_succeeds():
-    model = Mock()
-    model._meta.get_field.return_value = object()
+def test_helper_true_when_field_on_model():
+    field = SimpleNamespace(name="case_qty")
+    model = SimpleNamespace(_meta=SimpleNamespace(concrete_fields=(field,)))
     assert product_has_case_qty_field(model) is True
-    model._meta.get_field.assert_called_once_with("case_qty")
 
 
 def test_helper_false_when_field_missing():
-    model = Mock()
-    model._meta.get_field.side_effect = FieldDoesNotExist("case_qty")
+    field = SimpleNamespace(name="quantity")
+    model = SimpleNamespace(_meta=SimpleNamespace(concrete_fields=(field,)))
     assert product_has_case_qty_field(model) is False
+
+
+def test_helper_false_without_meta():
+    assert product_has_case_qty_field(SimpleNamespace()) is False
 
 
 def test_meta_does_not_declare_case_qty():
@@ -105,10 +130,7 @@ def test_omits_case_qty_when_model_field_absent(product):
 
 @pytest.mark.django_db
 def test_includes_case_qty_when_model_field_exists(product, monkeypatch):
-    monkeypatch.setattr(
-        "products.serializers.product_has_case_qty_field",
-        lambda model=None: True,
-    )
+    _install_case_qty_field(monkeypatch)
     product.case_qty = Decimal("24")
     for serializer_cls in READ_SERIALIZERS:
         assert serializer_cls(product).data["case_qty"] == 24
@@ -116,10 +138,7 @@ def test_includes_case_qty_when_model_field_exists(product, monkeypatch):
 
 @pytest.mark.django_db
 def test_case_qty_null_and_fractional_match_quantity_shape(product, monkeypatch):
-    monkeypatch.setattr(
-        "products.serializers.product_has_case_qty_field",
-        lambda model=None: True,
-    )
+    _install_case_qty_field(monkeypatch)
     product.case_qty = None
     assert ProductListSerializer(product).data["case_qty"] == 0
 
@@ -129,8 +148,6 @@ def test_case_qty_null_and_fractional_match_quantity_shape(product, monkeypatch)
 
 def test_mixin_uses_instance_model_not_global_product(monkeypatch):
     """Instance._meta.model is what the mixin checks, not a hardcoded Product."""
-    from products.serializers import OptionalCaseQtyReadMixin
-
     seen = {}
 
     def fake_has_field(model=None):
@@ -169,18 +186,44 @@ class TestCaseQtyHttpOmit:
 
         listed = api_client.get(reverse("get_retailer_products"))
         assert listed.status_code == status.HTTP_200_OK
-        rows = listed.data if isinstance(listed.data, list) else listed.data.get("results") or []
-        row = next(item for item in rows if item["id"] == rice.id)
+        row = next(item for item in _rows(listed.data) if item["id"] == rice.id)
         assert "case_qty" not in row
 
         detail = api_client.get(reverse("get_product_detail", args=[rice.id]))
         assert detail.status_code == status.HTTP_200_OK
         assert "case_qty" not in detail.data
 
-        search = api_client.get(reverse("search_products"), {"search": "CaseQty Dummy Rice"})
-        assert search.status_code == status.HTTP_200_OK
-        search_rows = (
-            search.data if isinstance(search.data, list) else search.data.get("results") or []
+        search = api_client.get(
+            reverse("search_products"), {"search": "CaseQty Dummy Rice"}
         )
-        search_row = next(item for item in search_rows if item["id"] == rice.id)
+        assert search.status_code == status.HTTP_200_OK
+        search_row = next(
+            item for item in _rows(search.data) if item["id"] == rice.id
+        )
         assert "case_qty" not in search_row
+
+
+@pytest.mark.django_db
+class TestCaseQtyHttpInclude:
+    def test_list_includes_when_model_field_exists(self, api_client, monkeypatch):
+        # Patch the helper, not Product._meta.concrete_fields — Django's
+        # list queryset walks concrete_fields and a dummy field 500s the view.
+        # Serializer tests above exercise helper + mixin together.
+        owner, shop = _make_retailer("caseqty_inc", "CaseQty Include Shop")
+        rice = _make_product(shop, "CaseQty Include Rice")
+        monkeypatch.setattr(
+            "products.serializers.product_has_case_qty_field",
+            lambda model=None: True,
+        )
+        monkeypatch.setattr(
+            Product,
+            "case_qty",
+            property(lambda self: Decimal("24")),
+            raising=False,
+        )
+        api_client.force_authenticate(user=owner)
+
+        listed = api_client.get(reverse("get_retailer_products"))
+        assert listed.status_code == status.HTTP_200_OK
+        row = next(item for item in _rows(listed.data) if item["id"] == rice.id)
+        assert row["case_qty"] == 24
