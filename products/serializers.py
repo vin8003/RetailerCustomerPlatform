@@ -387,6 +387,22 @@ class ProductReviewSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'customer_name', 'is_verified_purchase', 'created_at']
 
 
+def product_track_batch(product):
+    """Echo Product.track_batch when the attribute exists; otherwise None.
+
+    Product has no track_batch column on this stack (batch write / has_batches
+    alias stay out of scope). Missing attribute, missing product, and stored
+    null all pass through as None. False stays false — do not invent True
+    from has_batches.
+    """
+    if product is None or not hasattr(product, "track_batch"):
+        return None
+    value = getattr(product, "track_batch")
+    if value is None:
+        return None
+    return bool(value)
+
+
 class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product list view
@@ -425,6 +441,12 @@ class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, 
             'is_parent_bulk', 'parent_bulk_product', 'conversion_factor',
             'fractional_children', 'group_variants',
         ]
+
+    def to_representation(self, instance):
+        # Optional echo when Product.track_batch exists. Avoid Meta.fields.
+        data = super().to_representation(instance)
+        data['track_batch'] = product_track_batch(instance)
+        return data
 
     def get_quantity(self, obj):
         val = obj.quantity
