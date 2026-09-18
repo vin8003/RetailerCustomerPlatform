@@ -593,6 +593,7 @@ class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
             'is_featured',
             'is_active',
             'is_seasonal',
+            'is_available',
             'product_group',
             'track_inventory',
             'quantity', 'saleable_quantity', 'margin_percent', 'has_batches', 'batches',
