@@ -22,6 +22,8 @@ Retailer product **list** includes top-level `color`. If the product has a `colo
 | GET | `/api/products/` | Authenticated retailer | `getattr(product, 'color', None)` |
 | GET | `/api/products/retailer/<id>/` (public) | Customer / anonymous | Additive via shared list serializer |
 
+Every other list-shaped `ProductListSerializer` payload (featured, best-selling, buy-again, recommended, deals, budget, trending, new arrivals, seasonal) also gains the same `color` key. Search Meta, POS `no_page`, and detail stay without it.
+
 Missing attribute → `null`. Null stays null. Empty stays empty. Do not invent a color.
 
 Unauthenticated retailer list → **401**. Customer → **403**. Tenant B cannot read tenant A's SKU.

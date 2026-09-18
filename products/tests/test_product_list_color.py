@@ -220,6 +220,23 @@ class TestProductListColor:
         assert [row["color"] for row in data] == ["red", "blue", None]
         assert _product_table_reads(captured) == []
 
+    def test_public_list_color_null_when_product_has_no_field(self, api_client):
+        _owner, shop = _make_retailer("list_color_pub_own", "List Color Public Shop")
+        category = _make_category(shop, "List Color Public Cat")
+        product = _make_product(
+            shop, category, "List Color Public Mango", barcode=PRIMARY_B
+        )
+        assert not hasattr(product, "color")
+
+        listed = api_client.get(
+            reverse("get_retailer_products_public", args=[shop.id])
+        )
+        assert listed.status_code == status.HTTP_200_OK
+        row = _list_row(listed.data, product.id)
+        assert "color" in row
+        assert row["color"] is None
+        assert row["name"] == product.name
+
     def test_product_search_serializer_meta_stays_without_color(self):
         assert "color" not in ProductSearchSerializer.Meta.fields
 
