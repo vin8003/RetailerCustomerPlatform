@@ -29,11 +29,24 @@ class SalesReturnSerializer(serializers.ModelSerializer):
 
 class PurchaseReturnItemSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='product.name', read_only=True)
+    # OE-352: optional Product.brand.name. Missing product or brand → null.
+    brand_name = serializers.SerializerMethodField()
     batch_number = serializers.CharField(source='batch.batch_number', read_only=True)
 
     class Meta:
         model = PurchaseReturnItem
-        fields = ['id', 'product', 'product_name', 'batch', 'batch_number', 'quantity', 'purchase_price', 'total']
+        fields = [
+            'id', 'product', 'product_name', 'brand_name', 'batch', 'batch_number',
+            'quantity', 'purchase_price', 'total',
+        ]
+        read_only_fields = ['id', 'brand_name']
+
+    def get_brand_name(self, obj):
+        product = getattr(obj, 'product', None)
+        if product is None:
+            return None
+        brand = getattr(product, 'brand', None)
+        return brand.name if brand else None
 
 class PurchaseReturnSerializer(serializers.ModelSerializer):
     items = PurchaseReturnItemSerializer(many=True, read_only=True)
