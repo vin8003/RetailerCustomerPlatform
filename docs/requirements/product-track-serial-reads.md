@@ -1,6 +1,7 @@
 # Optional track_serial on product reads
 
 - **Implementation:** EXTEND (echo `Product.track_serial` on list / detail / search **only if the model field exists**)
+- **Related epic:** [OE-189](https://vin8003.atlassian.net/browse/OE-189) F-0020 serial-tracked products — this slice does **not** deliver that AC
 - **Related:** [search-is-active.md](search-is-active.md) (list / detail / search share the same product serializers), [saleable-quantity-reads.md](saleable-quantity-reads.md)
 
 Retailer product **reads** may include top-level `track_serial` when `Product` actually has that field. This repo's `Product` model does not declare it yet, so current payloads **omit** the key. Do not add the name to serializer `Meta.fields` — a missing model field would raise at import/bind time.
