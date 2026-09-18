@@ -44,6 +44,18 @@ def json_qty(val):
     return val
 
 
+def product_shelf_life_days(product):
+    """Echo Product.shelf_life_days when the attribute exists; otherwise None.
+
+    Product has no shelf-life column on this stack. Missing attribute,
+    missing product, and stored null all pass through as None. Do not invent
+    a default shelf life.
+    """
+    if product is None:
+        return None
+    return getattr(product, 'shelf_life_days', None)
+
+
 _MARGIN_PERCENT = serializers.DecimalField(
     max_digits=10, decimal_places=2, allow_null=True
 )
@@ -409,6 +421,8 @@ class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, 
     margin_percent = serializers.SerializerMethodField()
     minimum_order_quantity = serializers.SerializerMethodField()
     maximum_order_quantity = serializers.SerializerMethodField()
+    # Optional echo when Product.shelf_life_days exists. Null/missing → null.
+    shelf_life_days = serializers.SerializerMethodField()
     class Meta:
         model = Product
         list_serializer_class = GroupVariantsListSerializer
@@ -424,7 +438,11 @@ class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, 
             'active_offer_text', 'is_wishlisted', 'barcode', 'has_batches', 'batches',
             'is_parent_bulk', 'parent_bulk_product', 'conversion_factor',
             'fractional_children', 'group_variants',
+            'shelf_life_days',
         ]
+
+    def get_shelf_life_days(self, obj):
+        return product_shelf_life_days(obj)
 
     def get_quantity(self, obj):
         val = obj.quantity
@@ -656,6 +674,8 @@ class ProductDetailSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
     maximum_order_quantity = serializers.SerializerMethodField()
     group_variants = serializers.SerializerMethodField()
     margin_percent = serializers.SerializerMethodField()
+    # Optional echo when Product.shelf_life_days exists. Null/missing → null.
+    shelf_life_days = serializers.SerializerMethodField()
     
     class Meta:
         model = Product
@@ -672,8 +692,12 @@ class ProductDetailSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
             'average_rating', 'review_count', 'created_at', 'updated_at',
             'product_group', 'active_offer_text', 'offers', 'is_wishlisted', 'barcode',
             'is_parent_bulk', 'parent_bulk_product', 'conversion_factor',
-            'fractional_children', 'group_variants'
+            'fractional_children', 'group_variants',
+            'shelf_life_days',
         ]
+
+    def get_shelf_life_days(self, obj):
+        return product_shelf_life_days(obj)
 
     def get_quantity(self, obj):
         val = obj.quantity
