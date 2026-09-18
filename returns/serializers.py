@@ -1,6 +1,19 @@
 from rest_framework import serializers
 from .models import SalesReturn, SalesReturnItem, PurchaseReturn, PurchaseReturnItem
 
+
+def product_hsn_code(product):
+    """Echo Product.hsn_code when the attribute exists; otherwise None.
+
+    Product has no HSN column on this stack (KAN-57 / OE-57 rebuild is out of
+    scope). Missing attribute, missing product, and stored null all pass through
+    as None. Empty string stays empty — do not invent an HSN.
+    """
+    if product is None:
+        return None
+    return getattr(product, "hsn_code", None)
+
+
 class SalesReturnItemSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='product.name', read_only=True)
     batch_number = serializers.CharField(source='batch.batch_number', read_only=True)
@@ -30,10 +43,19 @@ class SalesReturnSerializer(serializers.ModelSerializer):
 class PurchaseReturnItemSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='product.name', read_only=True)
     batch_number = serializers.CharField(source='batch.batch_number', read_only=True)
+    # OE-339: optional echo when Product.hsn_code exists. Null/missing → null.
+    hsn_code = serializers.SerializerMethodField()
 
     class Meta:
         model = PurchaseReturnItem
-        fields = ['id', 'product', 'product_name', 'batch', 'batch_number', 'quantity', 'purchase_price', 'total']
+        fields = [
+            'id', 'product', 'product_name', 'hsn_code', 'batch', 'batch_number',
+            'quantity', 'purchase_price', 'total',
+        ]
+        read_only_fields = ['id', 'hsn_code']
+
+    def get_hsn_code(self, obj):
+        return product_hsn_code(getattr(obj, 'product', None))
 
 class PurchaseReturnSerializer(serializers.ModelSerializer):
     items = PurchaseReturnItemSerializer(many=True, read_only=True)
