@@ -25,6 +25,8 @@ Retailer product **list** and **detail** include top-level `is_fragile`. If the 
 | GET | `/api/products/<id>/` | Authenticated retailer | `getattr(product, 'is_fragile', None)` |
 | GET | `/api/products/retailer/<id>/` (public) | Customer / anonymous | Same via shared list serializer |
 | GET | `/api/products/retailer/<id>/<product_id>/` (public) | Customer / anonymous | Same via shared detail serializer |
+| POST / PATCH | `/api/products/create/` · `/api/products/<id>/update/` | Authenticated retailer | Response uses detail serializer (same echo). Write body `is_fragile` is ignored. |
+| Other list/detail consumers | Featured / deals / other lanes that reuse these serializers | Same optional key |
 
 Missing attribute → `null`. Null stays null. False stays false. Do not invent fragility.
 

@@ -114,7 +114,6 @@ def _product_table_reads(captured):
     ]
 
 
-@pytest.mark.django_db
 class TestProductIsFragileHelper:
     def test_missing_attribute_is_null(self):
         assert not hasattr(Product, "is_fragile")
@@ -223,7 +222,19 @@ class TestProductSerializerIsFragile:
         assert created.status_code == status.HTTP_201_CREATED, created.data
         product = Product.objects.get(pk=created.data["id"])
         assert not hasattr(product, "is_fragile")
-        assert created.data.get("is_fragile") is None
+        assert "is_fragile" in created.data
+        assert created.data["is_fragile"] is None
+
+        patched = api_client.patch(
+            reverse("update_product", args=[product.id]),
+            {"is_fragile": True},
+            format="json",
+        )
+        assert patched.status_code == status.HTTP_200_OK, patched.data
+        product.refresh_from_db()
+        assert not hasattr(product, "is_fragile")
+        assert "is_fragile" in patched.data
+        assert patched.data["is_fragile"] is None
 
     def test_unauthenticated_and_customer_denied(self, api_client):
         _owner, shop = _make_retailer("oe362_auth_own", "OE362 Auth Shop")
@@ -284,7 +295,8 @@ class TestProductSerializerIsFragile:
         owner, shop = _make_retailer("oe362_iso_own", "OE362 Iso Shop")
         category = _make_category(shop, "OE362 Iso Cat")
         product = _make_product(shop, category, "OE362 Iso Rice")
-        product.is_fragile = True
+        # Instance setattr would not survive HTTP refetch; search/POS omit
+        # the key because those surfaces do not use FragileProductReadMixin.
 
         api_client.force_authenticate(user=owner)
         search = _search(api_client, "OE362 Iso")
