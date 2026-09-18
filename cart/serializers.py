@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from decimal import Decimal
 from django.db import transaction
+from django.db.models import Prefetch, prefetch_related_objects
 from .models import Cart, CartItem, CartHistory
 from products.models import Product
 from products.channel_price import CHANNEL_APP, resolve_channel_price
@@ -12,6 +13,9 @@ class CartItemSerializer(serializers.ModelSerializer):
     Serializer for cart items
     """
     product_name = serializers.CharField(source='product.name', read_only=True)
+    brand_name = serializers.CharField(
+        source='product.brand.name', read_only=True, allow_null=True, default=None
+    )
     product_image = serializers.CharField(source='product.image_display_url', read_only=True)
     product_price = serializers.SerializerMethodField()
     product_unit = serializers.CharField(source='product.unit', read_only=True)
@@ -26,7 +30,7 @@ class CartItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = CartItem
         fields = [
-            'id', 'product', 'product_name', 'product_image', 'product_price',
+            'id', 'product', 'product_name', 'brand_name', 'product_image', 'product_price',
             'product_unit', 'batch', 'batch_number', 'quantity', 'unit_price', 'total_price', 'is_available',
             'stock_quantity', 'minimum_order_quantity', 'maximum_order_quantity',
             'added_at', 'updated_at'
@@ -137,6 +141,15 @@ class CartSerializer(serializers.ModelSerializer):
         return float(obj.retailer.minimum_order_amount)
 
     def to_representation(self, instance):
+        # Join brand on the cart-item prefetch so brand_name is not N+1.
+        # Views already prefetch items__product (without brand) in some paths.
+        prefetch_related_objects(
+            [instance],
+            Prefetch(
+                'items',
+                queryset=CartItem.objects.select_related('product', 'product__brand'),
+            ),
+        )
         items = instance.items.all()
         Product.cache_saleable_quantities([item.product for item in items])
         return super().to_representation(instance)
