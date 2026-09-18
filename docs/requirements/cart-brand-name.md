@@ -26,7 +26,7 @@ Customer cart line items include top-level `brand_name` with the same value alre
 | GET | `/api/products/<id>/` | Authenticated retailer | EXISTING |
 | GET | `/api/products/retailer/<id>/` (public) | Customer / anonymous | EXISTING |
 
-No brand → `null` (same as list getter). Do not omit the key. `CartSerializer` prefetches items with `select_related('product', 'product__brand')` so the echo is one join, not per-row.
+No brand → `null` (same as list getter). Do not omit the key. `CartSerializer` refreshes the items prefetch with `select_related('product', 'product__brand')` so the echo is one join, not per-row (one extra constant query vs the pre-OE-314 cart GET budget).
 
 Unauthenticated → **401**. Retailer → **403**. Customer B cannot read customer A's cart lines.
 

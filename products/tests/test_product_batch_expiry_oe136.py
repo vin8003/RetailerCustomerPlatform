@@ -854,7 +854,8 @@ class TestSaleableHotPathQueryBudget:
         category = _make_category(shop, "OE136 Cart Q Cat")
         _multiline_batched_cart(customer, shop, category, line_count=1)
         api_client.force_authenticate(user=customer)
-        with django_assert_num_queries(9), CaptureQueriesContext(connection) as one:
+        # OE-314: +1 items prefetch joining product__brand (constant, not per line)
+        with django_assert_num_queries(10), CaptureQueriesContext(connection) as one:
             one_res = api_client.get(reverse("get_cart"), {"retailer_id": shop.id})
         assert one_res.status_code == status.HTTP_200_OK
         assert _per_product_saleable_sum_sql(one.captured_queries) == []
@@ -871,7 +872,7 @@ class TestSaleableHotPathQueryBudget:
         )
         _multiline_batched_cart(customer_5, shop_5, category_5, line_count=5)
         api_client.force_authenticate(user=customer_5)
-        with django_assert_num_queries(9), CaptureQueriesContext(connection) as five:
+        with django_assert_num_queries(10), CaptureQueriesContext(connection) as five:
             five_res = api_client.get(
                 reverse("get_cart"), {"retailer_id": shop_5.id}
             )
