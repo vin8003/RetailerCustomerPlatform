@@ -30,7 +30,7 @@ Missing attribute → `null`. Null stays null. Empty stays empty. Do not copy `r
 
 Unauthenticated → **401**. Customer / no retailer profile → **403**.
 
-Write-off `POST /api/products/<id>/write-off/` may send `remarks`; it is ignored. No column is created.
+Write-off `POST /api/products/<id>/write-off/` does not accept a `remarks` body field. Extra keys in the POST body are ignored. No column is created.
 
 Query is one `ProductInventoryLog` select with `select_related('product', 'created_by')` after the retailer-profile get. Remarks is an attribute on that row — no extra query.
 

@@ -20,19 +20,33 @@ def inventory_log_remarks(log):
     return getattr(log, 'remarks', None)
 
 
-class WriteOffListSerializer(serializers.ModelSerializer):
-    """Ledger / write-off list row. Same identity keys as the hand-built dict."""
+def serialize_write_off_list_row(log):
+    """Same ledger row keys as the prior hand-built dict, plus remarks.
 
-    product_id = serializers.IntegerField(read_only=True)
-    product_name = serializers.CharField(source='product.name', read_only=True)
-    barcode = serializers.CharField(
-        source='product.barcode',
-        read_only=True,
-        allow_null=True,
-        allow_blank=True,
-    )
-    remarks = serializers.SerializerMethodField()
-    created_by = serializers.SerializerMethodField()
+    Keeps Decimal / datetime objects so OE-141 / OE-315 response.data stays
+    equivalent. remarks is the only new key.
+    """
+    product = log.product
+    user = log.created_by
+    return {
+        'id': log.id,
+        'product_id': log.product_id,
+        'product_name': product.name,
+        'barcode': product.barcode,
+        'log_type': log.log_type,
+        'batch_id': log.batch_id,
+        'quantity_change': log.quantity_change,
+        'previous_quantity': log.previous_quantity,
+        'new_quantity': log.new_quantity,
+        'reason': log.reason,
+        'remarks': inventory_log_remarks(log),
+        'created_at': log.created_at,
+        'created_by': user.get_full_name() if user else 'System',
+    }
+
+
+class WriteOffListSerializer(serializers.BaseSerializer):
+    """Ledger / write-off list row. Optional remarks via inventory_log_remarks."""
 
     class Meta:
         model = ProductInventoryLog
@@ -53,31 +67,5 @@ class WriteOffListSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = fields
 
-    def get_remarks(self, obj):
-        return inventory_log_remarks(obj)
-
-    def get_created_by(self, obj):
-        user = obj.created_by
-        return user.get_full_name() if user else 'System'
-
     def to_representation(self, instance):
-        # Keep the prior hand-built ledger types (Decimal / datetime objects)
-        # so OE-141 / OE-315 response.data stays equivalent. remarks is the
-        # only new key.
-        product = instance.product
-        user = instance.created_by
-        return {
-            'id': instance.id,
-            'product_id': instance.product_id,
-            'product_name': product.name,
-            'barcode': product.barcode,
-            'log_type': instance.log_type,
-            'batch_id': instance.batch_id,
-            'quantity_change': instance.quantity_change,
-            'previous_quantity': instance.previous_quantity,
-            'new_quantity': instance.new_quantity,
-            'reason': instance.reason,
-            'remarks': inventory_log_remarks(instance),
-            'created_at': instance.created_at,
-            'created_by': user.get_full_name() if user else 'System',
-        }
+        return serialize_write_off_list_row(instance)

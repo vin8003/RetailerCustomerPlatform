@@ -132,7 +132,7 @@ class TestInventoryLogRemarksHelper:
     def test_does_not_invent_from_reason(self):
         log = SimpleNamespace(reason=REASON_DAMAGE)
         assert inventory_log_remarks(log) is None
-        assert inventory_log_remarks(log) != log.reason
+        assert inventory_log_remarks(log) != REASON_DAMAGE
 
 
 @pytest.mark.django_db
@@ -166,6 +166,7 @@ class TestWriteOffListRemarks:
         data = WriteOffListSerializer(log).data
         assert data["remarks"] == "wet carton"
         assert data["reason"] == REASON_DAMAGE
+        assert data["remarks"] != data["reason"]
 
     def test_serializer_null_and_empty_passthrough(self):
         owner, shop = _make_retailer("oe358_pass_own", "OE358 Pass Shop")
@@ -218,6 +219,19 @@ class TestWriteOffListRemarks:
         denied = api_client.get(_ledger_url(), {"product_id": product.id})
         assert denied.status_code == status.HTTP_403_FORBIDDEN
 
+        no_profile = User.objects.create_user(
+            username="oe358_auth_noprof",
+            email="oe358_auth_noprof@test.com",
+            password="TestPass123!",
+            user_type="retailer",
+            is_active=True,
+        )
+        api_client.force_authenticate(user=no_profile)
+        missing_profile = api_client.get(
+            _ledger_url(), {"product_id": product.id}
+        )
+        assert missing_profile.status_code == status.HTTP_403_FORBIDDEN
+
     def test_cross_tenant_product_still_404(self, api_client):
         owner_a, shop_a = _make_retailer("oe358_ten_a", "OE358 Tenant A")
         owner_b, shop_b = _make_retailer("oe358_ten_b", "OE358 Tenant B")
@@ -267,8 +281,6 @@ class TestWriteOffListRemarks:
                 shop, f"OE358 N1 {idx}", barcode=f"89035800000{idx}"
             )
             logs.append(_log(product, owner, reason=REASON_DAMAGE))
-        for log, note in zip(logs, ("broken", "leaked", None)):
-            log.remarks = note
 
         loaded = list(
             ProductInventoryLog.objects.select_related("product", "created_by")
