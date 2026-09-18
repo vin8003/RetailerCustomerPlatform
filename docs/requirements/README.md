@@ -35,6 +35,7 @@ Ticket snapshots (acceptance context, ship notes) stay in [`../tickets/`](../tic
 | [product-batch-expiry.md](product-batch-expiry.md) | OE-136, OE-144, OE-149 |
 | [damage-expiry-write-off.md](damage-expiry-write-off.md) | OE-141 |
 | [inventory-ledger-product-identity.md](inventory-ledger-product-identity.md) | OE-315 |
+| [product-list-is-serialized.md](product-list-is-serialized.md) | thin list echo |
 | [app-vs-pos-prices.md](app-vs-pos-prices.md) | OE-106 |
 | [product-photo-bulk-import.md](product-photo-bulk-import.md) | OE-124 |
 | [khata-credit-lock.md](khata-credit-lock.md) | OE-143 |

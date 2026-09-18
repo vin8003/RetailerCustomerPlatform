@@ -387,6 +387,18 @@ class ProductReviewSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'customer_name', 'is_verified_purchase', 'created_at']
 
 
+def product_is_serialized(product):
+    """Echo Product.is_serialized when the attribute exists; otherwise None.
+
+    Product has no is_serialized column on this stack. Missing attribute,
+    missing product, and stored null all pass through as None. False stays
+    false — do not omit or invent True.
+    """
+    if product is None:
+        return None
+    return getattr(product, "is_serialized", None)
+
+
 class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product list view
@@ -567,6 +579,12 @@ class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, 
             return False
         except Exception:
             return False
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Optional echo when Product.is_serialized exists. Avoid Meta.fields.
+        data['is_serialized'] = product_is_serialized(instance)
+        return data
 
 
 class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
