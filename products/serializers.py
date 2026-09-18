@@ -387,19 +387,34 @@ class ProductReviewSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'customer_name', 'is_verified_purchase', 'created_at']
 
 
+def product_has_is_serialized(product):
+    """True when the instance itself has is_serialized. Do not use model _meta."""
+    return product is not None and hasattr(product, "is_serialized")
+
+
 def product_is_serialized(product):
-    """Echo Product.is_serialized when the attribute exists; otherwise None.
+    """Echo Product.is_serialized when the instance attribute exists.
 
-    Product has no is_serialized column on this stack. Missing attribute,
-    missing product, and stored null all pass through as None. False stays
-    false — do not omit or invent True.
+    Product has no is_serialized column on this stack. Missing product or
+    missing attribute → None (callers omit the key). Stored null stays
+    None. False stays false — do not invent True.
     """
-    if product is None:
+    if not product_has_is_serialized(product):
         return None
-    return getattr(product, "is_serialized", None)
+    return getattr(product, "is_serialized")
 
 
-class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class OptionalIsSerializedMixin:
+    """List/detail echo of is_serialized without Meta.fields."""
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if product_has_is_serialized(instance):
+            data["is_serialized"] = product_is_serialized(instance)
+        return data
+
+
+class ProductListSerializer(OptionalIsSerializedMixin, PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product list view
     """
@@ -580,12 +595,6 @@ class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, 
         except Exception:
             return False
 
-    def to_representation(self, instance):
-        data = super().to_representation(instance)
-        # Optional echo when Product.is_serialized exists. Avoid Meta.fields.
-        data['is_serialized'] = product_is_serialized(instance)
-        return data
-
 
 class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
@@ -645,7 +654,7 @@ class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
             logger.error(f"Error getting brand name: {e}")
             return None
 
-class ProductDetailSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductDetailSerializer(OptionalIsSerializedMixin, PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product detail view
     """

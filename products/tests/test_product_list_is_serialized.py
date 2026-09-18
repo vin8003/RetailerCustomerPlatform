@@ -1,11 +1,12 @@
 """
-Optional is_serialized on Product list serializer.
+Optional is_serialized on Product list/detail serializers.
 
-Echo Product.is_serialized only when the attribute exists. Missing
-field or null stays null (no invented True). False stays false.
-Auth/tenancy unchanged. READ only.
+Echo Product.is_serialized only when the instance attribute exists.
+Missing field → omit the key (do not invent False). False stays false.
+Null stays null. Auth/tenancy unchanged. READ only.
 
-Avoid ProductSearchSerializer Meta, POS no_page, and detail Meta.
+Avoid serializer Meta.fields and model _meta. Do not touch
+ProductSearchSerializer Meta, POS no_page, or create/update.
 Dummy / local only.
 """
 from decimal import Decimal
@@ -23,6 +24,7 @@ from products.serializers import (
     ProductDetailSerializer,
     ProductListSerializer,
     ProductSearchSerializer,
+    product_has_is_serialized,
     product_is_serialized,
 )
 from retailers.models import RetailerProfile
@@ -99,6 +101,10 @@ def _list_url():
     return reverse("get_retailer_products")
 
 
+def _detail_url(product_id):
+    return reverse("get_product_detail", args=[product_id])
+
+
 def _pos(api_client):
     return api_client.get(_list_url(), {"no_page": "true"})
 
@@ -113,26 +119,35 @@ def _product_table_reads(captured):
 
 @pytest.mark.django_db
 class TestProductIsSerializedHelper:
-    def test_missing_attribute_is_null(self):
+    def test_missing_attribute_is_absent(self):
         assert not hasattr(Product, "is_serialized")
-        assert product_is_serialized(SimpleNamespace(name="no-serialized")) is None
+        dummy = SimpleNamespace(name="no-serialized")
+        assert product_has_is_serialized(dummy) is False
+        assert product_is_serialized(dummy) is None
 
-    def test_none_product_is_null(self):
+    def test_none_product_is_absent(self):
+        assert product_has_is_serialized(None) is False
         assert product_is_serialized(None) is None
 
     def test_present_true_is_echoed(self):
-        assert product_is_serialized(SimpleNamespace(is_serialized=True)) is True
+        dummy = SimpleNamespace(is_serialized=True)
+        assert product_has_is_serialized(dummy) is True
+        assert product_is_serialized(dummy) is True
 
     def test_present_false_stays_false(self):
-        assert product_is_serialized(SimpleNamespace(is_serialized=False)) is False
+        dummy = SimpleNamespace(is_serialized=False)
+        assert product_has_is_serialized(dummy) is True
+        assert product_is_serialized(dummy) is False
 
     def test_null_passthrough(self):
-        assert product_is_serialized(SimpleNamespace(is_serialized=None)) is None
+        dummy = SimpleNamespace(is_serialized=None)
+        assert product_has_is_serialized(dummy) is True
+        assert product_is_serialized(dummy) is None
 
 
 @pytest.mark.django_db
 class TestProductListIsSerialized:
-    def test_list_is_serialized_null_when_product_has_no_field(self, api_client):
+    def test_list_omits_is_serialized_when_product_has_no_field(self, api_client):
         owner, shop = _make_retailer(
             "list_serialized_miss_own", "List Serialized Missing Shop"
         )
@@ -144,11 +159,13 @@ class TestProductListIsSerialized:
 
         api_client.force_authenticate(user=owner)
         listed = api_client.get(_list_url())
+        detail = api_client.get(_detail_url(product.id))
 
         assert listed.status_code == status.HTTP_200_OK
+        assert detail.status_code == status.HTTP_200_OK
         row = _list_row(listed.data, product.id)
-        assert "is_serialized" in row
-        assert row["is_serialized"] is None
+        assert "is_serialized" not in row
+        assert "is_serialized" not in detail.data
         assert row["name"] == product.name
         assert row["barcode"] == PRIMARY_A
 
@@ -160,9 +177,11 @@ class TestProductListIsSerialized:
         product = _make_product(shop, category, "List Serialized Atta")
         product.is_serialized = True
 
-        data = ProductListSerializer(product).data
-        assert data["is_serialized"] is True
-        assert data["name"] == "List Serialized Atta"
+        list_data = ProductListSerializer(product).data
+        detail_data = ProductDetailSerializer(product).data
+        assert list_data["is_serialized"] is True
+        assert detail_data["is_serialized"] is True
+        assert list_data["name"] == "List Serialized Atta"
 
     def test_serializer_false_stays_false(self):
         owner, shop = _make_retailer(
@@ -173,6 +192,7 @@ class TestProductListIsSerialized:
         product.is_serialized = False
 
         assert ProductListSerializer(product).data["is_serialized"] is False
+        assert ProductDetailSerializer(product).data["is_serialized"] is False
 
     def test_serializer_null_passthrough_when_attribute_is_none(self):
         owner, shop = _make_retailer(
@@ -182,14 +202,18 @@ class TestProductListIsSerialized:
         product = _make_product(shop, category, "List Serialized Salt")
         product.is_serialized = None
 
+        assert "is_serialized" in ProductListSerializer(product).data
         assert ProductListSerializer(product).data["is_serialized"] is None
+        assert ProductDetailSerializer(product).data["is_serialized"] is None
 
     def test_unauthenticated_and_customer_denied(self, api_client):
         owner, shop = _make_retailer(
             "list_serialized_auth_own", "List Serialized Auth Shop"
         )
         category = _make_category(shop, "List Serialized Auth Cat")
-        _make_product(shop, category, "List Serialized Auth Rice", barcode=PRIMARY_A)
+        product = _make_product(
+            shop, category, "List Serialized Auth Rice", barcode=PRIMARY_A
+        )
         customer = _make_customer("list_serialized_auth_cust")
 
         anon = api_client.get(_list_url())
@@ -198,6 +222,8 @@ class TestProductListIsSerialized:
         api_client.force_authenticate(user=customer)
         denied = api_client.get(_list_url())
         assert denied.status_code == status.HTTP_403_FORBIDDEN
+        denied_detail = api_client.get(_detail_url(product.id))
+        assert denied_detail.status_code == status.HTTP_403_FORBIDDEN
 
     def test_list_stays_shop_scoped(self, api_client):
         owner_a, shop_a = _make_retailer(
@@ -217,13 +243,15 @@ class TestProductListIsSerialized:
 
         api_client.force_authenticate(user=owner_b)
         listed = api_client.get(_list_url())
+        detail_a = api_client.get(_detail_url(product_a.id))
 
         assert listed.status_code == status.HTTP_200_OK
+        assert detail_a.status_code == status.HTTP_404_NOT_FOUND
         ids = {row["id"] for row in _rows(listed.data)}
         assert product_a.id not in ids
         assert product_b.id in ids
         own = _list_row(listed.data, product_b.id)
-        assert own["is_serialized"] is None
+        assert "is_serialized" not in own
         assert own["name"] == product_b.name
 
     def test_list_is_serialized_adds_no_product_query(self):
@@ -244,11 +272,20 @@ class TestProductListIsSerialized:
         assert [row["is_serialized"] for row in data] == [True, False, None]
         assert _product_table_reads(captured) == []
 
-    def test_product_search_serializer_meta_stays_without_is_serialized(self):
+    def test_product_search_serializer_stays_without_is_serialized(self):
         assert "is_serialized" not in ProductSearchSerializer.Meta.fields
+        owner, shop = _make_retailer(
+            "list_serialized_search_own", "List Serialized Search Shop"
+        )
+        category = _make_category(shop, "List Serialized Search Cat")
+        product = _make_product(shop, category, "List Serialized Search Rice")
+        product.is_serialized = True
+        search_data = ProductSearchSerializer(product).data
+        assert "is_serialized" not in search_data
 
-    def test_detail_and_pos_nopage_stay_without_is_serialized(self, api_client):
+    def test_detail_meta_and_pos_nopage_stay_without_is_serialized(self, api_client):
         assert "is_serialized" not in ProductDetailSerializer.Meta.fields
+        assert "is_serialized" not in ProductListSerializer.Meta.fields
 
         owner, shop = _make_retailer(
             "list_serialized_pos_own", "List Serialized POS Shop"
