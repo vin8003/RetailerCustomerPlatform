@@ -3,7 +3,7 @@
 - **Implementation:** EXTEND (optional echo of `Product.manufacturer` when the attribute exists)
 - **Related:** [search-pos-brand-name.md](search-pos-brand-name.md) (list/detail already expose `brand_name`)
 
-Retailer and public **product detail** include top-level `manufacturer`. If the product has a `manufacturer` attribute, the stored value is echoed. If the attribute is missing (this stack: Product has no manufacturer column), or the value is null, the payload is `null`. Empty string stays empty. This is a field echo, not a manufacturer model or catalog rebuild.
+Retailer and public **product detail** include top-level `manufacturer`. If the product has a `manufacturer` attribute, that attribute value is echoed when present. If the attribute is missing (this stack: Product has no manufacturer column), or the value is null, the payload is `null`. Empty string stays empty. This is a field echo, not a manufacturer model or catalog rebuild.
 
 `manufacturer` is **not** added to `ProductDetailSerializer.Meta.fields` (or list/search Meta). Detail injects the key in `to_representation` via `getattr`.
 

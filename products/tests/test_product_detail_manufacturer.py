@@ -129,14 +129,16 @@ class TestProductDetailManufacturer:
 
         api_client.force_authenticate(user=owner)
         retailer_detail = api_client.get(_detail_url(product.id))
-        public_detail = api_client.get(_public_detail_url(shop.id, product.id))
-
         assert retailer_detail.status_code == status.HTTP_200_OK
-        assert public_detail.status_code == status.HTTP_200_OK
         assert retailer_detail.data["name"] == product.name
         assert retailer_detail.data["manufacturer"] is None
-        assert public_detail.data["manufacturer"] is None
         assert "manufacturer" in ProductDetailSerializer(product).data
+
+        api_client.force_authenticate(user=None)
+        public_detail = api_client.get(_public_detail_url(shop.id, product.id))
+        assert public_detail.status_code == status.HTTP_200_OK
+        assert public_detail.data["name"] == product.name
+        assert public_detail.data["manufacturer"] is None
 
     def test_serializer_echoes_when_attribute_exists(self):
         _owner, shop = _make_retailer("mfg_ser_own", "Mfg Ser Shop")
@@ -166,6 +168,8 @@ class TestProductDetailManufacturer:
         owner, shop = _make_retailer("mfg_write_own", "Mfg Write Shop")
         category = _make_category(shop, "Mfg Write Cat")
         product = _make_product(shop, category, "Mfg Write Atta")
+        sku_name = product.name
+        sku_price = product.price
 
         api_client.force_authenticate(user=owner)
         updated = api_client.patch(
@@ -174,8 +178,14 @@ class TestProductDetailManufacturer:
             format="json",
         )
         assert updated.status_code == status.HTTP_200_OK, updated.data
+        assert updated.data["id"] == product.id
+        assert updated.data["name"] == sku_name
+        assert Decimal(str(updated.data["price"])) == sku_price
         assert updated.data["manufacturer"] is None
         product.refresh_from_db()
+        assert product.id == updated.data["id"]
+        assert product.name == sku_name
+        assert product.price == sku_price
         assert not hasattr(product, "manufacturer")
         write = ProductUpdateSerializer(
             product, data={"manufacturer": "Ignored"}, partial=True
@@ -183,7 +193,28 @@ class TestProductDetailManufacturer:
         assert write.is_valid(), write.errors
         write.save()
         product.refresh_from_db()
+        assert product.name == sku_name
+        assert product.price == sku_price
         assert not hasattr(product, "manufacturer")
+
+        created = api_client.post(
+            reverse("create_product"),
+            {
+                "name": "Mfg Write Create Rice",
+                "price": "15.00",
+                "category": category.id,
+                "quantity": 4,
+                "manufacturer": "Should Not Persist",
+            },
+            format="json",
+        )
+        assert created.status_code == status.HTTP_201_CREATED, created.data
+        assert created.data["name"] == "Mfg Write Create Rice"
+        assert created.data["manufacturer"] is None
+        created_product = Product.objects.get(id=created.data["id"])
+        assert created_product.name == "Mfg Write Create Rice"
+        assert created_product.price == Decimal("15.00")
+        assert not hasattr(created_product, "manufacturer")
 
     def test_unauthenticated_and_customer_denied(self, api_client):
         owner, shop = _make_retailer("mfg_auth_own", "Mfg Auth Shop")
