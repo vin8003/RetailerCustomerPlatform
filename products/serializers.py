@@ -44,6 +44,37 @@ def json_qty(val):
     return val
 
 
+def json_optional_qty(val):
+    """JSON shape for optional qty; None stays None (not 0)."""
+    if val is None:
+        return None
+    if isinstance(val, Decimal):
+        if val == val.to_integral_value():
+            return int(val)
+        return float(val.normalize())
+    return val
+
+
+def attach_max_order_qty(data, instance):
+    """Include max_order_qty only when the instance has that attribute.
+
+    Detect via hasattr — do not consult model Meta or serializer Meta.fields.
+    Product has no max_order_qty column today, so catalog rows omit the key.
+    """
+    if not hasattr(instance, 'max_order_qty'):
+        return data
+    data['max_order_qty'] = json_optional_qty(instance.max_order_qty)
+    return data
+
+
+class OptionalMaxOrderQtyMixin:
+    """Echo max_order_qty when present on the instance. Not a Meta field."""
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        return attach_max_order_qty(data, instance)
+
+
 _MARGIN_PERCENT = serializers.DecimalField(
     max_digits=10, decimal_places=2, allow_null=True
 )
@@ -387,7 +418,7 @@ class ProductReviewSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'customer_name', 'is_verified_purchase', 'created_at']
 
 
-class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductListSerializer(OptionalMaxOrderQtyMixin, PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product list view
     """
@@ -569,7 +600,7 @@ class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, 
             return False
 
 
-class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductSearchSerializer(OptionalMaxOrderQtyMixin, PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Lightweight serializer for product search results
     """
@@ -627,7 +658,7 @@ class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
             logger.error(f"Error getting brand name: {e}")
             return None
 
-class ProductDetailSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductDetailSerializer(OptionalMaxOrderQtyMixin, PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product detail view
     """
