@@ -25,6 +25,7 @@ from retailers.suppliers import (
     require_purchasing_terms,
     resolve_supplier_home_retailer,
 )
+from products.inventory_ledger import InventoryLedgerRowSerializer
 from products.models import PurchaseInvoice, PurchaseItem, SupplierLedger, Product, ProductBatch, ProductInventoryLog
 from orders.models import Order, OrderItem
 from django.db.models import Sum, Q, Count, F, Case, When, DecimalField
@@ -874,24 +875,12 @@ def get_inventory_ledger(request):
     if reason:
         logs = logs.filter(reason=reason)
 
-    data = []
-    for log in logs.order_by('-created_at')[:100]:
-        data.append({
-            'id': log.id,
-            'product_id': log.product_id,
-            'product_name': log.product.name,
-            'barcode': log.product.barcode,
-            'log_type': log.log_type,
-            'batch_id': log.batch_id,
-            'quantity_change': log.quantity_change,
-            'previous_quantity': log.previous_quantity,
-            'new_quantity': log.new_quantity,
-            'reason': log.reason,
-            'created_at': log.created_at,
-            'created_by': log.created_by.get_full_name() if log.created_by else 'System'
-        })
-
-    return Response(data)
+    return Response(
+        InventoryLedgerRowSerializer(
+            logs.order_by('-created_at')[:100],
+            many=True,
+        ).data
+    )
 
 
 DEFAULT_EXPIRY_WINDOW_DAYS = 30

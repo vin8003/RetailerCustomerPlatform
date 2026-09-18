@@ -17,6 +17,7 @@ Null or empty `Product.barcode` stays `null` / `""`. Do not invent a `sku` colum
 | Product list `id` / `name` / `barcode` | EXISTING |
 | Neighboring ERP `product_id` / `product_name` (expiring batches) | EXISTING (OE-210) |
 | Ledger `product_id` / `product_name` / `barcode` | EXTEND (OE-315) |
+| Optional ledger `expiry_date` if the log field exists | EXTEND — [inventory-ledger-expiry.md](inventory-ledger-expiry.md) |
 | POS `no_page`, search Meta, FE, write paths | Out of scope |
 
 ## API
