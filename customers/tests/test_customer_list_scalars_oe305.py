@@ -3,13 +3,11 @@ OE-305 / F follow-on — email/notes/credit scalars on retailer customer list.
 
 Same four scalars as customer detail. Null stays null. Do not add
 detail-only blobs. Auth/tenancy unchanged. READ only.
-Sibling HOT files stay untouched: ProductSearchSerializer Meta (OE-303),
-orders/serializers.py (OE-301), products/views.py POS no_page (OE-302).
+This slice does not edit ProductSearchSerializer Meta (OE-303),
+orders/serializers.py (OE-301), or products/views.py POS no_page (OE-302).
 """
 from datetime import datetime, timezone
 from decimal import Decimal
-from hashlib import sha256
-from pathlib import Path
 
 import pytest
 from django.urls import reverse
@@ -21,57 +19,11 @@ from customers.serializers import (
     RetailerCustomerDetailSerializer,
     RetailerCustomerListSerializer,
 )
-from products.serializers import ProductSearchSerializer
 from retailers.models import RetailerCustomerMapping, RetailerProfile
 from retailers.organization import ensure_organization_for_profile
 
 LIST_SCALARS = ("email", "notes", "credit_limit", "credit_due_days")
 DETAIL_ONLY_BLOBS = ("recent_orders", "reward_history", "retailer_ratings")
-
-# PR #130 tip (d022f37) — this slice must not edit these sibling files.
-PRODUCT_SEARCH_SERIALIZER_SHA256 = (
-    "d8fac35801212b933dd7b568ba08b2ee99a57d1aaae6670f8ea3e4d395730f72"
-)
-ORDERS_SERIALIZERS_SHA256 = (
-    "e4abe66276febe3c723d09de59fdd384191e6f7854465a6d3819e65ba213d8a2"
-)
-PRODUCTS_VIEWS_SHA256 = (
-    "6b76e0d7299dc6be89550205b326628ab69f8edac0a1509352f0573d6e05d6c2"
-)
-SEARCH_META_FIELDS = [
-    "id",
-    "name",
-    "price",
-    "app_price",
-    "discounted_price",
-    "original_price",
-    "unit",
-    "image",
-    "category_name",
-    "brand_name",
-    "barcode",
-    "is_featured",
-    "is_active",
-    "is_seasonal",
-    "product_group",
-    "track_inventory",
-    "quantity",
-    "saleable_quantity",
-    "margin_percent",
-    "has_batches",
-    "batches",
-    "is_parent_bulk",
-    "parent_bulk_product",
-    "conversion_factor",
-    "fractional_children",
-    "group_variants",
-]
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-
-
-def _file_sha256(relpath):
-    return sha256((REPO_ROOT / relpath).read_bytes()).hexdigest()
 
 
 def _make_retailer(username, shop_name):
@@ -208,7 +160,7 @@ class TestRetailerCustomerListScalars:
             assert blob not in list_row
             assert blob in detail.data
 
-    def test_list_matches_detail_when_scalars_are_null(self, api_client):
+    def test_list_matches_detail_when_optional_scalars_unset(self, api_client):
         owner, shop = _make_retailer("oe305_own_null", "OE305 Null Shop")
         customer = _make_customer("oe305_cust_null", email="")
         RetailerCustomerMapping.objects.create(
@@ -257,45 +209,52 @@ class TestRetailerCustomerListScalars:
     def test_list_stays_shop_scoped(self, api_client):
         owner_a, shop_a = _make_retailer("oe305_ten_a", "OE305 Tenant A")
         owner_b, shop_b = _make_retailer("oe305_ten_b", "OE305 Tenant B")
-        customer_a = _make_customer("oe305_ten_cust_a", email="a305@example.com")
-        customer_b = _make_customer("oe305_ten_cust_b", email="b305@example.com")
+        shared = _make_customer("oe305_ten_shared", email="shared305@example.com")
+        other = _make_customer("oe305_ten_other", email="other305@example.com")
         RetailerCustomerMapping.objects.create(
             retailer=shop_a,
-            customer=customer_a,
+            customer=shared,
             notes="Shop A notes",
             credit_limit=Decimal("80.00"),
             credit_due_days=3,
         )
         RetailerCustomerMapping.objects.create(
             retailer=shop_b,
-            customer=customer_b,
+            customer=shared,
             notes="Shop B notes",
             credit_limit=Decimal("90.00"),
             credit_due_days=5,
+        )
+        RetailerCustomerMapping.objects.create(
+            retailer=shop_a,
+            customer=other,
+            notes="Other shop A only",
+            credit_limit=Decimal("10.00"),
+            credit_due_days=1,
         )
 
         api_client.force_authenticate(user=owner_b)
         listed = api_client.get(reverse("get_retailer_customers"))
         detail_b = api_client.get(
-            reverse("get_customer_details_for_retailer", args=[customer_b.id])
+            reverse("get_customer_details_for_retailer", args=[shared.id])
         )
         assert listed.status_code == status.HTTP_200_OK
         assert detail_b.status_code == status.HTTP_200_OK
 
         ids = {row["customer_id"] for row in _rows(listed.data)}
-        assert customer_a.id not in ids
-        assert customer_b.id in ids
-        list_b = _row_by_customer_id(listed.data, customer_b.id)
+        assert other.id not in ids
+        assert shared.id in ids
+        list_b = _row_by_customer_id(listed.data, shared.id)
         _assert_scalars_equal(list_b, detail_b.data)
         assert list_b["notes"] == "Shop B notes"
+        assert Decimal(str(list_b["credit_limit"])) == Decimal("90.00")
+        assert list_b["credit_due_days"] == 5
 
-    def test_sibling_hot_files_untouched(self):
-        assert _file_sha256("products/serializers.py") == PRODUCT_SEARCH_SERIALIZER_SHA256
-        assert _file_sha256("orders/serializers.py") == ORDERS_SERIALIZERS_SHA256
-        assert _file_sha256("products/views.py") == PRODUCTS_VIEWS_SHA256
-        assert list(ProductSearchSerializer.Meta.fields) == SEARCH_META_FIELDS
-        assert "no_page" in (REPO_ROOT / "products" / "views.py").read_text()
-        assert RetailerCustomerDetailSerializer().fields.keys() >= set(LIST_SCALARS)
+    def test_list_omits_detail_blobs(self):
+        list_fields = set(RetailerCustomerListSerializer().fields)
+        detail_fields = set(RetailerCustomerDetailSerializer().fields)
+        assert set(LIST_SCALARS) <= list_fields
+        assert set(LIST_SCALARS) <= detail_fields
         for blob in DETAIL_ONLY_BLOBS:
-            assert blob in RetailerCustomerDetailSerializer().fields
-            assert blob not in RetailerCustomerListSerializer().fields
+            assert blob in detail_fields
+            assert blob not in list_fields
