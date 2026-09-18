@@ -119,7 +119,7 @@ class OrderListSerializer(serializers.ModelSerializer):
         model = Order
         fields = [
             'id', 'order_number', 'retailer', 'retailer_name', 'customer_name', 'delivery_mode', 'payment_mode',
-            'status', 'total_amount', 'refund_amount', 'net_amount', 'is_returned', 'items_count', 'created_at', 'updated_at', 
+            'status', 'delivery_fee', 'discount_amount', 'total_amount', 'refund_amount', 'net_amount', 'is_returned', 'items_count', 'created_at', 'updated_at', 
             'has_customer_feedback', 'has_retailer_rating', 'feedback',
             'preparation_time_minutes', 'estimated_ready_time', 'expected_processing_start', 'cancelled_by', 'customer_average_rating', 'source'
             , 'payment_status', 'payment_reference_id', 'cash_amount', 'upi_amount', 'card_amount', 'credit_amount',
