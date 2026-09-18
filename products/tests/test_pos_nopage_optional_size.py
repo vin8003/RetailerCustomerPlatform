@@ -13,8 +13,8 @@ from django.urls import reverse
 from rest_framework import status
 
 from authentication.models import User
-from products.models import Product, ProductCategory
-from products.views import attach_optional_product_size
+from products.models import MasterProduct, Product, ProductCategory
+from products.views import attach_optional_product_size, product_has_size_column
 from retailers.models import RetailerProfile
 from retailers.organization import ensure_organization_for_profile
 
@@ -149,10 +149,13 @@ def _detail(api_client, product_id):
 
 class TestAttachOptionalProductSize:
     def test_omits_size_when_model_has_no_column(self):
-        row = attach_optional_product_size(
-            {}, SimpleNamespace(_meta=Product._meta)
+        row = {}
+        out = attach_optional_product_size(
+            row, SimpleNamespace(_meta=Product._meta)
         )
+        assert out is row
         assert "size" not in row
+        assert product_has_size_column(Product) is False
 
     def test_does_not_use_setattr_or_json_as_size_column(self):
         product = SimpleNamespace(
@@ -160,18 +163,32 @@ class TestAttachOptionalProductSize:
             size="invented",
             specifications={"size": "500ml"},
         )
-        row = attach_optional_product_size({}, product)
+        row = {}
+        out = attach_optional_product_size(row, product)
+        assert out is row
         assert "size" not in row
 
     def test_echoes_existing_size_including_empty(self):
-        assert attach_optional_product_size({}, _DummyWithSize("500ml")) == {
-            "size": "500ml"
-        }
-        assert attach_optional_product_size({}, _DummyWithSize("")) == {"size": ""}
-        assert attach_optional_product_size({}, _DummyWithSize(None)) == {"size": None}
+        filled = {}
+        assert attach_optional_product_size(filled, _DummyWithSize("500ml")) is filled
+        assert filled == {"size": "500ml"}
+        empty = attach_optional_product_size({}, _DummyWithSize(""))
+        assert empty == {"size": ""}
+        missing = attach_optional_product_size({}, _DummyWithSize(None))
+        assert missing == {"size": None}
 
     def test_ignores_attribute_when_column_missing(self):
         assert "size" not in attach_optional_product_size({}, _DummyWithoutSize())
+
+    def test_precomputed_flag_overrides_instance_meta(self):
+        row = attach_optional_product_size(
+            {}, _DummyWithSize("L"), has_size_column=False
+        )
+        assert "size" not in row
+        echoed = attach_optional_product_size(
+            {}, _DummyWithoutSize(), has_size_column=True
+        )
+        assert echoed == {"size": "XL"}
 
 
 @pytest.mark.django_db
@@ -202,22 +219,56 @@ class TestPosNoPageOptionalSize:
         assert "size" not in list_row
         assert "size" not in detail.data
 
-    def test_specifications_size_is_not_promoted(self, api_client):
+        search = api_client.get(reverse("search_products"), {"search": "POS Size Rice"})
+        assert search.status_code == status.HTTP_200_OK
+        search_row = _row_by_id(search.data, product.id)
+        assert "size" not in search_row
+
+    def test_pos_invokes_attach_once_per_row(self, api_client, monkeypatch):
+        owner, shop = _make_retailer("pos_size_spy_own", "POS Size Spy Shop")
+        category = _make_category(shop, "POS Size Spy Cat")
+        first = _make_product(shop, category, "POS Size Spy One")
+        second = _make_product(shop, category, "POS Size Spy Two")
+        calls = []
+        real = attach_optional_product_size
+
+        def _wrap(row, product, **kwargs):
+            calls.append(product.id)
+            return real(row, product, **kwargs)
+
+        monkeypatch.setattr("products.views.attach_optional_product_size", _wrap)
+        api_client.force_authenticate(user=owner)
+        pos = _pos(api_client)
+        assert pos.status_code == status.HTTP_200_OK
+        ids = {row["id"] for row in pos.data}
+        assert {first.id, second.id} <= ids
+        assert calls.count(first.id) == 1
+        assert calls.count(second.id) == 1
+        assert "size" not in _row_by_id(pos.data, first.id)
+
+    def test_specifications_and_master_attributes_are_not_promoted(self, api_client):
         owner, shop = _make_retailer("pos_size_spec_own", "POS Size Spec Shop")
         category = _make_category(shop, "POS Size Spec Cat")
+        master = MasterProduct.objects.create(
+            barcode="8900000999999",
+            name="POS Size Master Oil",
+            attributes={"size": "M"},
+        )
         product = _make_product(
             shop,
             category,
             "POS Size Spec Oil",
             specifications={"size": "1L"},
+            master_product=master,
         )
 
         api_client.force_authenticate(user=owner)
         pos = _pos(api_client)
         assert pos.status_code == status.HTTP_200_OK
         pos_row = _row_by_id(pos.data, product.id)
-        assert pos_row.get("specifications") != {"size": "1L"}
         assert "size" not in pos_row
+        assert "specifications" not in pos_row
+        assert "attributes" not in pos_row
 
     def test_pos_keeps_existing_row_keys(self, api_client):
         owner, shop = _make_retailer("pos_size_keys_own", "POS Size Keys Shop")
@@ -292,11 +343,18 @@ class TestPosNoPageOptionalSize:
             for row in resp.data:
                 assert "size" not in row
 
-        inactive_only = _pos(api_client, is_active="false")
-        assert inactive_only.status_code == status.HTTP_200_OK
-        inactive_ids = {row["id"] for row in inactive_only.data}
-        assert inactive.id in inactive_ids
-        assert active.id not in inactive_ids
+        for flag in POS_NO_PAGE_FLAGS:
+            if flag == "in_stock":
+                resp = _pos(api_client, in_stock="false")
+            else:
+                resp = _pos(api_client, **{flag: "false"})
+            assert resp.status_code == status.HTTP_200_OK, flag
+            assert isinstance(resp.data, list), flag
+            ids = {row["id"] for row in resp.data}
+            assert inactive.id in ids, flag
+            assert active.id not in ids, flag
+            for row in resp.data:
+                assert "size" not in row
 
     def test_unauthenticated_and_customer_denied(self, api_client):
         _owner, shop = _make_retailer("pos_size_auth_own", "POS Size Auth Shop")

@@ -7,6 +7,8 @@ Retailer POS `GET /api/products/?no_page=true` may include top-level `size` with
 
 This tree's `Product` model has **no** `size` column. Reads therefore **omit** the key. Do not invent `size` from `specifications`, master attributes, unit, or a hardcoded pack label.
 
+If a later migration adds `Product.size`, POS `no_page` will start emitting the stored value (empty/null passthrough). List/detail/search stay unchanged until those serializers are explicitly extended.
+
 ## EXISTING / EXTEND / NEW
 
 | Piece | Status |

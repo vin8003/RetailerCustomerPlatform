@@ -30,6 +30,6 @@ Atlassian MCP was rate-limited when this slice was implemented; no Jira key was 
 
 - `attach_optional_product_size` on the POS `no_page` hand-built dict
 - Copies `size` only when `_meta.concrete_fields` already includes `size`
-- Tests: helper dummy-with-column, omit when missing, specifications not promoted, existing row keys, query-flag non-regression, auth, tenancy, public unchanged
+- Tests: helper dummy-with-column (mutates input), omit when missing, POS calls helper once per row, specifications/master attributes not promoted, search unchanged, existing row keys, query-flag true/false non-regression, auth, tenancy, public unchanged
 
 Out of scope: `Product.size` migration, specifications/master-attribute invent, search Meta, pack write, inventory.adjust, timeline/OFD/khata/UPI/slots, FE, merge, Jira Done, live `*.ordereasy.win`.

@@ -85,19 +85,6 @@ logger = logging.getLogger(__name__)
 
 from django.core.cache import cache
 
-
-def attach_optional_product_size(row, product):
-    """POS no_page: echo ``size`` only when Product already has that column.
-
-    Do not invent a size field, default, or value when the model has none.
-    """
-    fields = getattr(getattr(product, '_meta', None), 'concrete_fields', ())
-    if not any(getattr(field, 'name', None) == 'size' for field in fields):
-        return row
-    row['size'] = getattr(product, 'size', None)
-    return row
-
-
 def get_cached_category_tree():
     """
     Returns a cached dictionary of the category tree.
@@ -310,6 +297,26 @@ class ProductPagination(PageNumberPagination):
     max_page_size = 100
 
 
+def product_has_size_column(model_or_instance=Product):
+    """True only when the Product model already has a concrete ``size`` column."""
+    fields = getattr(getattr(model_or_instance, '_meta', None), 'concrete_fields', ())
+    return any(getattr(field, 'name', None) == 'size' for field in fields)
+
+
+def attach_optional_product_size(row, product, *, has_size_column=None):
+    """POS no_page: echo ``size`` only when Product already has that column.
+
+    Do not invent a size field, default, or value when the model has none.
+    The moment a ``size`` column exists, POS ``no_page`` will start emitting it.
+    """
+    if has_size_column is None:
+        has_size_column = product_has_size_column(product)
+    if not has_size_column:
+        return row
+    row['size'] = getattr(product, 'size', None)
+    return row
+
+
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
 def get_retailer_products(request):
@@ -423,6 +430,7 @@ def get_retailer_products(request):
                 if include_margin
                 else {}
             )
+            has_size_column = product_has_size_column(Product)
 
             data = []
             for p in pos_products:
@@ -477,7 +485,9 @@ def get_retailer_products(request):
                         p, pos_variant_context
                     ),
                 }
-                attach_optional_product_size(row, p)
+                row = attach_optional_product_size(
+                    row, p, has_size_column=has_size_column
+                )
                 if include_margin:
                     if p.purchase_price is not None:
                         cost = p.purchase_price
