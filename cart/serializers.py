@@ -141,8 +141,12 @@ class CartSerializer(serializers.ModelSerializer):
         return float(obj.retailer.minimum_order_amount)
 
     def to_representation(self, instance):
-        # Join brand on the cart-item prefetch so brand_name is not N+1.
-        # Views already prefetch items__product (without brand) in some paths.
+        # Views often prefetch items__product without brand. Drop that cache
+        # so this Prefetch can join brand; otherwise Django skips a second
+        # items prefetch and brand_name becomes per-row ProductBrand lookups.
+        cache = getattr(instance, '_prefetched_objects_cache', None)
+        if cache is not None:
+            cache.pop('items', None)
         prefetch_related_objects(
             [instance],
             Prefetch(
