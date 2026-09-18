@@ -27,7 +27,7 @@ from retailers.models import RetailerProfile
 from retailers.organization import ensure_organization_for_profile
 
 NET_WEIGHT_ATTA = Decimal("0.500")
-NET_WEIGHT_RICE = Decimal("5.000")
+NET_WEIGHT_ATTA_JSON = "0.500"
 
 
 def _make_retailer(username, shop_name):
@@ -97,7 +97,6 @@ def _as_weight(value):
     return Decimal(str(value))
 
 
-@pytest.mark.django_db
 class TestProductNetWeightHelper:
     def test_missing_attribute_is_null(self):
         assert not hasattr(Product, "net_weight")
@@ -108,13 +107,12 @@ class TestProductNetWeightHelper:
 
     def test_present_value_is_echoed(self):
         dummy = SimpleNamespace(net_weight=NET_WEIGHT_ATTA)
-        assert product_net_weight(dummy) == NET_WEIGHT_ATTA
+        assert product_net_weight(dummy) == NET_WEIGHT_ATTA_JSON
 
     def test_null_passthrough(self):
         assert product_net_weight(SimpleNamespace(net_weight=None)) is None
 
 
-@pytest.mark.django_db
 class TestProductNetWeightAvoidsMeta:
     def test_catalog_meta_does_not_declare_net_weight(self):
         for serializer_cls in (
@@ -157,6 +155,7 @@ class TestProductNetWeightSerializers:
             ProductDetailSerializer,
         ):
             data = serializer_cls(product).data
+            assert data["net_weight"] == NET_WEIGHT_ATTA_JSON
             assert _as_weight(data["net_weight"]) == NET_WEIGHT_ATTA
 
     def test_serializer_null_passthrough_when_attribute_is_none(self):
@@ -192,6 +191,22 @@ class TestProductNetWeightSerializers:
         created.refresh_from_db()
         assert not hasattr(created, "net_weight")
 
+    def test_update_payload_net_weight_is_ignored(self):
+        _owner, shop = _make_retailer("nw_upd_own", "NW Update Shop")
+        category = _make_category(shop, "NW Update Cat")
+        product = _make_product(shop, category, "NW Dummy Update")
+        serializer = ProductUpdateSerializer(
+            product,
+            data={"name": "NW Dummy Update", "net_weight": "9.999"},
+            partial=True,
+        )
+        assert serializer.is_valid(), serializer.errors
+        updated = serializer.save()
+        assert not hasattr(updated, "net_weight")
+        updated.refresh_from_db()
+        assert not hasattr(updated, "net_weight")
+        assert updated.name == "NW Dummy Update"
+
 
 @pytest.mark.django_db
 class TestProductNetWeightReads:
@@ -213,6 +228,17 @@ class TestProductNetWeightReads:
         for row in (list_row, search_row, detail.data):
             assert "net_weight" in row
             assert row["net_weight"] is None
+
+    def test_pos_no_page_does_not_add_net_weight(self, api_client):
+        owner, shop = _make_retailer("nw_pos_own", "NW POS Shop")
+        category = _make_category(shop, "NW POS Cat")
+        product = _make_product(shop, category, "NW POS Rice")
+
+        api_client.force_authenticate(user=owner)
+        pos = api_client.get(reverse("get_retailer_products"), {"no_page": "true"})
+        assert pos.status_code == status.HTTP_200_OK
+        pos_row = _row_by_id(pos.data, product.id)
+        assert "net_weight" not in pos_row
 
     def test_unauthenticated_retailer_reads_denied(self, api_client):
         listed = api_client.get(reverse("get_retailer_products"))
@@ -264,3 +290,6 @@ class TestProductNetWeightReads:
         }
         assert product_a.id in ids
         assert product_b.id not in ids
+
+        detail_b = api_client.get(reverse("get_product_detail", args=[product_b.id]))
+        assert detail_b.status_code == status.HTTP_404_NOT_FOUND

@@ -25,6 +25,8 @@ Do **not** declare `net_weight` on serializer `Meta.fields`. `ProductSearchSeria
 | GET | `/api/products/search/` | Authenticated retailer | same, via mixin (not Meta) |
 | GET | `/api/products/<id>/` | Authenticated retailer | same |
 | GET | `/api/products/retailer/<id>/` (public) | Customer / anonymous | Additive via shared list serializer |
+| GET | `/api/products/retailer/<id>/search/` (public) | Customer / anonymous | Additive via shared search serializer |
+| GET | `/api/products/retailer/<id>/<product_id>/` (public) | Customer / anonymous | Additive via shared detail serializer |
 
 Missing attribute → `null`. Null stays null. Do not invent a weight.
 

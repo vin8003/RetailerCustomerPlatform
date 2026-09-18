@@ -49,6 +49,11 @@ _MARGIN_PERCENT = serializers.DecimalField(
 )
 
 
+_NET_WEIGHT = serializers.DecimalField(
+    max_digits=12, decimal_places=3, allow_null=True
+)
+
+
 def product_net_weight(product):
     """Echo Product.net_weight when the attribute exists; otherwise None.
 
@@ -57,7 +62,10 @@ def product_net_weight(product):
     """
     if product is None:
         return None
-    return getattr(product, "net_weight", None)
+    value = getattr(product, "net_weight", None)
+    if value is None:
+        return None
+    return _NET_WEIGHT.to_representation(value)
 
 
 class OptionalNetWeightReadMixin:
