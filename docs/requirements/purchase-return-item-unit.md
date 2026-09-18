@@ -11,7 +11,7 @@ Retailer purchase-return **line items** include top-level `unit` when `product.u
 | Piece | Status |
 |-------|--------|
 | `Product.unit` on list / detail serializers | EXISTING |
-| `unit` on purchase invoice line items | EXISTING (OE-310) — do not change |
+| `unit` on purchase invoice line items | OE-310 (sibling; do not change here) |
 | `unit` on sales-return line items | EXISTING / flying (OE-313) — do not change |
 | `unit` on purchase-return line items | EXTEND (this slice) |
 | `get_invoice_items` picker `unit` | Out of scope (separate slice) |

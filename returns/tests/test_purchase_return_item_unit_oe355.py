@@ -224,6 +224,16 @@ class TestPurchaseReturnItemUnit:
                 assert item["unit"] == detail["unit"]
                 assert item["product_name"] == product.name
 
+    def test_missing_product_unit_is_null(self):
+        item = PurchaseReturnItem(
+            quantity=Decimal("1.000"),
+            purchase_price=Decimal("10.00"),
+            total=Decimal("10.00"),
+        )
+        item.product = None
+        data = PurchaseReturnItemSerializer(item).data
+        assert data["unit"] is None
+
     def test_empty_unit_stays_empty_like_list(self, api_client):
         owner, shop = _make_retailer("pr_unit_empty_own", "PR Empty Shop")
         category = _make_category(shop, "PR Empty Cat")
@@ -300,6 +310,28 @@ class TestPurchaseReturnItemUnit:
         assert item["unit"] == "kg"
         product.refresh_from_db()
         assert product.unit == "kg"
+
+    def test_get_invoice_items_picker_does_not_echo_unit(self, api_client):
+        owner, shop = _make_retailer("pr_unit_picker_own", "PR Picker Shop")
+        category = _make_category(shop, "PR Picker Cat")
+        product = _make_product(shop, category, "PR Picker Rice", unit="kg")
+        supplier = _make_supplier(shop, "PR Picker Vendor")
+        invoice, _items = _make_invoice(
+            shop,
+            supplier,
+            "INV-PR-UNIT-PICKER",
+            [(product, Decimal("1.000"), Decimal("10.00"))],
+        )
+
+        api_client.force_authenticate(user=owner)
+        response = api_client.get(
+            reverse("purchase-return-get-invoice-items"),
+            {"invoice_id": invoice.id},
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert len(response.data) == 1
+        assert response.data[0]["product_id"] == product.id
+        assert "unit" not in response.data[0]
 
     def test_unauthenticated_denied(self, api_client):
         owner, shop = _make_retailer("pr_unit_auth_own", "PR Auth Shop")
@@ -437,6 +469,52 @@ class TestPurchaseReturnItemUnit:
         assert child_item["unit"] == child_detail.data["unit"] == "piece"
         assert parent_item["unit"] != child_item["unit"]
         assert Decimal(str(child.conversion_factor)) == Decimal("0.1000")
+
+    def test_http_list_and_detail_prefetch_adds_no_product_query(self, api_client):
+        owner, shop = _make_retailer("pr_unit_http_n1_own", "PR HTTP N1 Shop")
+        category = _make_category(shop, "PR HTTP N1 Cat")
+        products = [
+            _make_product(shop, category, f"PR HTTP N1 {unit}", unit=unit)
+            for unit in ("kg", "pack", "liter")
+        ]
+        supplier = _make_supplier(shop, "PR HTTP N1 Vendor")
+        invoice, invoice_items = _make_invoice(
+            shop,
+            supplier,
+            "INV-PR-HTTP-N1",
+            [(product, Decimal("1.000"), Decimal("10.00")) for product in products],
+        )
+        item_by_product = {row.product_id: row for row in invoice_items}
+        purchase_return, _items = _make_purchase_return(
+            shop,
+            supplier,
+            invoice,
+            owner,
+            [
+                (product, Decimal("1.000"), Decimal("10.00"), item_by_product[product.id])
+                for product in products
+            ],
+        )
+
+        api_client.force_authenticate(user=owner)
+        with CaptureQueriesContext(connection) as captured:
+            return_list = api_client.get(reverse("purchase-return-list"))
+            return_detail = api_client.get(
+                reverse("purchase-return-detail", args=[purchase_return.id])
+            )
+
+        assert return_list.status_code == status.HTTP_200_OK
+        assert return_detail.status_code == status.HTTP_200_OK
+        list_return = _return_from_list(return_list.data, purchase_return.id)
+        assert [_item_by_product(list_return, product.id)["unit"] for product in products] == [
+            "kg",
+            "pack",
+            "liter",
+        ]
+        assert [
+            _item_by_product(return_detail.data, product.id)["unit"] for product in products
+        ] == ["kg", "pack", "liter"]
+        assert _product_table_reads(captured) == []
 
     def test_select_related_product_adds_no_unit_query(self):
         owner, shop = _make_retailer("pr_unit_n1_own", "PR N1 Shop")
