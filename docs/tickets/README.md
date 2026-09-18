@@ -60,7 +60,7 @@ They are **not** automatically durable knowledge. Many pages are builder briefs,
 | [OE-192.md](OE-192.md) | durable | [group-variants-reads](../requirements/group-variants-reads.md) |
 | [OE-136.md](OE-136.md) | durable | [product-batch-expiry](../requirements/product-batch-expiry.md) |
 | [OE-144.md](OE-144.md) | durable | [product-batch-expiry](../requirements/product-batch-expiry.md) |
-| [OE-149.md](OE-149.md) | durable | [product-batch-expiry](../requirements/product-batch-expiry.md) |
+| [OE-149.md](OE-149.md) | durable | [product-batch-expiry](../requirements/product-batch-expiry.md), [reorder-level-reads](../requirements/reorder-level-reads.md) |
 | [OE-141.md](OE-141.md) | durable | [damage-expiry-write-off](../requirements/damage-expiry-write-off.md) |
 | [OE-315.md](OE-315.md) | durable | [inventory-ledger-product-identity](../requirements/inventory-ledger-product-identity.md) |
 | [OE-106.md](OE-106.md) | durable | [app-vs-pos-prices](../requirements/app-vs-pos-prices.md) |

@@ -1,6 +1,6 @@
 # ProductBatch expiry and FIFO pick
 
-- **Ticket:** [OE-136](https://vin8003.atlassian.net/browse/OE-136) · backlog `F-0030` · [snapshot](../tickets/OE-136.md); POS `no_page` echo [OE-144](https://vin8003.atlassian.net/browse/OE-144) · [snapshot](../tickets/OE-144.md); batch `is_expired` read [OE-149](https://vin8003.atlassian.net/browse/OE-149) · [snapshot](../tickets/OE-149.md)
+- **Ticket:** [OE-136](https://vin8003.atlassian.net/browse/OE-136) · backlog `F-0030` · [snapshot](../tickets/OE-136.md); POS `no_page` echo [OE-144](https://vin8003.atlassian.net/browse/OE-144) · [snapshot](../tickets/OE-144.md); batch `is_expired` read [OE-149](https://vin8003.atlassian.net/browse/OE-149) · [snapshot](../tickets/OE-149.md); optional product `reorder_level` [reorder-level-reads.md](reorder-level-reads.md)
 - **Implementation:** EXTEND (`ProductBatch.expiry_date` + sale/pick on `Product.reduce_quantity`)
 - **Depends on:** [inventory-adjust-permission.md](inventory-adjust-permission.md), [inventory-and-batches.md](../07-KEY-FLOWS/inventory-and-batches.md)
 
@@ -19,6 +19,7 @@ Batches can store an optional expiry date. At sale/pick, FIFO consumes the earli
 | Expiry create/change on product update requires `inventory.adjust` | EXTEND |
 | POS `no_page` active batch rows include `expiry_date` (null OK) | EXTEND (OE-144; same as `ProductBatchSerializer`) |
 | Batch reads include boolean `is_expired` | EXTEND (OE-149; `ProductBatch.is_expired()`, null → false) |
+| Optional `reorder_level` on product list / detail / search | EXTEND (OE-149 follow-on; echo only if the model field exists; not Meta) |
 | Cross-tenant product get/update still retailer-scoped | EXISTING, locked |
 | `mfg_date`, LIFO/MRP engines, org FIFO flag, FE pickers, `StockMovement` | Out of scope |
 
