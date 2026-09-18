@@ -64,6 +64,7 @@ If you return goods to a supplier:
 - Open the purchase or use **return** flow
 - Stock decreases
 - Supplier balance adjusts
+- Returned lines show the product brand when the SKU has one
 
 Keep paperwork aligned with physical returns.
 
