@@ -30,6 +30,7 @@ The **[`wiki/`](../wiki/README.md)** folder is the plain-language help centre â€
 | [requirements/](requirements/) | Durable product/engineering requirements extracted from tickets |
 | [decisions/](decisions/) | Architecture Decision Records (ADRs) |
 | [tickets/](tickets/) | Jira work snapshots (not a substitute for Jira status) |
+| [oe-thin-backlog/](oe-thin-backlog/README.md) | Scout-only mint-ready thin tickets (round 2: OE-339â€“353 drafts; not Jira status) |
 | [visuals/](visuals/) | Illustrative diagrams and screenshot rules |
 | [gitbook-migration/](gitbook-migration/) | Migration history (preserve) |
 
