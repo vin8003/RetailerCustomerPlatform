@@ -18,6 +18,7 @@ from rest_framework import status
 from authentication.models import User
 from products.models import Product, ProductCategory
 from products.serializers import (
+    ProductCreateSerializer,
     ProductDetailSerializer,
     ProductListSerializer,
     ProductSearchSerializer,
@@ -209,6 +210,42 @@ class TestProductListIsComposite:
         product.refresh_from_db()
         assert not hasattr(product, "is_composite")
 
+    def test_create_payload_is_composite_is_ignored(self, api_client):
+        owner, shop = _make_retailer("list_comp_create_own", "List Comp Create Shop")
+        category = _make_category(shop, "List Comp Create Cat")
+
+        api_client.force_authenticate(user=owner)
+        created = api_client.post(
+            reverse("create_product"),
+            {
+                "name": "List Comp Create Rice",
+                "price": "20.00",
+                "quantity": "8.000",
+                "category": category.id,
+                "is_composite": True,
+            },
+            format="json",
+        )
+        assert created.status_code == status.HTTP_201_CREATED, created.data
+        created_id = created.data.get("id")
+        assert created_id
+        sku = Product.objects.get(pk=created_id)
+        assert not hasattr(sku, "is_composite")
+
+        write = ProductCreateSerializer(
+            data={
+                "name": "List Comp Create Sugar",
+                "price": "20.00",
+                "quantity": "8.000",
+                "category": category.id,
+                "is_composite": True,
+            },
+            context={"retailer": shop},
+        )
+        assert write.is_valid(), write.errors
+        saved = write.save()
+        assert not hasattr(saved, "is_composite")
+
     def test_unauthenticated_and_customer_denied(self, api_client):
         owner, shop = _make_retailer("list_comp_auth_own", "List Comp Auth Shop")
         category = _make_category(shop, "List Comp Auth Cat")
@@ -269,6 +306,8 @@ class TestProductListIsComposite:
             ProductListSerializer,
             ProductSearchSerializer,
             ProductDetailSerializer,
+            ProductCreateSerializer,
+            ProductUpdateSerializer,
         )
 
     def test_detail_search_and_pos_nopage_stay_without_is_composite(self, api_client):
