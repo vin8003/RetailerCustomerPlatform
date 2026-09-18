@@ -453,6 +453,11 @@ class ProductListSerializer(OptionalIsSerializedMixin, PurchaseMarginReadMixin, 
             'fractional_children', 'group_variants',
         ]
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["color"] = getattr(instance, "color", None)
+        return data
+
     def get_quantity(self, obj):
         val = obj.quantity
         if val is None: return 0
