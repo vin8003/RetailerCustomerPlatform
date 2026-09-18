@@ -85,6 +85,19 @@ logger = logging.getLogger(__name__)
 
 from django.core.cache import cache
 
+
+def attach_optional_product_size(row, product):
+    """POS no_page: echo ``size`` only when Product already has that column.
+
+    Do not invent a size field, default, or value when the model has none.
+    """
+    fields = getattr(getattr(product, '_meta', None), 'concrete_fields', ())
+    if not any(getattr(field, 'name', None) == 'size' for field in fields):
+        return row
+    row['size'] = getattr(product, 'size', None)
+    return row
+
+
 def get_cached_category_tree():
     """
     Returns a cached dictionary of the category tree.
@@ -464,6 +477,7 @@ def get_retailer_products(request):
                         p, pos_variant_context
                     ),
                 }
+                attach_optional_product_size(row, p)
                 if include_margin:
                     if p.purchase_price is not None:
                         cost = p.purchase_price
