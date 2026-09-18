@@ -17,6 +17,8 @@ from django.urls import reverse
 from rest_framework import status
 
 from authentication.models import User
+from pathlib import Path
+
 from products.models import Product, ProductCategory, PurchaseInvoice, PurchaseItem
 from products.serializers import ProductSearchSerializer
 from retailers.models import RetailerProfile, Supplier
@@ -154,7 +156,6 @@ def _product_table_reads(captured):
     ]
 
 
-@pytest.mark.django_db
 class TestProductHsnCodeHelper:
     def test_missing_attribute_is_null(self):
         assert not hasattr(Product, "hsn_code")
@@ -276,6 +277,9 @@ class TestPurchaseReturnItemHsn:
             shop, supplier, [(product, Decimal("2.000"), Decimal("10.00"))]
         )
         purchase_item = invoice.items.get(product=product)
+        name_before = product.name
+        barcode_before = product.barcode
+        quantity_before = product.quantity
 
         api_client.force_authenticate(user=owner)
         created = api_client.post(
@@ -301,6 +305,9 @@ class TestPurchaseReturnItemHsn:
         assert item["hsn_code"] is None
         product.refresh_from_db()
         assert not hasattr(product, "hsn_code")
+        assert product.name == name_before
+        assert product.barcode == barcode_before
+        assert product.quantity == quantity_before - Decimal("1.000")
 
     def test_unauthenticated_denied(self, api_client):
         owner, shop = _make_retailer("oe339_auth_own", "OE339 Auth Shop")
@@ -434,8 +441,48 @@ class TestPurchaseReturnItemHsn:
         assert _item_by_product(payload, product.id)["hsn_code"] == "1701"
         assert _product_table_reads(captured) == []
 
+    def test_list_detail_prefetch_adds_no_extra_product_query(self, api_client):
+        owner, shop = _make_retailer("oe339_http_n1_own", "OE339 HTTP N1 Shop")
+        category = _make_category(shop, "OE339 HTTP N1 Cat")
+        products = [
+            _make_product(shop, category, f"OE339 HTTP N1 {idx}")
+            for idx in range(3)
+        ]
+        supplier = _make_supplier(shop, "OE339 HTTP N1 Supplier")
+        invoice = _make_invoice(
+            shop,
+            supplier,
+            [(product, Decimal("1.000"), Decimal("10.00")) for product in products],
+        )
+        purchase_return, _items = _make_purchase_return(
+            shop,
+            supplier,
+            invoice,
+            owner,
+            [(product, Decimal("1.000"), Decimal("10.00")) for product in products],
+        )
+
+        api_client.force_authenticate(user=owner)
+        with CaptureQueriesContext(connection) as captured:
+            return_detail = api_client.get(
+                reverse("purchase-return-detail", args=[purchase_return.id])
+            )
+            return_list = api_client.get(reverse("purchase-return-list"))
+
+        assert return_detail.status_code == status.HTTP_200_OK
+        assert return_list.status_code == status.HTTP_200_OK
+        list_return = _return_from_list(return_list.data, purchase_return.id)
+        for payload in (return_detail.data, list_return):
+            for product in products:
+                assert _item_by_product(payload, product.id)["hsn_code"] is None
+        assert _product_table_reads(captured) == []
+
     def test_sales_return_item_serializer_stays_without_hsn(self):
         assert "hsn_code" not in SalesReturnItemSerializer.Meta.fields
 
     def test_product_search_serializer_meta_stays_without_hsn(self):
         assert "hsn_code" not in ProductSearchSerializer.Meta.fields
+
+    def test_pos_views_do_not_gain_hsn(self):
+        views_src = Path("products/views.py").read_text(encoding="utf-8")
+        assert "hsn_code" not in views_src

@@ -11,7 +11,7 @@ Retailer purchase-return **line items** include top-level `hsn_code`. If the rel
 |-------|--------|
 | `PurchaseReturnItemSerializer` identity (`product`, `product_name`) | EXISTING |
 | Optional `hsn_code` on purchase-return line items | EXTEND (OE-339) |
-| `SalesReturnItemSerializer` | EXISTING (OE-313 owns `unit`) — do not add HSN here |
+| `SalesReturnItemSerializer` | EXISTING (OE-313 owns that class — do not add HSN here) |
 | `ProductSearchSerializer` Meta | EXISTING — do not change |
 | POS `products/views.py` | EXISTING — do not change |
 | Product `hsn_code` column / GST slabs | Out of scope |
@@ -29,7 +29,7 @@ Write payloads may include `hsn_code`; it is ignored. The SKU is not changed. Re
 
 Unauthenticated → **401**. Tenant B cannot read tenant A's return (absent / **404**).
 
-`get_hsn_code` reads the product row already loaded for `product_name`. List/detail querysets prefetch items with `select_related('product')` so the echo adds no extra product query.
+`get_hsn_code` reads the product row already loaded for `product_name`. List/detail querysets prefetch items with `select_related('product', 'batch')` so the echo adds no extra product query.
 
 ## Not in this change
 
