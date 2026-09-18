@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from decimal import Decimal
+from django.core.exceptions import FieldDoesNotExist
 from django.db import transaction
 from django.db.models import Avg, F, Sum
 from returns.models import PurchaseReturnItem
@@ -42,6 +43,39 @@ def json_qty(val):
             return int(val)
         return float(val.normalize())
     return val
+
+
+def product_has_track_serial_field(model=None):
+    """True when Product (or a dummy stand-in) declares track_serial."""
+    target = Product if model is None else model
+    meta = getattr(target, '_meta', None)
+    if meta is None:
+        return False
+    try:
+        meta.get_field('track_serial')
+    except FieldDoesNotExist:
+        return False
+    return True
+
+
+def attach_track_serial(data, instance, model=None):
+    """Echo track_serial only when the model field exists.
+
+    Missing field → omit the key. False stays false. Null stays null
+    (do not invent False).
+    """
+    if not product_has_track_serial_field(model):
+        return data
+    data['track_serial'] = getattr(instance, 'track_serial', None)
+    return data
+
+
+class TrackSerialReadMixin:
+    """Optional track_serial on product reads. Not declared on Meta.fields."""
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        return attach_track_serial(data, instance)
 
 
 _MARGIN_PERCENT = serializers.DecimalField(
@@ -387,7 +421,7 @@ class ProductReviewSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'customer_name', 'is_verified_purchase', 'created_at']
 
 
-class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductListSerializer(TrackSerialReadMixin, PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product list view
     """
@@ -569,7 +603,7 @@ class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, 
             return False
 
 
-class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductSearchSerializer(TrackSerialReadMixin, PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Lightweight serializer for product search results
     """
@@ -627,7 +661,7 @@ class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
             logger.error(f"Error getting brand name: {e}")
             return None
 
-class ProductDetailSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductDetailSerializer(TrackSerialReadMixin, PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product detail view
     """
