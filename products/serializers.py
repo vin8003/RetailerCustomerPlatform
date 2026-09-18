@@ -627,6 +627,20 @@ class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
             logger.error(f"Error getting brand name: {e}")
             return None
 
+
+def product_manufacturer(product):
+    """Echo Product.manufacturer when the attribute exists; otherwise None.
+
+    Product has no manufacturer column on this stack. Do not add it to
+    ProductDetailSerializer.Meta.fields. Missing attribute, missing product,
+    and stored null all pass through as None. Empty string stays empty — do
+    not invent a manufacturer.
+    """
+    if product is None:
+        return None
+    return getattr(product, "manufacturer", None)
+
+
 class ProductDetailSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product detail view
@@ -883,6 +897,11 @@ class ProductDetailSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
             return False
         except Exception:
             return False
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["manufacturer"] = product_manufacturer(instance)
+        return data
 
 class MasterProductSerializer(serializers.ModelSerializer):
     """
