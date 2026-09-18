@@ -1332,14 +1332,25 @@ class PurchaseItemSerializer(serializers.ModelSerializer):
     Serializer for Purchase Items
     """
     product_name = serializers.CharField(source='product.name', read_only=True)
+    # OE-310: echo Product.unit already on list/detail. Null/empty stays null/empty.
+    unit = serializers.CharField(
+        source='product.unit',
+        read_only=True,
+        allow_null=True,
+        allow_blank=True,
+    )
     # Fields to allow updating product prices during purchase
     new_price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, write_only=True)
     new_original_price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, write_only=True)
 
     class Meta:
         model = PurchaseItem
-        fields = ['id', 'product', 'product_name', 'quantity', 'purchase_price', 'total', 'mrp_updated', 'new_price', 'new_original_price', 'returned_quantity', 'net_quantity']
-        read_only_fields = ['id']
+        fields = [
+            'id', 'product', 'product_name', 'unit', 'quantity', 'purchase_price',
+            'total', 'mrp_updated', 'new_price', 'new_original_price',
+            'returned_quantity', 'net_quantity',
+        ]
+        read_only_fields = ['id', 'unit']
 
     returned_quantity = serializers.SerializerMethodField()
     net_quantity = serializers.SerializerMethodField()
