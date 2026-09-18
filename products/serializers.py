@@ -627,9 +627,27 @@ class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
             logger.error(f"Error getting brand name: {e}")
             return None
 
+def optional_is_returnable(instance):
+    """Echo Product.is_returnable when the attribute exists; else None.
+
+    Do not add is_returnable to ProductDetailSerializer.Meta.fields (or
+    search/list Meta). Missing attribute and stored null pass through as
+    None. Present false stays false — do not invent a return policy.
+    """
+    if instance is None:
+        return None
+    value = getattr(instance, 'is_returnable', None)
+    if value is None:
+        return None
+    return bool(value)
+
+
 class ProductDetailSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
-    Serializer for product detail view
+    Serializer for product detail view.
+
+    Optional ``is_returnable`` is echoed via ``optional_is_returnable``
+    (no Product column invent; not on search/list Meta).
     """
     category = ProductCategorySerializer(read_only=True)
     category_name = serializers.SerializerMethodField()
@@ -883,6 +901,11 @@ class ProductDetailSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
             return False
         except Exception:
             return False
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data['is_returnable'] = optional_is_returnable(instance)
+        return data
 
 class MasterProductSerializer(serializers.ModelSerializer):
     """
