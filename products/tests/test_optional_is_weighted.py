@@ -7,6 +7,8 @@ No live *.ordereasy.win.
 """
 import json
 from decimal import Decimal
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from django.core.exceptions import FieldDoesNotExist
@@ -84,12 +86,37 @@ def _assert_no_live_host(data):
     assert LIVE_HOST_NEEDLE not in _payload_text(data)
 
 
+def _stub_is_weighted_model_field(concrete=True, many_to_many=False):
+    """Keep real get_field for existing columns; only invent is_weighted."""
+    real_get_field = Product._meta.get_field
+
+    def fake_get_field(name):
+        if name == "is_weighted":
+            return SimpleNamespace(concrete=concrete, many_to_many=many_to_many)
+        return real_get_field(name)
+
+    return patch.object(Product._meta, "get_field", side_effect=fake_get_field)
+
+
 @pytest.mark.django_db
 class TestOptionalIsWeightedHelper:
     def test_model_field_is_absent_today(self):
+        """Canary: current Product has no is_weighted column."""
         with pytest.raises(FieldDoesNotExist):
             Product._meta.get_field("is_weighted")
         assert product_model_has_is_weighted() is False
+
+    def test_helper_true_for_concrete_field(self):
+        with _stub_is_weighted_model_field(concrete=True, many_to_many=False):
+            assert product_model_has_is_weighted() is True
+
+    def test_helper_false_for_non_concrete_field(self):
+        with _stub_is_weighted_model_field(concrete=False, many_to_many=False):
+            assert product_model_has_is_weighted() is False
+
+    def test_helper_false_for_many_to_many(self):
+        with _stub_is_weighted_model_field(concrete=True, many_to_many=True):
+            assert product_model_has_is_weighted() is False
 
 
 @pytest.mark.django_db
@@ -110,52 +137,42 @@ class TestOptionalIsWeightedSerializers:
         assert DUMMY_IMAGE_URL in _payload_text(data)
 
     @pytest.mark.parametrize("serializer_cls", READ_SERIALIZERS)
-    def test_echoes_true_when_model_field_exists(
-        self, serializer_cls, product, monkeypatch
-    ):
-        monkeypatch.setattr(
-            "products.serializers.product_model_has_is_weighted",
-            lambda: True,
-        )
+    def test_echoes_true_when_model_field_exists(self, serializer_cls, product):
         product.image_url = DUMMY_IMAGE_URL
         product.is_weighted = True
 
-        data = serializer_cls(product).data
+        with _stub_is_weighted_model_field():
+            data = serializer_cls(product).data
         assert data["is_weighted"] is True
         _assert_no_live_host(data)
 
     @pytest.mark.parametrize("serializer_cls", READ_SERIALIZERS)
-    def test_false_stays_false_when_model_field_exists(
-        self, serializer_cls, product, monkeypatch
-    ):
-        monkeypatch.setattr(
-            "products.serializers.product_model_has_is_weighted",
-            lambda: True,
-        )
+    def test_false_stays_false_when_model_field_exists(self, serializer_cls, product):
         product.is_weighted = False
 
-        data = serializer_cls(product).data
+        with _stub_is_weighted_model_field():
+            data = serializer_cls(product).data
         assert "is_weighted" in data
         assert data["is_weighted"] is False
         _assert_no_live_host(data)
 
     @pytest.mark.parametrize("serializer_cls", READ_SERIALIZERS)
-    def test_missing_instance_attr_defaults_false(
-        self, serializer_cls, product, monkeypatch
-    ):
-        monkeypatch.setattr(
-            "products.serializers.product_model_has_is_weighted",
-            lambda: True,
-        )
+    def test_missing_instance_attr_defaults_false(self, serializer_cls, product):
         assert not hasattr(product, "is_weighted")
 
-        data = serializer_cls(product).data
+        with _stub_is_weighted_model_field():
+            data = serializer_cls(product).data
         assert data["is_weighted"] is False
 
 
 @pytest.mark.django_db
 class TestOptionalIsWeightedHttpSmoke:
     def test_retailer_list_and_search_omit_key_and_stay_dummy(self, api_client):
+        """Canary: HTTP omits the key while Product has no is_weighted column.
+
+        When the column is added, invert these asserts to echo true/false
+        instead of deleting this smoke.
+        """
         owner, shop = _make_retailer("isw_list_own", "ISW Dummy Shop")
         category = _make_category(shop, "ISW Dummy Cat")
         sku = _make_dummy_product(shop, category, "ISW Dummy Rice")

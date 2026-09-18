@@ -37,10 +37,10 @@ class ChannelPriceRepresentationMixin:
 def product_model_has_is_weighted():
     """True when Product has a concrete ``is_weighted`` model field."""
     try:
-        Product._meta.get_field('is_weighted')
+        field = Product._meta.get_field('is_weighted')
     except FieldDoesNotExist:
         return False
-    return True
+    return bool(getattr(field, 'concrete', False) and not getattr(field, 'many_to_many', False))
 
 
 class OptionalIsWeightedReadMixin:

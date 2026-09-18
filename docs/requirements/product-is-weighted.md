@@ -23,6 +23,9 @@ When the field is missing, the key is omitted. When the field exists, `true` and
 | GET | `/api/products/` | Authenticated retailer | Present only if the model field exists |
 | GET | `/api/products/<id>/` | Authenticated retailer | Same |
 | GET | `/api/products/search/` | Authenticated retailer | Same |
+| GET | `/api/products/?no_page=true` | Authenticated retailer | Same — shared `ProductListSerializer` |
+| GET | `/api/products/retailer/<id>/` (public) | Customer / anonymous | Same — shared list serializer |
+| GET | `/api/products/retailer/<id>/search/` (public) | Customer / anonymous | Same — shared search serializer |
 
 Unauthenticated retailer search → **401**.
 
