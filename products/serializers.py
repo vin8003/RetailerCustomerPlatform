@@ -1630,6 +1630,42 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
 
             return instance
 
+
+def purchase_invoice_supplier_code(invoice):
+    """Echo supplier_code when the invoice or its supplier has that attribute.
+
+    PurchaseInvoice and Supplier have no supplier_code column on this stack.
+    Missing attribute, missing invoice/supplier, and stored null all pass
+    through as None. Empty string stays empty — do not invent a code.
+    """
+    if invoice is None:
+        return None
+    if hasattr(invoice, "supplier_code"):
+        return getattr(invoice, "supplier_code", None)
+    supplier = getattr(invoice, "supplier", None)
+    if supplier is not None and hasattr(supplier, "supplier_code"):
+        return getattr(supplier, "supplier_code", None)
+    return None
+
+
+class PurchaseInvoiceListSerializer(PurchaseInvoiceSerializer):
+    """
+    GET /erp/purchase-invoices/ payload.
+
+    Optional supplier_code only. Write/detail keep PurchaseInvoiceSerializer.
+    """
+    supplier_code = serializers.SerializerMethodField()
+
+    class Meta(PurchaseInvoiceSerializer.Meta):
+        fields = list(PurchaseInvoiceSerializer.Meta.fields) + ["supplier_code"]
+        read_only_fields = list(PurchaseInvoiceSerializer.Meta.read_only_fields) + [
+            "supplier_code"
+        ]
+
+    def get_supplier_code(self, obj):
+        return purchase_invoice_supplier_code(obj)
+
+
 class SupplierLedgerSerializer(serializers.ModelSerializer):
     """
     Serializer for Supplier Ledger

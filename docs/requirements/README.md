@@ -41,6 +41,7 @@ Ticket snapshots (acceptance context, ship notes) stay in [`../tickets/`](../tic
 | [customer-profile-order-history.md](customer-profile-order-history.md) | OE-212 |
 | [shop-rewards-otp-redeem.md](shop-rewards-otp-redeem.md) | OE-220 |
 | [suppliers.md](suppliers.md) | OE-100 |
+| [purchase-invoice-list-supplier-code.md](purchase-invoice-list-supplier-code.md) | PI list optional `supplier_code` |
 | [block-negative-stock.md](block-negative-stock.md) | OE-146 |
 | [additional-barcodes-lookup.md](additional-barcodes-lookup.md) | OE-170 |
 | [compare-supplier-cost.md](compare-supplier-cost.md) | OE-112 |

@@ -30,6 +30,7 @@ from orders.models import Order, OrderItem
 from django.db.models import Sum, Q, Count, F, Case, When, DecimalField
 from products.serializers import (
     ExpiringBatchListSerializer,
+    PurchaseInvoiceListSerializer,
     PurchaseInvoiceSerializer,
     SkuLastSupplierCostsSerializer,
     SkuMarginPreviewSerializer,
@@ -190,6 +191,11 @@ class PurchaseInvoiceViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
     parser_classes = [JSONParser, FormParser, MultiPartParser]
     filter_backends = [SearchFilter]
+
+    def get_serializer_class(self):
+        if getattr(self, "action", None) == "list":
+            return PurchaseInvoiceListSerializer
+        return PurchaseInvoiceSerializer
 
     def _caller_retailer(self):
         return (
