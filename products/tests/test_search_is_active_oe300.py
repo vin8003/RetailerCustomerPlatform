@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 from django.urls import reverse
-from rest_framework import status
+from rest_framework import serializers, status
 
 from authentication.models import User
 from products.models import Product, ProductBrand, ProductCategory
@@ -155,6 +155,24 @@ def _assert_prior_search_fields(search_row, list_row, pos_row=None):
     assert Decimal(str(search_row["discounted_price"])) == Decimal(
         str(pos_row["discounted_price"])
     )
+
+
+def test_search_is_active_is_plain_meta_boolean_like_list():
+    """OE-300: search echoes Product.is_active the same way list does."""
+    assert "is_active" in ProductSearchSerializer.Meta.fields
+    assert "is_active" in ProductListSerializer.Meta.fields
+    assert "is_active" in ProductDetailSerializer.Meta.fields
+    # _declared_fields is DRF-private: lock Meta echo, not a class-body field.
+    assert "is_active" not in ProductSearchSerializer._declared_fields
+    search_field = ProductSearchSerializer().fields["is_active"]
+    list_field = ProductListSerializer().fields["is_active"]
+    detail_field = ProductDetailSerializer().fields["is_active"]
+    assert isinstance(search_field, serializers.BooleanField)
+    assert isinstance(list_field, serializers.BooleanField)
+    assert isinstance(detail_field, serializers.BooleanField)
+    assert not isinstance(search_field, serializers.SerializerMethodField)
+    assert type(search_field) is type(list_field)
+    assert type(search_field) is type(detail_field)
 
 
 @pytest.mark.django_db
