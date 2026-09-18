@@ -63,6 +63,7 @@ They are **not** automatically durable knowledge. Many pages are builder briefs,
 | [OE-149.md](OE-149.md) | durable | [product-batch-expiry](../requirements/product-batch-expiry.md) |
 | [OE-141.md](OE-141.md) | durable | [damage-expiry-write-off](../requirements/damage-expiry-write-off.md) |
 | [OE-315.md](OE-315.md) | durable | [inventory-ledger-product-identity](../requirements/inventory-ledger-product-identity.md) |
+| [OE-355.md](OE-355.md) | durable | [purchase-return-item-unit](../requirements/purchase-return-item-unit.md) |
 | [OE-106.md](OE-106.md) | durable | [app-vs-pos-prices](../requirements/app-vs-pos-prices.md) |
 | [OE-124.md](OE-124.md) | durable | [product-photo-bulk-import](../requirements/product-photo-bulk-import.md) |
 | [OE-143.md](OE-143.md) | durable | [khata-credit-lock](../requirements/khata-credit-lock.md) |

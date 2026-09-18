@@ -30,10 +30,22 @@ class SalesReturnSerializer(serializers.ModelSerializer):
 class PurchaseReturnItemSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source='product.name', read_only=True)
     batch_number = serializers.CharField(source='batch.batch_number', read_only=True)
+    # OE-355: echo Product.unit when it exists. Null/empty stays null/empty.
+    # Sales-return unit is OE-313 (SalesReturnItemSerializer) — do not touch that class.
+    unit = serializers.CharField(
+        source='product.unit',
+        read_only=True,
+        allow_null=True,
+        allow_blank=True,
+    )
 
     class Meta:
         model = PurchaseReturnItem
-        fields = ['id', 'product', 'product_name', 'batch', 'batch_number', 'quantity', 'purchase_price', 'total']
+        fields = [
+            'id', 'product', 'product_name', 'unit', 'batch', 'batch_number',
+            'quantity', 'purchase_price', 'total',
+        ]
+        read_only_fields = ['id', 'unit']
 
 class PurchaseReturnSerializer(serializers.ModelSerializer):
     items = PurchaseReturnItemSerializer(many=True, read_only=True)
