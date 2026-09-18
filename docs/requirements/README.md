@@ -48,3 +48,4 @@ Ticket snapshots (acceptance context, ship notes) stay in [`../tickets/`](../tic
 | [expiry-batch-list.md](expiry-batch-list.md) | OE-210 |
 | [retailer-web-mobile.md](retailer-web-mobile.md) | KAN-11 |
 | [customer-retailer-city-map.md](customer-retailer-city-map.md) | KAN-69 |
+| [product-net-weight.md](product-net-weight.md) | optional catalog `net_weight` (no Meta) |
