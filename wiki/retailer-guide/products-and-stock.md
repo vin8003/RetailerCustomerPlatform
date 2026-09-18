@@ -55,7 +55,7 @@ For items bought at different costs or expiry dates:
 - Expired batches cannot be sold. Cashiers cannot set expiry; owners and staff with inventory-adjust permission can
 - Product list, search, and POS show **saleable quantity** separately from total on-hand. Saleable excludes expired lots; the stock number still includes them until written off
 - Owners and staff can list this shop’s on-hand batches that expire within a chosen number of days (default 30), including expired lots still on the shelf
-- Owners (and staff with inventory-adjust) can **write off** damage, spoilage, or expired lots so the qty leaves on-hand. An expiry write-off only works on a batch that is already expired. The product ledger can filter those rows by reason (`damage`, `expiry`, `spoilage`)
+- Owners (and staff with inventory-adjust) can **write off** damage, spoilage, or expired lots so the qty leaves on-hand. An expiry write-off only works on a batch that is already expired. The product ledger can filter those rows by reason (`damage`, `expiry`, `spoilage`). Each ledger row shows the same product name and barcode as the product list.
 - Useful for groceries with expiry or varying wholesale rates
 
 ![Inventory and batches](../../docs/visuals/inventory-and-batches.jpg)
