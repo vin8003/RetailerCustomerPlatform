@@ -2,7 +2,7 @@
 
 - **Ticket:** [OE-300](https://vin8003.atlassian.net/browse/OE-300) · [snapshot](../tickets/OE-300.md)
 - **Implementation:** EXTEND (echo existing `Product.is_active` on search)
-- **Related:** [search-is-available.md](search-is-available.md) (OE-303), [search-is-featured.md](search-is-featured.md) (OE-299), [search-discounted-price.md](search-discounted-price.md) (OE-298), [search-product-group.md](search-product-group.md) (OE-295), [search-is-seasonal.md](search-is-seasonal.md) (OE-294), [search-original-price.md](search-original-price.md) (OE-293), [search-category-name.md](search-category-name.md) (OE-291), [search-barcode.md](search-barcode.md) (OE-290), [search-pos-brand-name.md](search-pos-brand-name.md) (OE-287), [inactive-product-edit.md](inactive-product-edit.md) (KAN-62)
+- **Related:** [search-is-in-stock.md](search-is-in-stock.md) (OE-312), [search-is-available.md](search-is-available.md) (OE-303), [search-is-featured.md](search-is-featured.md) (OE-299), [search-discounted-price.md](search-discounted-price.md) (OE-298), [search-product-group.md](search-product-group.md) (OE-295), [search-is-seasonal.md](search-is-seasonal.md) (OE-294), [search-original-price.md](search-original-price.md) (OE-293), [search-category-name.md](search-category-name.md) (OE-291), [search-barcode.md](search-barcode.md) (OE-290), [search-pos-brand-name.md](search-pos-brand-name.md) (OE-287), [inactive-product-edit.md](inactive-product-edit.md) (KAN-62)
 
 Retailer product search includes top-level `is_active` with the same value already returned by list/detail/POS `no_page` (`Product.is_active`). This is a field echo, not active write, admin, or a catalog-visibility change.
 

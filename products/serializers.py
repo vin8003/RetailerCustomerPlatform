@@ -582,6 +582,7 @@ class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
     group_variants = serializers.SerializerMethodField()
     margin_percent = serializers.SerializerMethodField()
     discounted_price = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    is_in_stock = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = Product
@@ -594,6 +595,7 @@ class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
             'is_active',
             'is_seasonal',
             'is_available',
+            'is_in_stock',
             'product_group',
             'track_inventory',
             'quantity', 'saleable_quantity', 'margin_percent', 'has_batches', 'batches',
