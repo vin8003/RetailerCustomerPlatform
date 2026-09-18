@@ -2,7 +2,7 @@
 
 - **Ticket:** [OE-291](https://vin8003.atlassian.net/browse/OE-291) · [snapshot](../tickets/OE-291.md)
 - **Implementation:** EXTEND (echo existing `Product.category.name` on search)
-- **Related:** [search-pos-brand-name.md](search-pos-brand-name.md) (OE-287), [search-barcode.md](search-barcode.md) (OE-290), [search-original-price.md](search-original-price.md) (OE-293), [search-product-group.md](search-product-group.md) (OE-295), [search-discounted-price.md](search-discounted-price.md) (OE-298), [search-is-featured.md](search-is-featured.md) (OE-299), [search-is-active.md](search-is-active.md) (OE-300)
+- **Related:** [search-pos-brand-name.md](search-pos-brand-name.md) (OE-287), [search-barcode.md](search-barcode.md) (OE-290), [search-original-price.md](search-original-price.md) (OE-293), [search-product-group.md](search-product-group.md) (OE-295), [search-discounted-price.md](search-discounted-price.md) (OE-298), [search-is-featured.md](search-is-featured.md) (OE-299), [search-is-active.md](search-is-active.md) (OE-300), [search-is-available.md](search-is-available.md) (OE-303)
 
 Retailer product search includes top-level `category_name` with the same value already returned by list/detail (`Product.category.name`). This is a field echo, not category CRUD. POS `no_page` already exposes the field.
 
