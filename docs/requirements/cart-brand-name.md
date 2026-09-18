@@ -22,6 +22,9 @@ Customer cart line items include top-level `brand_name` with the same value alre
 | GET | `/api/cart/?retailer_id=<id>` | Authenticated customer | Same as list/detail (`Product.brand.name`) |
 | GET | `/api/cart/` | Authenticated customer | Same on each cart's `items` |
 | POST | `/api/cart/add/` | Authenticated customer | Same on the returned cart `items` |
+| PUT / PATCH | `/api/cart/items/<id>/` | Authenticated customer | Same on the returned cart `items` |
+| DELETE | `/api/cart/items/<id>/remove/` | Authenticated customer | Same on the returned cart `items` |
+| POST | `/api/cart/clear/` | Authenticated customer | Same serializer (`items` empty after clear) |
 | GET | `/api/products/` | Authenticated retailer | EXISTING |
 | GET | `/api/products/<id>/` | Authenticated retailer | EXISTING |
 | GET | `/api/products/retailer/<id>/` (public) | Customer / anonymous | EXISTING |
