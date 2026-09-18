@@ -160,8 +160,9 @@ class TestProductSerializerShelfLifeDays:
             pos_row = _row_by_id(pos.data, product.id)
             assert "shelf_life_days" in list_row
             assert list_row["shelf_life_days"] is None
-            assert pos_row["shelf_life_days"] is None
             assert detail["shelf_life_days"] is None
+            # POS no_page is a hand-built dict (OE-286 / OE-302 lock).
+            assert "shelf_life_days" not in pos_row
 
     def test_serializer_echoes_shelf_life_when_attribute_exists(self):
         _owner, shop = _make_retailer("shelf_echo_own", "Shelf Echo Shop")
@@ -308,7 +309,7 @@ class TestProductSerializerShelfLifeDays:
     def test_product_search_serializer_meta_stays_without_shelf_life(self):
         assert "shelf_life_days" not in ProductSearchSerializer.Meta.fields
 
-    def test_retailer_search_omits_shelf_life_days(self, api_client):
+    def test_retailer_search_and_pos_omit_shelf_life_days(self, api_client):
         owner, shop = _make_retailer("shelf_search_own", "Shelf Search Shop")
         category = _make_category(shop, "Shelf Search Cat")
         atta = _make_product(shop, category, "Shelf Search Atta")
@@ -316,10 +317,14 @@ class TestProductSerializerShelfLifeDays:
         api_client.force_authenticate(user=owner)
         search = _search(api_client, "Shelf Search")
         listed = _list(api_client)
+        pos = _pos(api_client)
 
         assert search.status_code == status.HTTP_200_OK
         assert listed.status_code == status.HTTP_200_OK
+        assert pos.status_code == status.HTTP_200_OK
         search_row = _row_by_id(search.data, atta.id)
         list_row = _row_by_id(listed.data, atta.id)
+        pos_row = _row_by_id(pos.data, atta.id)
         assert "shelf_life_days" not in search_row
+        assert "shelf_life_days" not in pos_row
         assert list_row["shelf_life_days"] is None
