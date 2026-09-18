@@ -1,6 +1,6 @@
 # ProductBatch expiry and FIFO pick
 
-- **Ticket:** [OE-136](https://vin8003.atlassian.net/browse/OE-136) · backlog `F-0030` · [snapshot](../tickets/OE-136.md); POS `no_page` echo [OE-144](https://vin8003.atlassian.net/browse/OE-144) · [snapshot](../tickets/OE-144.md); batch `is_expired` read [OE-149](https://vin8003.atlassian.net/browse/OE-149) · [snapshot](../tickets/OE-149.md)
+- **Ticket:** [OE-136](https://vin8003.atlassian.net/browse/OE-136) · backlog `F-0030` · [snapshot](../tickets/OE-136.md); POS `no_page` echo [OE-144](https://vin8003.atlassian.net/browse/OE-144) · [snapshot](../tickets/OE-144.md); batch `is_expired` read [OE-149](https://vin8003.atlassian.net/browse/OE-149) · [snapshot](../tickets/OE-149.md); optional product `reorder_level` [reorder-level-reads.md](reorder-level-reads.md)
 - **Implementation:** EXTEND (`ProductBatch.expiry_date` + sale/pick on `Product.reduce_quantity`)
 - **Depends on:** [inventory-adjust-permission.md](inventory-adjust-permission.md), [inventory-and-batches.md](../07-KEY-FLOWS/inventory-and-batches.md)
 

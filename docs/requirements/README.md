@@ -33,6 +33,7 @@ Ticket snapshots (acceptance context, ship notes) stay in [`../tickets/`](../tic
 | [search-is-active.md](search-is-active.md) | OE-300 |
 | [group-variants-reads.md](group-variants-reads.md) | OE-192 |
 | [product-batch-expiry.md](product-batch-expiry.md) | OE-136, OE-144, OE-149 |
+| [reorder-level-reads.md](reorder-level-reads.md) | OE-149 |
 | [damage-expiry-write-off.md](damage-expiry-write-off.md) | OE-141 |
 | [inventory-ledger-product-identity.md](inventory-ledger-product-identity.md) | OE-315 |
 | [app-vs-pos-prices.md](app-vs-pos-prices.md) | OE-106 |
