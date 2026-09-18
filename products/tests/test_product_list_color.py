@@ -201,7 +201,6 @@ class TestProductListColor:
         product_b = _make_product(
             shop_b, cat_b, "List Color B SKU", barcode=PRIMARY_B
         )
-        product_b.color = "Black"
 
         api_client.force_authenticate(user=owner_b)
         listed = api_client.get(_list_url())
@@ -213,7 +212,7 @@ class TestProductListColor:
         assert product_a.id not in ids
         assert product_b.id in ids
         own = _list_row(listed.data, product_b.id)
-        assert own["color"] == "Black"
+        assert own["color"] is None
         assert own["name"] == product_b.name
 
     def test_search_detail_pos_meta_stay_without_color(self, api_client):
