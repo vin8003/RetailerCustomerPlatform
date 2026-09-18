@@ -36,9 +36,9 @@ Quantity is a positive `Decimal`. It cannot exceed the target batch (or product)
 | Method | Path | Who | Behavior |
 |--------|------|-----|----------|
 | POST | `/api/products/<id>/write-off/` | `inventory.adjust` or **403** | Body: `quantity`, `reason`, optional `batch_id`. Cross-tenant id is **404**. |
-| GET | `/api/products/erp/inventory-ledger/` | Shop retailer JWT | `product_id` and/or `reason`. `reason` exact-match. Other shop's `product_id` is **404**. Rows echo list identity (`product_id` / `product_name` / `barcode`); see [inventory-ledger-product-identity.md](inventory-ledger-product-identity.md). |
+| GET | `/api/products/erp/inventory-ledger/` | Shop retailer JWT | `product_id` and/or `reason`. `reason` exact-match. Other shop's `product_id` is **404**. Rows echo list identity (`product_id` / `product_name` / `barcode`); see [inventory-ledger-product-identity.md](inventory-ledger-product-identity.md). Optional `remarks` when the log has that attribute; see [write-off-list-remarks.md](write-off-list-remarks.md). |
 
-Write-off response includes `reason`, `log_type`, `quantity_change`, `previous_quantity`, `new_quantity`, `batch_id`.
+Write-off response includes `reason`, `log_type`, `quantity_change`, `previous_quantity`, `new_quantity`, `batch_id`. Ledger / write-off **list** rows also include optional `remarks` (`getattr(log, 'remarks', None)`; missing attribute or null → `null`). See [write-off-list-remarks.md](write-off-list-remarks.md).
 
 ## Not in this change
 
