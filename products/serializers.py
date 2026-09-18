@@ -387,6 +387,27 @@ class ProductReviewSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'customer_name', 'is_verified_purchase', 'created_at']
 
 
+def product_has_gross_weight(product):
+    """True when the instance already has a gross_weight attribute.
+
+    Product has no gross_weight column on this stack. Do not add the key
+    to serializer Meta.fields — ModelSerializer Meta would require a
+    model field or a declared MethodField. Missing product is False.
+    """
+    return product is not None and hasattr(product, "gross_weight")
+
+
+def product_gross_weight(product):
+    """Echo Product.gross_weight when the attribute exists; otherwise None.
+
+    Missing attribute, missing product, and stored null all pass through
+    as None. Do not invent 0.
+    """
+    if not product_has_gross_weight(product):
+        return None
+    return getattr(product, "gross_weight")
+
+
 class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product list view
@@ -425,6 +446,12 @@ class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, 
             'is_parent_bulk', 'parent_bulk_product', 'conversion_factor',
             'fractional_children', 'group_variants',
         ]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if product_has_gross_weight(instance):
+            data["gross_weight"] = product_gross_weight(instance)
+        return data
 
     def get_quantity(self, obj):
         val = obj.quantity
