@@ -1,11 +1,10 @@
 """
 OE-357 / F follow-on — optional is_returnable on product detail.
 
-Optional is_returnable on product detail (if the attribute exists).
-
-READ echo only. Missing field omits the key (do not invent false).
-Present false stays false. ProductSearchSerializer Meta is unchanged.
-Dummy shops only — never *.ordereasy.win.
+Echo Product.is_returnable when the attribute exists; otherwise null.
+Do not add is_returnable to any serializer Meta.fields. Product has no
+is_returnable column — do not invent one. Dummy / local only.
+Never *.ordereasy.win.
 """
 from decimal import Decimal
 
@@ -15,26 +14,19 @@ from django.urls import reverse
 from rest_framework import status
 
 from authentication.models import User
-from products.models import Product, ProductBrand, ProductCategory
+from products.models import Product, ProductCategory
 from products.serializers import (
+    ProductCreateSerializer,
     ProductDetailSerializer,
     ProductListSerializer,
     ProductSearchSerializer,
+    ProductUpdateSerializer,
     optional_is_returnable,
 )
 from retailers.models import RetailerProfile
 from retailers.organization import ensure_organization_for_profile
 
-PRIMARY_A = "8903551111111"
 STORE_ATTA = Decimal("20.00")
-
-
-def _product_has_is_returnable_field():
-    try:
-        Product._meta.get_field("is_returnable")
-        return True
-    except FieldDoesNotExist:
-        return False
 
 
 def _make_retailer(username, shop_name):
@@ -72,19 +64,12 @@ def _make_category(retailer, name):
     return ProductCategory.objects.create(name=name, retailer=retailer)
 
 
-def _make_brand(name):
-    return ProductBrand.objects.create(name=name, is_active=True)
-
-
-def _make_product(retailer, category, name, brand=None, barcode=None, **kwargs):
+def _make_product(retailer, category, name, **kwargs):
     fields = {
         "retailer": retailer,
         "name": name,
         "category": category,
-        "brand": brand,
-        "barcode": barcode,
         "price": STORE_ATTA,
-        "purchase_price": Decimal("10.00"),
         "quantity": Decimal("8.000"),
         "has_batches": False,
         "track_inventory": True,
@@ -96,9 +81,26 @@ def _make_product(retailer, category, name, brand=None, barcode=None, **kwargs):
     return Product.objects.create(**fields)
 
 
+def _detail_url(product_id):
+    return reverse("get_product_detail", args=[product_id])
+
+
+def _public_detail_url(retailer_id, product_id):
+    return reverse("get_product_detail_public", args=[retailer_id, product_id])
+
+
+def _assert_no_is_returnable_meta(*serializer_classes):
+    for serializer_cls in serializer_classes:
+        assert "is_returnable" not in serializer_cls.Meta.fields
+
+
 @pytest.mark.django_db
 class TestOptionalIsReturnableHelper:
-    def test_missing_attribute_is_none(self):
+    def test_product_has_no_is_returnable_field(self):
+        with pytest.raises(FieldDoesNotExist):
+            Product._meta.get_field("is_returnable")
+
+    def test_helper_null_when_attribute_missing(self):
         assert optional_is_returnable(None) is None
         assert optional_is_returnable(object()) is None
 
@@ -112,7 +114,7 @@ class TestOptionalIsReturnableHelper:
         dummy.is_returnable = False
         assert optional_is_returnable(dummy) is False
 
-    def test_dummy_none_does_not_invent_false(self):
+    def test_dummy_none_stays_none(self):
         class Dummy:
             is_returnable = None
 
@@ -121,36 +123,28 @@ class TestOptionalIsReturnableHelper:
 
 @pytest.mark.django_db
 class TestProductDetailIsReturnable:
-    def test_search_meta_omits_is_returnable(self):
-        assert "is_returnable" not in ProductSearchSerializer.Meta.fields
-        assert "is_returnable" not in ProductListSerializer.Meta.fields
-
-    def test_real_product_follows_model_field(self):
-        _owner, shop = _make_retailer("oe_ret_own", "Returnable Shop")
-        category = _make_category(shop, "Groceries")
-        brand = _make_brand("Dummy Brand")
-        atta = _make_product(
-            shop,
-            category,
-            "Dummy Atta",
-            brand=brand,
-            barcode=PRIMARY_A,
+    def test_search_list_detail_meta_omit_is_returnable(self):
+        _assert_no_is_returnable_meta(
+            ProductDetailSerializer,
+            ProductListSerializer,
+            ProductSearchSerializer,
+            ProductUpdateSerializer,
+            ProductCreateSerializer,
         )
 
-        data = ProductDetailSerializer(atta).data
-        if _product_has_is_returnable_field():
-            assert "is_returnable" in data
-            assert data["is_returnable"] is bool(atta.is_returnable)
-        else:
-            assert "is_returnable" not in data
+    def test_missing_field_is_null_on_detail(self):
+        _owner, shop = _make_retailer("oe357_miss_own", "OE357 Miss Shop")
+        category = _make_category(shop, "Groceries")
+        atta = _make_product(shop, category, "Dummy Atta")
 
-        search_data = ProductSearchSerializer(atta).data
-        assert "is_returnable" not in search_data
-        list_data = ProductListSerializer(atta).data
-        assert "is_returnable" not in list_data
+        detail_data = ProductDetailSerializer(atta).data
+        assert "is_returnable" in detail_data
+        assert detail_data["is_returnable"] is None
+        assert "is_returnable" not in ProductSearchSerializer(atta).data
+        assert "is_returnable" not in ProductListSerializer(atta).data
 
     def test_dummy_true_echoes_on_detail_only(self):
-        _owner, shop = _make_retailer("oe_ret_true", "Returnable True Shop")
+        _owner, shop = _make_retailer("oe357_true_own", "OE357 True Shop")
         category = _make_category(shop, "Groceries")
         atta = _make_product(shop, category, "Dummy Returnable Atta")
         atta.is_returnable = True
@@ -161,47 +155,67 @@ class TestProductDetailIsReturnable:
         assert "is_returnable" not in ProductListSerializer(atta).data
 
     def test_dummy_false_stays_false_on_detail(self):
-        _owner, shop = _make_retailer("oe_ret_false", "Returnable False Shop")
+        _owner, shop = _make_retailer("oe357_false_own", "OE357 False Shop")
         category = _make_category(shop, "Groceries")
         atta = _make_product(shop, category, "Dummy Nonreturnable Atta")
         atta.is_returnable = False
 
         detail_data = ProductDetailSerializer(atta).data
-        assert "is_returnable" in detail_data
         assert detail_data["is_returnable"] is False
 
-    def test_retailer_detail_http_and_negatives(self, api_client):
-        owner, shop = _make_retailer("oe_ret_http", "Returnable HTTP Shop")
-        other, _other_shop = _make_retailer("oe_ret_other", "Other Shop")
-        customer = _make_customer("oe_ret_cust")
+    def test_write_is_returnable_is_ignored(self):
+        _owner, shop = _make_retailer("oe357_write_own", "OE357 Write Shop")
         category = _make_category(shop, "Groceries")
-        atta = _make_product(shop, category, "Dummy HTTP Atta", barcode=PRIMARY_A)
+        atta = _make_product(shop, category, "Dummy Write Atta")
 
-        unauth = api_client.get(reverse("get_product_detail", args=[atta.id]))
+        update = ProductUpdateSerializer(
+            atta,
+            data={"is_returnable": True, "name": "Dummy Write Atta"},
+            partial=True,
+        )
+        assert update.is_valid(), update.errors
+        update.save()
+        refreshed = Product.objects.get(pk=atta.pk)
+        assert optional_is_returnable(refreshed) is None
+
+        create = ProductCreateSerializer(
+            data={
+                "name": "Dummy Created Atta",
+                "price": "12.00",
+                "category": category.id,
+                "quantity": 4,
+                "is_returnable": True,
+            },
+            context={"retailer": shop},
+        )
+        assert create.is_valid(), create.errors
+        created = create.save()
+        assert optional_is_returnable(Product.objects.get(pk=created.pk)) is None
+
+    def test_retailer_detail_http_and_negatives(self, api_client):
+        owner, shop = _make_retailer("oe357_http_own", "OE357 HTTP Shop")
+        other, _other_shop = _make_retailer("oe357_http_other", "OE357 Other Shop")
+        customer = _make_customer("oe357_http_cust")
+        category = _make_category(shop, "Groceries")
+        atta = _make_product(shop, category, "Dummy HTTP Atta")
+
+        unauth = api_client.get(_detail_url(atta.id))
         assert unauth.status_code == status.HTTP_401_UNAUTHORIZED
 
         api_client.force_authenticate(user=customer)
-        forbidden = api_client.get(reverse("get_product_detail", args=[atta.id]))
+        forbidden = api_client.get(_detail_url(atta.id))
         assert forbidden.status_code == status.HTTP_403_FORBIDDEN
 
         api_client.force_authenticate(user=other)
-        missing = api_client.get(reverse("get_product_detail", args=[atta.id]))
+        missing = api_client.get(_detail_url(atta.id))
         assert missing.status_code == status.HTTP_404_NOT_FOUND
 
         api_client.force_authenticate(user=owner)
-        ok = api_client.get(reverse("get_product_detail", args=[atta.id]))
+        ok = api_client.get(_detail_url(atta.id))
         assert ok.status_code == status.HTTP_200_OK
         assert ok.data["name"] == "Dummy HTTP Atta"
-        if _product_has_is_returnable_field():
-            assert isinstance(ok.data["is_returnable"], bool)
-        else:
-            assert "is_returnable" not in ok.data
+        assert ok.data["is_returnable"] is None
 
-        public = api_client.get(
-            reverse("get_product_detail_public", args=[shop.id, atta.id])
-        )
+        public = api_client.get(_public_detail_url(shop.id, atta.id))
         assert public.status_code == status.HTTP_200_OK
-        if _product_has_is_returnable_field():
-            assert isinstance(public.data["is_returnable"], bool)
-        else:
-            assert "is_returnable" not in public.data
+        assert public.data["is_returnable"] is None

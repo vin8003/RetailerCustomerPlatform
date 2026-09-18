@@ -4,9 +4,9 @@
 - **Implementation:** EXTEND (echo `is_returnable` on product detail only when the attribute exists)
 - **Related:** [search-is-active.md](search-is-active.md) (search Meta is out of scope here)
 
-`ProductDetailSerializer` may include top-level `is_returnable` as a bool when the product instance already exposes that attribute. This is a field echo, not a new Product column, migration, or return-policy write.
+Retailer and public **product detail** include top-level `is_returnable`. If the product has an `is_returnable` attribute, the stored bool is echoed. If the attribute is missing (this stack: Product has no `is_returnable` column), or the value is null, the payload is `null`. Present `false` stays `false`. This is a field echo, not a return-policy write or a new Product column.
 
-If the attribute is missing, the key is omitted — do not invent `false`. If the attribute exists and is `false`, the key stays and the value is `false`.
+`is_returnable` is **not** added to `ProductDetailSerializer.Meta.fields` (or list/search Meta). Detail injects the key in `to_representation` via `getattr`.
 
 `ProductSearchSerializer` Meta and list/POS payloads do not gain this field.
 
@@ -15,15 +15,15 @@ If the attribute is missing, the key is omitted — do not invent `false`. If th
 | Piece | Status |
 |-------|--------|
 | Product model `is_returnable` column | EXISTING if present; not invented here |
-| `is_returnable` on `ProductDetailSerializer` when attribute exists | EXTEND (OE-357) |
+| Optional `is_returnable` on product detail | EXTEND (OE-357) |
 | Search Meta / list / POS `no_page` / writes | Out of scope |
 
 ## API
 
 | Method | Path | Who | `is_returnable` |
 |--------|------|-----|-----------------|
-| GET | `/api/products/<id>/` | Authenticated retailer | Bool when attribute exists; omitted when missing |
-| GET | `/api/products/retailer/<id>/<id>/` (public detail) | Customer / anonymous | Same serializer rule |
+| GET | `/api/products/<id>/` | Authenticated retailer | `optional_is_returnable(product)` — bool, or `null` if missing |
+| GET | `/api/products/retailer/<id>/<id>/` (public detail) | Customer / anonymous | Same getter (shared detail serializer) |
 | GET | `/api/products/search/` | Authenticated retailer | Not added (search Meta unchanged) |
 
 Unauthenticated retailer detail → **401**. Customer on retailer detail → **403**. Other shop's product id → **404**.

@@ -627,19 +627,17 @@ class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
             logger.error(f"Error getting brand name: {e}")
             return None
 
-_MISSING_IS_RETURNABLE = object()
-
-
 def optional_is_returnable(instance):
-    """Echo Product.is_returnable when the attribute exists; else omit.
+    """Echo Product.is_returnable when the attribute exists; else None.
 
-    Missing field → None (caller omits the key). Do not invent false.
-    Present false stays false.
+    Do not add is_returnable to ProductDetailSerializer.Meta.fields (or
+    search/list Meta). Missing attribute and stored null pass through as
+    None. Present false stays false — do not invent a return policy.
     """
     if instance is None:
         return None
-    value = getattr(instance, 'is_returnable', _MISSING_IS_RETURNABLE)
-    if value is _MISSING_IS_RETURNABLE or value is None:
+    value = getattr(instance, 'is_returnable', None)
+    if value is None:
         return None
     return bool(value)
 
@@ -648,8 +646,8 @@ class ProductDetailSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
     """
     Serializer for product detail view.
 
-    Optional ``is_returnable`` is echoed only when the instance exposes that
-    attribute (no Product column invent; not on search Meta).
+    Optional ``is_returnable`` is echoed via ``optional_is_returnable``
+    (no Product column invent; not on search/list Meta).
     """
     category = ProductCategorySerializer(read_only=True)
     category_name = serializers.SerializerMethodField()
@@ -906,9 +904,7 @@ class ProductDetailSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        is_returnable = optional_is_returnable(instance)
-        if is_returnable is not None:
-            data['is_returnable'] = is_returnable
+        data['is_returnable'] = optional_is_returnable(instance)
         return data
 
 class MasterProductSerializer(serializers.ModelSerializer):
