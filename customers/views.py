@@ -1034,7 +1034,10 @@ def get_retailer_customers(request):
                 'joined_date': mapping.created_at,
                 # Only show credit balance if it's non-zero or retailer has explicitly set a credit limit
                 'current_balance': float(mapping.current_balance) if (mapping.current_balance > 0 or mapping.credit_limit > 0) else None,
-                'credit_limit': float(mapping.credit_limit) if mapping.credit_limit > 0 else None
+                'email': user.email,
+                'notes': mapping.notes,
+                'credit_limit': mapping.credit_limit,
+                'credit_due_days': mapping.credit_due_days,
             })
             
         serializer = RetailerCustomerListSerializer(data, many=True)
