@@ -2,7 +2,7 @@
 
 - **Ticket:** [OE-299](https://vin8003.atlassian.net/browse/OE-299) · [snapshot](../tickets/OE-299.md)
 - **Implementation:** EXTEND (echo existing `Product.is_featured` on search)
-- **Related:** [search-is-available.md](search-is-available.md) (OE-303), [search-is-active.md](search-is-active.md) (OE-300), [search-discounted-price.md](search-discounted-price.md) (OE-298), [search-product-group.md](search-product-group.md) (OE-295), [search-is-seasonal.md](search-is-seasonal.md) (OE-294), [search-original-price.md](search-original-price.md) (OE-293), [search-category-name.md](search-category-name.md) (OE-291), [search-barcode.md](search-barcode.md) (OE-290), [search-pos-brand-name.md](search-pos-brand-name.md) (OE-287)
+- **Related:** [search-is-in-stock.md](search-is-in-stock.md) (OE-312), [search-is-available.md](search-is-available.md) (OE-303), [search-is-active.md](search-is-active.md) (OE-300), [search-discounted-price.md](search-discounted-price.md) (OE-298), [search-product-group.md](search-product-group.md) (OE-295), [search-is-seasonal.md](search-is-seasonal.md) (OE-294), [search-original-price.md](search-original-price.md) (OE-293), [search-category-name.md](search-category-name.md) (OE-291), [search-barcode.md](search-barcode.md) (OE-290), [search-pos-brand-name.md](search-pos-brand-name.md) (OE-287)
 
 Retailer product search includes top-level `is_featured` with the same value already returned by list/detail (`Product.is_featured`). This is a field echo, not featured write, admin, or a customer-app badge.
 
