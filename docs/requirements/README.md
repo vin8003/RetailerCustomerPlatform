@@ -22,6 +22,7 @@ Ticket snapshots (acceptance context, ship notes) stay in [`../tickets/`](../tic
 | [parent-child-pack-skus.md](parent-child-pack-skus.md) | OE-103 |
 | [pack-children-reads.md](pack-children-reads.md) | OE-191, OE-283, OE-285 |
 | [pos-nopage-unit.md](pos-nopage-unit.md) | OE-286 |
+| [pos-nopage-size.md](pos-nopage-size.md) | POS no_page optional size |
 | [search-pos-brand-name.md](search-pos-brand-name.md) | OE-287 |
 | [search-barcode.md](search-barcode.md) | OE-290 |
 | [search-category-name.md](search-category-name.md) | OE-291 |
