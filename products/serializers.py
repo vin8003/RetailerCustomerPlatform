@@ -16,6 +16,7 @@ from products.inventory_service import (
 )
 from products.tax_service import (
     GST_RATES,
+    clean_hsn_code,
     quantize_2,
     resolve_tax_type,
     round_rupee,
@@ -647,6 +648,12 @@ class ProductTaxValidationMixin:
         if value not in GST_RATES:
             raise serializers.ValidationError("Unsupported GST rate.")
         return value
+
+    def validate_hsn_code(self, value):
+        try:
+            return clean_hsn_code(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
 
 class ProductCreateSerializer(ProductTaxValidationMixin, serializers.ModelSerializer):

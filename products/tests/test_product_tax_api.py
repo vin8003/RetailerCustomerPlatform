@@ -101,6 +101,65 @@ class ProductTaxSerializerTests(TestCase):
             self.assertFalse(serializer.is_valid())
             self.assertIn("gst_rate", serializer.errors)
 
+    def test_create_rejects_non_numeric_hsn_code(self):
+        serializer = ProductCreateSerializer(
+            data={
+                "name": "Bad HSN",
+                "price": "10.00",
+                "quantity": 1,
+                "hsn_code": "ABC123",
+                "gst_rate": "18",
+            },
+            context={"retailer": self.retailer},
+        )
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("hsn_code", serializer.errors)
+
+    def test_create_rejects_over_length_hsn_code(self):
+        serializer = ProductCreateSerializer(
+            data={
+                "name": "Long HSN",
+                "price": "10.00",
+                "quantity": 1,
+                "hsn_code": "123456789",
+            },
+            context={"retailer": self.retailer},
+        )
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("hsn_code", serializer.errors)
+
+    def test_create_allows_blank_hsn_code(self):
+        serializer = ProductCreateSerializer(
+            data={
+                "name": "No HSN",
+                "price": "10.00",
+                "quantity": 1,
+                "hsn_code": "",
+                "gst_rate": "0",
+            },
+            context={"retailer": self.retailer},
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+
+    def test_update_rejects_non_numeric_hsn_code(self):
+        serializer = ProductUpdateSerializer(
+            self.product, data={"hsn_code": "ABC123"}, partial=True
+        )
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("hsn_code", serializer.errors)
+
+    def test_partial_update_omitting_hsn_keeps_existing(self):
+        self.product.hsn_code = "21069099"
+        self.product.save(update_fields=["hsn_code"])
+        serializer = ProductUpdateSerializer(
+            self.product, data={"price": "91.00"}, partial=True
+        )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        serializer.save()
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.hsn_code, "21069099")
+        self.assertEqual(self.product.price, Decimal("91.00"))
+
 
 class ProductTaxAPITests(TestCase):
     def setUp(self):
