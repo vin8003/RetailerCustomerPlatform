@@ -36,6 +36,8 @@ class SalesReturn(models.Model):
     )
     
     refund_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    taxable_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    tax_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     refund_payment_mode = models.CharField(max_length=20, choices=PAYMENT_MODE_CHOICES)
     reason = models.TextField(blank=True)
     
@@ -88,6 +90,15 @@ class SalesReturnItem(models.Model):
     )
     refund_unit_price = models.DecimalField(max_digits=10, decimal_places=2)
     total_refund = models.DecimalField(max_digits=12, decimal_places=2)
+    hsn_code = models.CharField(max_length=8, blank=True, default='')
+    gst_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
+    taxable_value = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    tax_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    tax_type = models.CharField(
+        max_length=4,
+        choices=[('GST', 'GST'), ('IGST', 'IGST')],
+        default='GST',
+    )
 
     class Meta:
         db_table = 'sales_return_item'
@@ -120,6 +131,8 @@ class PurchaseReturn(models.Model):
     
     return_number = models.CharField(max_length=100, blank=True, null=True)
     total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    taxable_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    tax_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     notes = models.TextField(blank=True)
     
     return_date = models.DateField(auto_now_add=True)
@@ -171,6 +184,15 @@ class PurchaseReturnItem(models.Model):
     )
     purchase_price = models.DecimalField(max_digits=10, decimal_places=2)
     total = models.DecimalField(max_digits=12, decimal_places=2)
+    hsn_code = models.CharField(max_length=8, blank=True, default='')
+    gst_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
+    taxable_value = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    tax_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    tax_type = models.CharField(
+        max_length=4,
+        choices=[('GST', 'GST'), ('IGST', 'IGST')],
+        default='GST',
+    )
 
     class Meta:
         db_table = 'purchase_return_item'

@@ -16,6 +16,12 @@ from products.inventory_service import (
     log_inventory_change,
     product_level_log_balances,
 )
+from products.tax_service import (
+    allocate_order_discount,
+    resolve_tax_type,
+    round_rupee,
+    split_inclusive_line,
+)
 from orders.models import Order, OrderItem
 from django.db.models import Sum, Q, Count, F, Case, When, DecimalField
 from products.serializers import PurchaseInvoiceSerializer, SupplierLedgerSerializer
@@ -269,13 +275,71 @@ def create_pos_order(request):
         # Support cashier's manual discount in addition/override to automated offers
         raw_discount = Decimal(str(data.get('discount_amount', 0)))
         final_discount = max(automated_discount, raw_discount)
-        total_amount = subtotal - final_discount
 
         with transaction.atomic():
-            # Round amounts to nearest whole rupee as requested
-            rounded_subtotal = subtotal.quantize(Decimal('1'), rounding='ROUND_HALF_UP')
-            rounded_discount = final_discount.quantize(Decimal('1'), rounding='ROUND_HALF_UP')
-            rounded_total = total_amount.quantize(Decimal('1'), rounding='ROUND_HALF_UP')
+            # Prepare the exact post-offer lines once so inventory, order items,
+            # and tax snapshots all use the same quantities and prices.
+            item_discounts = offer_results.get('item_discounts', {})
+            sale_lines = []
+            raw_lines = []
+            offered_lines = []
+            for i, item in enumerate(items_data):
+                product = Product.objects.select_for_update().get(
+                    id=item['product_id'], retailer=retailer
+                )
+                batch_id = item.get('batch_id')
+                batch = None
+                if batch_id:
+                    batch = ProductBatch.objects.select_for_update().get(
+                        id=batch_id, product=product
+                    )
+
+                requested_qty = Decimal(str(item['quantity']))
+                catalog_price = Decimal(str(batch.price if batch else product.price))
+                qty = requested_qty
+                unit_price = catalog_price
+                unique_key = f"pos_{i}"
+                if unique_key in item_discounts:
+                    info = item_discounts[unique_key]
+                    unit_price = Decimal(str(info['final_price']))
+                    qty = Decimal(str(info.get('total_display_quantity', qty)))
+
+                raw_lines.append(requested_qty * catalog_price)
+                offered_lines.append(qty * unit_price)
+                sale_lines.append({
+                    'product': product,
+                    'batch': batch,
+                    'quantity': qty,
+                    'unit_price': unit_price,
+                })
+
+            offer_discount = max(
+                Decimal('0.00'),
+                sum(raw_lines, Decimal('0.00')) - sum(offered_lines, Decimal('0.00')),
+            )
+            extra_discount = max(Decimal('0.00'), final_discount - offer_discount)
+            taxable_bases = allocate_order_discount(offered_lines, extra_discount)
+            tax_type = resolve_tax_type(retailer.gst_number, '')
+            taxable_amount = Decimal('0.00')
+            tax_amount = Decimal('0.00')
+
+            for sale_line, taxable_base in zip(sale_lines, taxable_bases):
+                product = sale_line['product']
+                split = split_inclusive_line(taxable_base, product.gst_rate)
+                sale_line.update({
+                    'hsn_code': product.hsn_code,
+                    'gst_rate': product.gst_rate,
+                    'taxable_value': split['taxable_value'],
+                    'tax_amount': split['tax_amount'],
+                    'tax_type': tax_type,
+                })
+                taxable_amount += split['taxable_value']
+                tax_amount += split['tax_amount']
+
+            # Keep POS bill totals at nearest-rupee precision.
+            rounded_subtotal = round_rupee(subtotal)
+            rounded_discount = round_rupee(final_discount)
+            rounded_total = round_rupee(sum(taxable_bases, Decimal('0.00')))
 
             # Payment Breakdown Logic (Initialized to 0 to avoid NULL constraints)
             cash_amount = Decimal('0')
@@ -339,6 +403,8 @@ def create_pos_order(request):
                 delivery_fee=0,
                 discount_amount=rounded_discount,
                 total_amount=rounded_total,
+                taxable_amount=taxable_amount,
+                tax_amount=tax_amount,
                 cash_amount=cash_amount,
                 upi_amount=upi_amount,
                 card_amount=card_amount,
@@ -407,23 +473,11 @@ def create_pos_order(request):
                     mapping.save()
 
             # Create Order Items and Reduce Inventory
-            item_discounts = offer_results.get('item_discounts', {})
-            for i, item in enumerate(items_data):
-                product = Product.objects.select_for_update().get(id=item['product_id'], retailer=retailer)
-                batch_id = item.get('batch_id')
-                batch = None
-                if batch_id:
-                    batch = ProductBatch.objects.select_for_update().get(id=batch_id, product=product)
-                
-                qty = Decimal(str(item['quantity']))
-                unit_price = Decimal(str(batch.price if batch else product.price))
-                
-                # Apply discounts/free items dynamically calculated by the engine using unique key
-                unique_key = f"pos_{i}"
-                if unique_key in item_discounts:
-                    info = item_discounts[unique_key]
-                    unit_price = info['final_price']
-                    qty = info.get('total_display_quantity', qty)
+            for sale_line in sale_lines:
+                product = sale_line['product']
+                batch = sale_line['batch']
+                qty = sale_line['quantity']
+                unit_price = sale_line['unit_price']
                 
                 # Always log product-level balances (batch_id is audit-only)
                 prev_qty = product.quantity
@@ -461,7 +515,12 @@ def create_pos_order(request):
                     product_unit=product.unit,
                     quantity=qty,
                     unit_price=unit_price,
-                    total_price=qty * unit_price
+                    total_price=qty * unit_price,
+                    hsn_code=sale_line['hsn_code'],
+                    gst_rate=sale_line['gst_rate'],
+                    taxable_value=sale_line['taxable_value'],
+                    tax_amount=sale_line['tax_amount'],
+                    tax_type=sale_line['tax_type'],
                 )
 
                 if product.track_inventory:

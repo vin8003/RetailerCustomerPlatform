@@ -1,10 +1,12 @@
+from decimal import Decimal
+import logging
+
 from rest_framework import status, permissions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from django.db import transaction
 from django.db.models import prefetch_related_objects
-import logging
 
 from .models import Cart, CartItem, CartHistory
 from .serializers import (
@@ -12,6 +14,7 @@ from .serializers import (
     UpdateCartItemSerializer, CartSummarySerializer
 )
 from products.models import Product
+from products.tax_service import quantize_2, split_inclusive_line
 from retailers.models import RetailerProfile
 
 logger = logging.getLogger(__name__)
@@ -329,6 +332,25 @@ def get_cart_summary(request):
                 for item in cart_items
             )
             discounted_total = offer_results['discounted_total']
+            taxable_amount = Decimal('0.00')
+            tax_amount = Decimal('0.00')
+            item_discounts = offer_results.get('item_discounts', {})
+            for item in cart_items:
+                item_offer = item_discounts.get(item.id, {})
+                quantity = item_offer.get(
+                    'total_display_quantity',
+                    item.quantity,
+                )
+                unit_price = item_offer.get(
+                    'final_price',
+                    item.product.price,
+                )
+                tax_split = split_inclusive_line(
+                    Decimal(str(quantity)) * Decimal(str(unit_price)),
+                    item.product.gst_rate,
+                )
+                taxable_amount += tax_split['taxable_value']
+                tax_amount += tax_split['tax_amount']
             minimum_order_amount = retailer.minimum_order_amount
             
             can_checkout = discounted_total >= minimum_order_amount and not cart.is_empty
@@ -369,6 +391,8 @@ def get_cart_summary(request):
             summary_data = {
                 'total_items': total_items,
                 'total_amount': discounted_total,
+                'taxable_amount': quantize_2(taxable_amount),
+                'tax_amount': quantize_2(tax_amount),
                 'retailer_name': retailer.shop_name,
                 'retailer_id': retailer.id,
                 'minimum_order_amount': minimum_order_amount,

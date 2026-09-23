@@ -128,6 +128,8 @@ class Order(models.Model):
         decimal_places=2,
         validators=[MinValueValidator(Decimal('0.01'))]
     )
+    taxable_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    tax_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     
     # Payment Breakdown (for Split/POS)
     cash_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), null=True, blank=True)
@@ -521,6 +523,15 @@ class OrderItem(models.Model):
     )
     unit_price = models.DecimalField(max_digits=10, decimal_places=2)
     total_price = models.DecimalField(max_digits=10, decimal_places=2)
+    hsn_code = models.CharField(max_length=8, blank=True, default='')
+    gst_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
+    taxable_value = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    tax_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    tax_type = models.CharField(
+        max_length=4,
+        choices=[('GST', 'GST'), ('IGST', 'IGST')],
+        default='GST',
+    )
     
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
