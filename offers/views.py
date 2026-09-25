@@ -1,6 +1,6 @@
 from decimal import Decimal
 from rest_framework import viewsets, permissions
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from .models import Offer, OfferTarget
 from products.models import Product
@@ -81,3 +81,73 @@ class PublicOfferViewSet(viewsets.ReadOnlyModelViewSet):
                 models.Q(end_date__isnull=True) | models.Q(end_date__gte=timezone.now())
             )
         return Offer.objects.none()
+
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def get_available_coupons(request, retailer_id):
+    """
+    Get all active, public coupons for a retailer that are eligible for the customer
+    """
+    now = timezone.now()
+    qs = Offer.objects.filter(
+        retailer_id=retailer_id,
+        is_active=True,
+        is_public=True,
+        coupon_code__isnull=False,
+        start_date__lte=now
+    ).exclude(
+        coupon_code=''
+    ).filter(
+        models.Q(end_date__isnull=True) | models.Q(end_date__gte=now)
+    )
+    
+    coupons_list = []
+    user = request.user if request.user.is_authenticated else None
+    
+    for offer in qs:
+        # Check total usage limit
+        if offer.usage_limit_total and offer.current_redemptions >= offer.usage_limit_total:
+            continue
+            
+        if user:
+            # Check user redemption limit
+            if offer.usage_limit_per_user:
+                from .models import OfferRedemption
+                used = OfferRedemption.objects.filter(offer=offer, customer=user).count()
+                if used >= offer.usage_limit_per_user:
+                    continue
+                    
+            # Check target audience
+            if offer.target_audience == 'first_time':
+                from orders.models import Order
+                has_orders = Order.objects.filter(
+                    customer=user, 
+                    retailer_id=retailer_id
+                ).exclude(status__in=['cancelled', 'returned']).exists()
+                if has_orders:
+                    continue
+            elif offer.target_audience == 'selected':
+                if not offer.eligible_customers.filter(id=user.id).exists():
+                    continue
+        else:
+            if offer.target_audience == 'selected':
+                continue
+                
+        coupons_list.append({
+            'id': offer.id,
+            'code': offer.coupon_code,
+            'name': offer.name,
+            'description': offer.description,
+            'benefit_type': offer.benefit_type,
+            'offer_type': offer.offer_type,
+            'value': float(offer.value),
+            'value_type': offer.value_type,
+            'min_order_value': float(offer.min_order_value),
+            'max_discount_amount': float(offer.max_discount_amount) if offer.max_discount_amount else None,
+            'end_date': offer.end_date,
+            'target_audience': offer.target_audience
+        })
+        
+    return Response(coupons_list)
+

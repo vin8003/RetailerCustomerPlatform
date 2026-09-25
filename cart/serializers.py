@@ -118,7 +118,7 @@ class CartSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'customer', 'retailer', 'retailer_name', 'retailer_address',
             'retailer_phone', 'items', 'total_items', 'total_amount', 'is_empty',
-            'minimum_order_amount', 'created_at', 'updated_at'
+            'minimum_order_amount', 'applied_coupon_code', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'customer', 'created_at', 'updated_at']
 
