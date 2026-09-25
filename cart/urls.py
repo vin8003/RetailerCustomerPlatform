@@ -13,4 +13,8 @@ urlpatterns = [
     path('summary/', views.get_cart_summary, name='get_cart_summary'),
     path('validate/', views.validate_cart, name='validate_cart'),
     path('count/', views.get_cart_count, name='get_cart_count'),
+    
+    # Coupon management
+    path('apply-coupon/', views.apply_coupon, name='cart_apply_coupon'),
+    path('remove-coupon/', views.remove_coupon, name='cart_remove_coupon'),
 ]

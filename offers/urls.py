@@ -1,7 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from rest_framework.routers import DefaultRouter
-from .views import OfferViewSet, PublicOfferViewSet
+from .views import OfferViewSet, PublicOfferViewSet, get_available_coupons
 
 router = DefaultRouter()
 router.register(r'offers', OfferViewSet, basename='offer')
@@ -9,4 +9,6 @@ router.register(r'offers', OfferViewSet, basename='offer')
 urlpatterns = [
     path('', include(router.urls)),
     path('offers/public/retailer/<int:retailer_id>/', PublicOfferViewSet.as_view({'get': 'list'}), name='public-retailer-offers'),
+    path('offers/public/retailer/<int:retailer_id>/available-coupons/', get_available_coupons, name='available-coupons'),
+    path('offers/available-coupons/<int:retailer_id>/', get_available_coupons, name='available-coupons-alt'),
 ]

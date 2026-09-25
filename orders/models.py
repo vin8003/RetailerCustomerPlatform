@@ -138,6 +138,7 @@ class Order(models.Model):
     credit_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), null=True, blank=True)
     
     # Additional info
+    coupon_code = models.CharField(max_length=50, blank=True, null=True)
     special_instructions = models.TextField(blank=True)
     cancellation_reason = models.TextField(blank=True)
     cancelled_by = models.CharField(max_length=50, blank=True, null=True)

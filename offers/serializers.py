@@ -16,13 +16,19 @@ class OfferSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         targets_data = validated_data.pop('targets', [])
+        eligible_customers = validated_data.pop('eligible_customers', [])
         # Assign retailer from context
         user = self.context['request'].user
         retailer = user.retailer_profile
         validated_data['retailer'] = retailer
         
+        if validated_data.get('coupon_code'):
+            validated_data['coupon_code'] = validated_data['coupon_code'].strip().upper()
+            
         offer = Offer.objects.create(**validated_data)
-        
+        if eligible_customers:
+            offer.eligible_customers.set(eligible_customers)
+            
         for target_data in targets_data:
             OfferTarget.objects.create(offer=offer, **target_data)
             
@@ -30,12 +36,19 @@ class OfferSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         targets_data = validated_data.pop('targets', [])
+        eligible_customers = validated_data.pop('eligible_customers', None)
         
+        if 'coupon_code' in validated_data and validated_data['coupon_code']:
+            validated_data['coupon_code'] = validated_data['coupon_code'].strip().upper()
+            
         # Update fields
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
         
+        if eligible_customers is not None:
+            instance.eligible_customers.set(eligible_customers)
+            
         # Update targets
         if targets_data is not None and self.context['request'].method in ['PUT', 'PATCH']:
             if targets_data:
