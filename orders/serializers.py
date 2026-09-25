@@ -332,8 +332,9 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             offers.append({
                 'name': redemption.offer.name,
                 'type': redemption.offer.get_offer_type_display(),
-                'discount': redemption.discount_amount,
-                'points_earned': redemption.points_earned,
+                'discount': float(redemption.discount_amount) if redemption.discount_amount else 0.0,
+                'points_earned': float(redemption.points_earned) if redemption.points_earned else 0.0,
+                'benefit_type': getattr(redemption.offer, 'benefit_type', 'discount'),
                 'coupon_code': redemption.coupon_code,
                 'is_coupon': bool(redemption.coupon_code)
             })

@@ -223,3 +223,92 @@ class TestCouponSystem:
         cart.refresh_from_db()
         assert cart.applied_coupon_code is None
 
+    def test_cashback_coupon_on_net_amount_after_bxgy_and_delivery_award(self, engine, retailer, product, customer):
+        """
+        Verify:
+        1. BXGY discount (e.g. 95) applies first.
+        2. 10% cashback coupon is calculated on net items total (1330 - 95 = 1235) -> 123.50 pts.
+        3. Order is created with delivery fee = 50. Total = 1285, points_earned = 123.50.
+        4. When order is delivered and award_loyalty_points() runs, points_earned remains 123.50
+           (does NOT add store-wide rule points and strictly excludes delivery fee).
+        """
+        from retailers.models import RetailerRewardConfig
+        from customers.models import CustomerLoyalty
+
+        # Configure store-wide loyalty points (1% on orders >= 100)
+        RetailerRewardConfig.objects.create(
+            retailer=retailer,
+            is_active=True,
+            earning_type='percentage',
+            loyalty_earning_value=Decimal('1.00'),
+            loyalty_min_order_value=Decimal('100.00')
+        )
+
+        # 1. BXGY offer (Buy 13 get 1 free) -> gives 1 free item worth 95
+        bxgy_offer = Offer.objects.create(
+            retailer=retailer,
+            name="Buy 13 Get 1 Free",
+            offer_type="bxgy",
+            buy_quantity=13,
+            get_quantity=1,
+            is_active=True,
+            is_stackable=True,
+            bxgy_strategy='same_product',
+            value=0
+        )
+        OfferTarget.objects.create(offer=bxgy_offer, target_type="all_products")
+
+        # 2. 10% Cashback Coupon
+        coupon_offer = Offer.objects.create(
+            retailer=retailer,
+            name="10% Cashback",
+            coupon_code="CASHBACK10",
+            offer_type="percentage",
+            benefit_type="credit_points",
+            value=Decimal("10.00"),
+            min_order_value=Decimal("500.00"),
+            is_active=True,
+            is_stackable=True
+        )
+        OfferTarget.objects.create(offer=coupon_offer, target_type="all_products")
+
+        # Cart: 14 items @ 95 = 1330 subtotal
+        cart_items = [DummyCartItem(product, 14, 95)]
+        context = {'coupon_code': 'CASHBACK10', 'customer': customer}
+
+        result = engine.calculate_offers(cart_items, retailer, context=context)
+
+        # Total savings from BXGY = 95.00
+        assert result['total_savings'] == Decimal("95.00")
+        assert result['discounted_total'] == Decimal("1235.00")
+        # Cashback coupon should be 10% of 1235.00 = 123.50 points
+        assert result['total_points'] == Decimal("123.50")
+        assert result['applied_coupon']['points'] == Decimal("123.50")
+        assert result['applied_coupon']['savings'] == Decimal("123.50")
+
+        # 3. Create Order
+        order = Order.objects.create(
+            order_number="ORD-CASHBACK-TEST",
+            customer=customer,
+            retailer=retailer,
+            delivery_mode="delivery",
+            payment_mode="cash",
+            subtotal=Decimal("1330.00"),
+            discount_amount=Decimal("95.00"),
+            delivery_fee=Decimal("50.00"),
+            total_amount=Decimal("1285.00"),
+            points_earned=Decimal("123.50"),
+            status="pending"
+        )
+
+        # 4. Deliver order and award loyalty points
+        order.award_loyalty_points()
+        order.refresh_from_db()
+
+        # Points earned should strictly stay 123.50 (NOT 135.85)
+        assert order.points_earned == Decimal("123.50")
+
+        loyalty = CustomerLoyalty.objects.get(customer=customer, retailer=retailer)
+        assert loyalty.points == Decimal("123.50")
+
+
