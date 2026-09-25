@@ -283,6 +283,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'retailer_address', 'retailer_upi_id', 'retailer_upi_qr_code', 'delivery_mode', 'payment_mode', 'status',
             'subtotal', 'delivery_fee', 'discount_amount', 'discount_from_points', 'points_redeemed', 'points_earned',
             'taxable_amount', 'tax_amount', 'total_amount', 'refund_amount', 'net_amount',
+            'coupon_code',
             'special_instructions', 'cancellation_reason', 'cancelled_by', 
             'payment_reference_id', 'payment_status', 'payment_edit_count', 'is_payment_locked',
             'cash_amount', 'upi_amount', 'card_amount', 'credit_amount',
@@ -331,7 +332,11 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             offers.append({
                 'name': redemption.offer.name,
                 'type': redemption.offer.get_offer_type_display(),
-                'discount': redemption.discount_amount
+                'discount': float(redemption.discount_amount) if redemption.discount_amount else 0.0,
+                'points_earned': float(redemption.points_earned) if redemption.points_earned else 0.0,
+                'benefit_type': getattr(redemption.offer, 'benefit_type', 'discount'),
+                'coupon_code': redemption.coupon_code,
+                'is_coupon': bool(redemption.coupon_code)
             })
         return offers
     
@@ -446,6 +451,7 @@ class OrderCreateSerializer(serializers.Serializer):
     payment_mode = serializers.ChoiceField(choices=Order.PAYMENT_MODE_CHOICES)
     special_instructions = serializers.CharField(required=False, allow_blank=True)
     use_reward_points = serializers.BooleanField(required=False, default=False)
+    coupon_code = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     
     def validate_retailer_id(self, value):
         """Validate retailer exists"""
@@ -527,7 +533,13 @@ class OrderCreateSerializer(serializers.Serializer):
         # Calculate offers using Engine to get total display quantities for stock validation
         from offers.engine import OfferEngine
         engine = OfferEngine()
-        offer_results = engine.calculate_offers(cart_items, retailer)
+        coupon_code = data.get('coupon_code') or getattr(cart, 'applied_coupon_code', None)
+        offer_context = {
+            'channel': 'mobile',
+            'customer': customer,
+            'coupon_code': coupon_code
+        }
+        offer_results = engine.calculate_offers(cart_items, retailer, context=offer_context)
         item_discounts = offer_results.get('item_discounts', {})
 
         # Validate cart items availability and limits
@@ -595,7 +607,13 @@ class OrderCreateSerializer(serializers.Serializer):
         # Calculate offers using Engine
         from offers.engine import OfferEngine
         engine = OfferEngine()
-        offer_results = engine.calculate_offers(cart_items, retailer)
+        coupon_code = validated_data.get('coupon_code') or getattr(cart, 'applied_coupon_code', None)
+        offer_context = {
+            'channel': 'mobile',
+            'customer': customer,
+            'coupon_code': coupon_code
+        }
+        offer_results = engine.calculate_offers(cart_items, retailer, context=offer_context)
         
         subtotal = offer_results['subtotal']
         offer_discount = offer_results['total_savings']
@@ -680,9 +698,12 @@ class OrderCreateSerializer(serializers.Serializer):
         # Create order
         with transaction.atomic():
             # Create order with explicit payment breakdown for production DB stability
+            applied_coupon_obj = offer_results.get('applied_coupon')
+            final_coupon_code = applied_coupon_obj.get('code') if applied_coupon_obj else (coupon_code if coupon_code else None)
             order_data = {
                 'customer': customer,
                 'retailer': retailer,
+                'coupon_code': final_coupon_code,
                 'delivery_mode': validated_data['delivery_mode'],
                 'payment_mode': validated_data['payment_mode'],
                 'subtotal': subtotal,
@@ -716,15 +737,18 @@ class OrderCreateSerializer(serializers.Serializer):
             )
             
             # Create Offer Redemptions
-            from offers.models import OfferRedemption
+            from offers.models import OfferRedemption, Offer
+            from django.db.models import F
             for applied in offer_results['applied_offers']:
                 OfferRedemption.objects.create(
                     order=order,
                     customer=customer,
                     offer_id=applied['offer_id'],
+                    coupon_code=applied.get('coupon_code'),
                     discount_amount=applied['savings'] if applied.get('benefit_type', 'discount') == 'discount' else 0,
                     points_earned=applied['savings'] if applied.get('benefit_type', 'discount') == 'credit_points' else 0
                 )
+                Offer.objects.filter(id=applied['offer_id']).update(current_redemptions=F('current_redemptions') + 1)
             
             # Prepare for bulk operations
             order_items = []
@@ -817,6 +841,8 @@ class OrderCreateSerializer(serializers.Serializer):
             
             # Clear cart
             cart.items.all().delete()
+            cart.applied_coupon_code = None
+            cart.save(update_fields=['applied_coupon_code'])
             
             # Create initial status log
             OrderStatusLog.objects.create(

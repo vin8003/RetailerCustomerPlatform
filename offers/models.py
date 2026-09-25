@@ -51,6 +51,35 @@ class Offer(models.Model):
         decimal_places=2,
         help_text="Discount/Points value"
     )
+
+    TARGET_AUDIENCE_CHOICES = [
+        ('all', 'All Customers'),
+        ('first_time', 'First Order Only'),
+        ('selected', 'Specific Customers'),
+    ]
+    coupon_code = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        db_index=True,
+        help_text="If set, this offer requires a coupon code to apply"
+    )
+    is_public = models.BooleanField(
+        default=True,
+        help_text="If true, shows in customer app available coupons list"
+    )
+    target_audience = models.CharField(
+        max_length=20,
+        choices=TARGET_AUDIENCE_CHOICES,
+        default='all',
+        help_text="Audience eligibility for this coupon/offer"
+    )
+    eligible_customers = models.ManyToManyField(
+        settings.AUTH_USER_MODEL,
+        blank=True,
+        related_name='exclusive_offers',
+        help_text="Specific customers eligible when target_audience is 'selected'"
+    )
     
     # Constraints & Caps
     min_order_value = models.DecimalField(max_digits=10, decimal_places=2, default=0)
@@ -176,6 +205,7 @@ class OfferRedemption(models.Model):
     
     discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     points_earned = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    coupon_code = models.CharField(max_length=50, blank=True, null=True)
     
     created_at = models.DateTimeField(auto_now_add=True)
     
