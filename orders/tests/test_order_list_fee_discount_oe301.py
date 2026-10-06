@@ -252,7 +252,9 @@ class TestOrderListFeeDiscountOE301:
         _assert_fee_parity(_row_by_id(listed.data, order_b.id), detail_b.data)
 
     def test_search_meta_and_pos_views_untouched(self):
-        assert list(ProductSearchSerializer.Meta.fields) == OE300_SEARCH_META_FIELDS
+        # Later search-field bundles append fields; the OE-300 fields must remain, in order.
+        search_fields = list(ProductSearchSerializer.Meta.fields)
+        assert [f for f in search_fields if f in OE300_SEARCH_META_FIELDS] == OE300_SEARCH_META_FIELDS
 
         views_path = Path(__file__).resolve().parents[2] / "products" / "views.py"
         views_src = views_path.read_text()

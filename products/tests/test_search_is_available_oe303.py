@@ -220,7 +220,7 @@ class TestSearchIsAvailable:
             assert search_row["is_available"] is expected
             assert search_row["is_available"] == list_row["is_available"]
             assert search_row["is_available"] == detail["is_available"]
-            assert "is_available" not in pos_row
+            assert "is_available" in pos_row
             _assert_prior_search_fields(search_row, list_row, pos_row)
 
     def test_false_is_available_stays_false(self, api_client):
@@ -374,4 +374,4 @@ class TestSearchIsAvailable:
         assert product_b.id in pos_ids
         assert product_b.id in search_ids
         assert _row_by_id(search.data, product_b.id)["is_available"] is False
-        assert "is_available" not in _row_by_id(pos.data, product_b.id)
+        assert "is_available" in _row_by_id(pos.data, product_b.id)

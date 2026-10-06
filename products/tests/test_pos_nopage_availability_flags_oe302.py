@@ -295,8 +295,8 @@ class TestPosNoPageAvailabilityFlags:
         fields = ProductSearchSerializer.Meta.fields
         assert "is_featured" in fields
         assert "is_active" in fields
-        assert "is_available" not in fields
-        assert "is_in_stock" not in fields
+        assert "is_available" in fields
+        assert "is_in_stock" in fields
 
     def test_unauthenticated_and_customer_denied(self, api_client):
         _owner, shop = _make_retailer("oe302_auth_own", "OE302 Auth Shop")

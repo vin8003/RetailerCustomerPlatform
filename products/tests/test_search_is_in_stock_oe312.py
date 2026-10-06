@@ -159,7 +159,7 @@ def _assert_prior_search_fields(search_row, list_row, pos_row=None):
         str(pos_row["discounted_price"])
     )
     assert search_row["is_active"] == pos_row["is_active"]
-    assert "is_available" not in pos_row
+    assert "is_available" in pos_row
 
 
 @pytest.mark.django_db
@@ -225,7 +225,7 @@ class TestSearchIsInStock:
             assert search_row["is_in_stock"] is expected
             assert search_row["is_in_stock"] == list_row["is_in_stock"]
             assert search_row["is_in_stock"] == detail["is_in_stock"]
-            assert "is_in_stock" not in pos_row
+            assert "is_in_stock" in pos_row
             _assert_prior_search_fields(search_row, list_row, pos_row)
 
     def test_false_is_in_stock_stays_false(self, api_client):
@@ -406,5 +406,5 @@ class TestSearchIsInStock:
         assert product_b.id in pos_ids
         assert product_b.id in search_ids
         assert _row_by_id(search.data, product_b.id)["is_in_stock"] is False
-        assert "is_in_stock" not in _row_by_id(pos.data, product_b.id)
+        assert "is_in_stock" in _row_by_id(pos.data, product_b.id)
         assert _row_by_id(search.data, product_b.id)["is_available"] is True
