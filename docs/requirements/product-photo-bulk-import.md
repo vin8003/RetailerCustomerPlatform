@@ -32,6 +32,10 @@ Identity stays the catalog fields already used on F-0017: `Product.id`, `Product
 
 CSV identity columns: `product_id`, `id`, `sku`, `barcode`. Filename columns: `filename`, `file`, `image`, `path`. Match is shop-scoped (`Product.retailer`). Ambiguous barcodes fail that row (`ambiguous SKU`).
 
+Catalog match loads **only products that can match the import keys**, not the whole shop. Import rows and match keys are capped at **200** (`MAX_ROWS` / `MAX_MATCH_PRODUCTS`). The match queryset is not sliced, so a shared barcode still loads every partner and the row fails `ambiguous SKU`. The match path prefetches `batches` (needed for batch barcodes) and does **not** prefetch `additional_images` (`is_primary` is cleared with an UPDATE on attach).
+
+Zip without a CSV: only `jpg` / `jpeg` / `png` / `gif` / `webp` become rows. Dotted junk (`readme.txt`, `Thumbs.db`, `__MACOSX`, `.*`) is ignored, not a failed row. Same basename (CSV lookup) or same stem (zip-only) **last-wins** — later zip member / later upload replaces the earlier file.
+
 ## Row policy
 
 Failed rows (missing SKU, bad file, wrong type, missing file) are reported and **do not** abort the rest of the file. A broken zip/csv itself is **400** (nothing applied).

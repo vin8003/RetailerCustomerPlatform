@@ -87,7 +87,7 @@ When the products already exist, you can attach photos in one go:
 
 1. Name image files after the barcode or product id (`8901234567890.jpg`), **or** send a small CSV that maps barcode / product id → filename
 2. Upload a zip (and optional CSV) from the retailer product tools
-3. Matching SKUs get the new photo as the default
+3. Matching SKUs get the new photo as the default. If two files share the same name (or the same name without the extension), the last one in the zip is used. Extra files that are not images (`readme.txt` and similar) are skipped.
 4. Rows that do not match (missing barcode, bad file, wrong type) are listed; the rest still apply
 
 Staff need photo-import permission. A replacement photo becomes the default; the old default is cleared. This uses the same product photos customers and POS already see — it is not a separate media library.
