@@ -987,3 +987,24 @@ class TestPickupReviewFixes:
         second = expire_uncollected_pickup_orders()
         assert [r["order_id"] for r in first] == [order.id]
         assert second == []
+
+
+@pytest.mark.django_db
+class TestCustomerCheckoutRejectsUnsellable:
+    @pytest.mark.parametrize("field", ["is_active", "is_available"])
+    def test_unsellable_product_in_cart_blocks_order(self, api_client, field):
+        _owner, profile = _make_retailer("oe190_cust_" + field, "OE190 Cust")
+        customer = _make_customer("oe190_cust_c_" + field)
+        product = _product(profile)
+        _cart_with_item(customer, profile, product)
+        setattr(product, field, False)
+        product.save(update_fields=[field])
+
+        api_client.force_authenticate(user=customer)
+        resp = api_client.post(
+            reverse("place_order"),
+            {"retailer_id": profile.id, "delivery_mode": "pickup", "payment_mode": "cash_pickup"},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        assert not Order.objects.filter(customer=customer).exists()
