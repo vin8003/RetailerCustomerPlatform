@@ -17,6 +17,10 @@ from orders.models import Order
 from retailers.models import RetailerOperatingHours, RetailerProfile
 
 SLOT_MINUTES = 30
+# Customers can move their own slot only until the shop starts packing.
+CUSTOMER_RESCHEDULE_STATUSES = frozenset(
+    {'pending', 'waiting_for_customer_approval', 'confirmed', 'processing'}
+)
 DEFAULT_TIMEZONE = 'Asia/Kolkata'
 MAX_SLOT_LIST_DAYS = 14
 
@@ -88,6 +92,15 @@ def operating_hours_map(retailer: RetailerProfile) -> dict[str, RetailerOperatin
     return {row.day_of_week: row for row in rows}
 
 
+def _day_window(day: date, hours_row: RetailerOperatingHours) -> tuple[datetime, datetime]:
+    """Naive opening/closing datetimes for a day. Closing 00:00 means end of that day."""
+    opening_dt = datetime.combine(day, hours_row.opening_time)
+    closing_dt = datetime.combine(day, hours_row.closing_time)
+    if hours_row.closing_time == time(0, 0):
+        closing_dt += timedelta(days=1)
+    return opening_dt, closing_dt
+
+
 def generate_day_slot_starts(
     day: date,
     hours_row: RetailerOperatingHours | None,
@@ -101,14 +114,15 @@ def generate_day_slot_starts(
     ):
         return []
 
+    opening_dt, closing_dt = _day_window(day, hours_row)
+    # Work with full datetimes so a closing time late in the evening (23:30, 23:59) or at
+    # midnight cannot wrap around and loop forever.
     slots: list[datetime] = []
-    cursor = hours_row.opening_time
-    while True:
-        end = _time_add_minutes(cursor, SLOT_MINUTES)
-        if end > hours_row.closing_time:
-            break
-        slots.append(tz.localize(datetime.combine(day, cursor)))
-        cursor = end
+    cursor = opening_dt
+    step = timedelta(minutes=SLOT_MINUTES)
+    while cursor + step <= closing_dt:
+        slots.append(tz.localize(cursor))
+        cursor += step
     return slots
 
 
@@ -159,8 +173,9 @@ def is_slot_within_operating_hours(
         return False
 
     local_end = local_start + timedelta(minutes=SLOT_MINUTES)
-    opening_dt = tz.localize(datetime.combine(local_start.date(), hours_row.opening_time))
-    closing_dt = tz.localize(datetime.combine(local_start.date(), hours_row.closing_time))
+    naive_open, naive_close = _day_window(local_start.date(), hours_row)
+    opening_dt = tz.localize(naive_open)
+    closing_dt = tz.localize(naive_close)
     return local_start >= opening_dt and local_end <= closing_dt
 
 
@@ -234,7 +249,9 @@ def _booked_count_locked(
     *,
     exclude_order_id=None,
 ) -> int:
-    qs = Order.objects.select_for_update().filter(
+    # Mutual exclusion comes from the RetailerProfile row lock taken by the caller;
+    # select_for_update() is not applied to a COUNT query.
+    qs = Order.objects.filter(
         retailer=retailer,
         fulfillment_slot_start=slot_start,
         delivery_mode=delivery_mode,
@@ -331,6 +348,10 @@ def reschedule_fulfillment_slot(
     retailer = RetailerProfile.objects.select_for_update().get(pk=order.retailer_id)
     if order.status in {'delivered', 'cancelled', 'returned'}:
         raise FulfillmentSlotError('Cannot reschedule a completed or cancelled order')
+    if not by_staff and order.status not in CUSTOMER_RESCHEDULE_STATUSES:
+        raise FulfillmentSlotError(
+            'This order is already being prepared. Ask the shop to change the time.'
+        )
 
     hours_by_day = operating_hours_map(retailer)
     normalized = validate_slot_bookable(

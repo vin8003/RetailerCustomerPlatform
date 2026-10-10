@@ -2100,8 +2100,13 @@ def organization_notification_blast(request, org_id):
         )
 
 
+class FulfillmentSlotsThrottle(AnonRateThrottle):
+    scope = 'fulfillment_slots'
+
+
 @api_view(['GET'])
 @permission_classes([permissions.AllowAny])
+@throttle_classes([FulfillmentSlotsThrottle])
 def list_fulfillment_slots(request, retailer_id):
     """
     List open pickup/delivery fulfillment slots for a shop location (OE-243).
@@ -2144,14 +2149,26 @@ def list_fulfillment_slots(request, retailer_id):
             delivery_mode=delivery_mode,
             days=days,
         )
+        is_shop_staff = (
+            request.user.is_authenticated
+            and getattr(request.user, 'user_type', None) == 'retailer'
+        )
+        body = {
+            'retailer_id': retailer.id,
+            'delivery_mode': delivery_mode,
+            'timezone': retailer.timezone or 'Asia/Kolkata',
+            'slots': slots,
+        }
+        if is_shop_staff:
+            body['slot_capacity'] = slot_capacity(retailer)
+        else:
+            # Shoppers only need to know whether a slot is open, not how busy the shop is.
+            body['slots'] = [
+                {k: v for k, v in slot.items() if k not in ('capacity', 'booked', 'remaining')}
+                for slot in slots
+            ]
         return Response(
-            {
-                'retailer_id': retailer.id,
-                'delivery_mode': delivery_mode,
-                'slot_capacity': slot_capacity(retailer),
-                'timezone': retailer.timezone or 'Asia/Kolkata',
-                'slots': slots,
-            },
+            body,
             status=status.HTTP_200_OK,
         )
     except FulfillmentSlotError as exc:

@@ -178,6 +178,7 @@ REST_FRAMEWORK = {
         'login': '5/minute',
         'otp': '3/minute',
         'geo_estimate': '20/hour',
+        'fulfillment_slots': '120/hour',
         # Partner org API keys (OE-182 / F-0006)
         'api_key': '600/hour',
     }
@@ -429,6 +430,7 @@ if 'test' in sys.argv or 'pytest' in sys.modules:
         ],
         'DEFAULT_THROTTLE_CLASSES': [],
         'DEFAULT_THROTTLE_RATES': {
+            'fulfillment_slots': '10000/minute',
             'login': '10000/minute',
             'otp': '10000/minute',
             'anon': '10000/minute',
