@@ -16,6 +16,7 @@ One vendor master. Do not invent a second supplier / vendor table. Ledger rows s
 | `PurchaseInvoice.supplier` as the current inward counterparty | EXISTING — no `PurchaseOrder` model yet |
 | `payment_terms` on `Supplier` | EXTEND |
 | Duplicate non-blank GSTIN flagged per **org** (`gstin_duplicate`) | EXTEND |
+| Org-unique non-blank GSTIN DB constraint (`uniq_org_supplier_nonblank_gstin`) | EXTEND — denormalized `Supplier.organization`; blank/null GSTIN stored as `''` and may repeat. Concurrent insert maps `IntegrityError` to the same 400 |
 | `purchasing.terms` for payment-terms writes (**403**) | EXTEND (catalog v10) |
 | Inactive supplier blocked on **new** purchase-invoice create / supplier change | EXTEND |
 | `GET /api/products/erp/suppliers/?is_active=true` picker filter | EXTEND — hook for OE-102 PO picker |
@@ -27,9 +28,9 @@ One vendor master. Do not invent a second supplier / vendor table. Ledger rows s
 
 | Method | Path | Behavior |
 |--------|------|----------|
-| POST | `/api/products/erp/suppliers/` | Create. `gst_number` optional. Blank GSTIN may repeat. Duplicate non-blank GSTIN in the same org → **400** + `gstin_duplicate`. Non-empty `payment_terms` requires `purchasing.terms`. |
+| POST | `/api/products/erp/suppliers/` | Create. `gst_number` optional (`null` / `""` / omitted all store blank). Blank GSTIN may repeat. Duplicate non-blank GSTIN in the same org → **400** + `gstin_duplicate` (app check and DB unique). Non-empty `payment_terms` requires `purchasing.terms`. Whitespace-only `payment_terms` → **400**. Terms are trimmed. |
 | GET | `/api/products/erp/suppliers/` | Same-org suppliers. `?is_active=true` hides inactive (picker). |
-| PATCH | `/api/products/erp/suppliers/<id>/` | Echoing current `payment_terms` is allowed. Changing terms without `purchasing.terms` → **403**, row unchanged. |
+| PATCH | `/api/products/erp/suppliers/<id>/` | Echoing current `payment_terms` (after trim) is allowed. Changing terms without `purchasing.terms` → **403**, row unchanged. Whitespace-only `payment_terms` → **400**, row unchanged. |
 | POST | `/api/products/erp/purchase-invoices/` | Inactive `supplier` → **400**. Cross-org supplier → **400**. Existing invoice may keep a supplier later marked inactive. |
 
 GSTIN is stored as `gst_number` (uppercase). Format must match `22AAAAA0000A1Z5` when provided.

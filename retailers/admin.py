@@ -179,6 +179,7 @@ class SupplierAdmin(admin.ModelAdmin):
         'company_name', 'contact_person', 'phone_number',
         'gst_number', 'retailer__shop_name',
     ]
+    readonly_fields = ['organization']
 
 
 @admin.register(RetailerCustomerMapping)
