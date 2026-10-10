@@ -1,5 +1,6 @@
 from rest_framework import status, permissions
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
+from rest_framework.throttling import UserRateThrottle
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Count, Sum, Q, Avg, DecimalField, IntegerField, Max, Subquery, OuterRef, F
@@ -1043,8 +1044,13 @@ def get_retailer_customers(request):
         )
 
 
+class CustomerLookupThrottle(UserRateThrottle):
+    scope = 'customer_lookup'
+
+
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
+@throttle_classes([CustomerLookupThrottle])
 def lookup_retailer_customer(request):
     """
     Phone lookup: org-scoped customer summary + recent POS and app orders.
@@ -1061,15 +1067,32 @@ def lookup_retailer_customer(request):
     if phone_err is not None:
         return phone_err
 
+    # Order history and balances need orders.read for every response, not only exports.
+    read_err = require_history_export_permission(request.user, org)
+    if read_err is not None:
+        return read_err
     export = is_export_requested(request.query_params)
-    if export:
-        export_err = require_history_export_permission(request.user, org)
-        if export_err is not None:
-            return export_err
 
-    mapping = find_org_customer_mapping(org, last_10)
+    from orders.access import staff_served_location_ids
+    from retailers.audit_log import record_org_audit_event
+    from retailers.models import OrgAuditLog
+
+    # Staff only see customers and orders of the locations they serve.
+    served = staff_served_location_ids(request.user, org)
+    record_org_audit_event(
+        organization=org,
+        actor=request.user,
+        action=OrgAuditLog.ACTION_UPDATE,
+        object_type=OrgAuditLog.OBJECT_CUSTOMER_LOOKUP,
+        object_id=last_10[-4:],
+        summary_after={'phone_last4': last_10[-4:], 'export': export},
+    )
+
+    mapping = find_org_customer_mapping(org, last_10, location_ids=served)
     customer = mapping.customer if mapping is not None else None
-    orders_base = org_customer_orders_qs(org, customer=customer, last_10=last_10)
+    orders_base = org_customer_orders_qs(
+        org, customer=customer, last_10=last_10, location_ids=served
+    )
     history_qs = annotated_history_qs(orders_base)
 
     if mapping is None:
