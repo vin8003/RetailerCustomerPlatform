@@ -262,6 +262,32 @@ class TestDisableTenantBlocksSessions:
         assert blocked.status_code == status.HTTP_403_FORBIDDEN
         assert "access" not in blocked.data
 
+    def test_refresh_fails_closed_when_org_check_errors(self, api_client, monkeypatch):
+        _make_retailer("refresh_closed", "Closed Shop")
+        login = api_client.post(
+            reverse("retailer_login"),
+            {"username": "refresh_closed", "password": "TestPass123!"},
+        )
+        refresh = login.data["tokens"]["refresh"]
+
+        def boom(user):
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr(
+            "retailers.organization.organization_is_session_blocked", boom
+        )
+        response = api_client.post(
+            reverse("token_refresh"), {"refresh": refresh}, format="json"
+        )
+        assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+        assert "access" not in response.data
+
+    def test_refresh_with_invalid_token_still_unauthorized(self, api_client):
+        response = api_client.post(
+            reverse("token_refresh"), {"refresh": "not-a-token"}, format="json"
+        )
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
 
 @pytest.mark.django_db
 class TestOrgAuthzMatrix:
