@@ -990,6 +990,7 @@ class OrderStatusUpdateSerializer(serializers.Serializer):
         
         return value
     
+    @transaction.atomic
     def update(self, instance, validated_data):
         """Update order status"""
         new_status = validated_data['status']
