@@ -118,13 +118,25 @@ class ProductReviewAdmin(admin.ModelAdmin):
 @admin.register(ProductInventoryLog)
 class ProductInventoryLogAdmin(admin.ModelAdmin):
     """
-    Admin configuration for product inventory logs
+    Admin configuration for product inventory logs (read-only; OE-127).
     """
     list_display = ['product', 'log_type', 'quantity_change', 'previous_quantity', 'new_quantity', 'created_by', 'created_at']
     list_filter = ['log_type', 'created_at']
     search_fields = ['product__name', 'reason']
     ordering = ['-created_at']
-    readonly_fields = ['created_at']
+    readonly_fields = [
+        'product', 'batch', 'log_type', 'quantity_change',
+        'previous_quantity', 'new_quantity', 'reason', 'created_by', 'created_at',
+    ]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(ProductUpload)
