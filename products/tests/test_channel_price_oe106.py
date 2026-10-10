@@ -122,6 +122,42 @@ class TestChannelRepresentation:
         assert data['price'] == '40.00'
         assert data['app_price'] == '33.00'
 
+    def test_app_channel_rewrites_nested_batch_price_when_app_price_set(self):
+        product = _product('40.00', app='33.00')
+        data = {
+            'price': format_money(product.price),
+            'batches': [{'id': 1, 'price': '42.00'}],
+        }
+        apply_channel_price_representation(
+            data, product, {'price_channel': CHANNEL_APP}
+        )
+        assert data['price'] == '33.00'
+        assert data['batches'][0]['price'] == '33.00'
+
+    def test_store_channel_keeps_nested_batch_price(self):
+        product = _product('40.00', app='33.00')
+        data = {
+            'price': format_money(product.price),
+            'batches': [{'id': 1, 'price': '42.00'}],
+        }
+        apply_channel_price_representation(
+            data, product, {'price_channel': CHANNEL_STORE}
+        )
+        assert data['price'] == '40.00'
+        assert data['batches'][0]['price'] == '42.00'
+
+    def test_app_without_override_keeps_nested_batch_price(self):
+        product = _product('40.00')
+        data = {
+            'price': format_money(product.price),
+            'batches': [{'id': 1, 'price': '42.00'}],
+        }
+        apply_channel_price_representation(
+            data, product, {'price_channel': CHANNEL_APP}
+        )
+        assert data['price'] == '40.00'
+        assert data['batches'][0]['price'] == '42.00'
+
 
 class TestAppPriceSummary:
     def test_explicit_none_is_not_current_product_value(self):

@@ -247,3 +247,63 @@ class TestPurchaseInvoiceSupplierQueries:
             if 'FROM "supplier"' in q["sql"]
         ]
         assert standalone_supplier_reads == []
+
+
+def _search_invoices(retailer):
+    """Distinct names so SearchFilter space-splitting cannot cross-hit."""
+    acme = Supplier.objects.create(retailer=retailer, company_name="AcmeTraders")
+    beta = Supplier.objects.create(retailer=retailer, company_name="BetaGoods")
+    PurchaseInvoice.objects.create(
+        retailer=retailer,
+        supplier=acme,
+        invoice_number="INV-ACM",
+        invoice_date="2026-09-15",
+        total_amount=Decimal("10.00"),
+        paid_amount=Decimal("0.00"),
+    )
+    PurchaseInvoice.objects.create(
+        retailer=retailer,
+        supplier=beta,
+        invoice_number="INV-BET",
+        invoice_date="2026-09-15",
+        total_amount=Decimal("10.00"),
+        paid_amount=Decimal("0.00"),
+    )
+
+
+@pytest.mark.django_db
+class TestPurchaseInvoiceSearchFields:
+    def test_search_by_supplier_company_name(
+        self, api_client, retailer_user, retailer
+    ):
+        _search_invoices(retailer)
+        api_client.force_authenticate(user=retailer_user)
+
+        resp = api_client.get(
+            reverse("erp-purchase-invoice-list"), {"search": "AcmeTraders"}
+        )
+        assert resp.status_code == status.HTTP_200_OK, resp.data
+        names = [row["supplier_name"] for row in resp.data["results"]]
+        assert names == ["AcmeTraders"]
+
+    def test_search_by_invoice_number(self, api_client, retailer_user, retailer):
+        _search_invoices(retailer)
+        api_client.force_authenticate(user=retailer_user)
+
+        resp = api_client.get(
+            reverse("erp-purchase-invoice-list"), {"search": "INV-ACM"}
+        )
+        assert resp.status_code == status.HTTP_200_OK, resp.data
+        assert [row["invoice_number"] for row in resp.data["results"]] == ["INV-ACM"]
+
+    def test_search_unknown_is_empty_not_field_error(
+        self, api_client, retailer_user, retailer
+    ):
+        _search_invoices(retailer)
+        api_client.force_authenticate(user=retailer_user)
+
+        resp = api_client.get(
+            reverse("erp-purchase-invoice-list"), {"search": "no-such-vendor"}
+        )
+        assert resp.status_code == status.HTTP_200_OK, resp.data
+        assert resp.data["results"] == []
