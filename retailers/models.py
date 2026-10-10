@@ -323,6 +323,7 @@ class OrgAuditLog(models.Model):
     OBJECT_NOTIFICATION_CONFIG = 'notification_config'
     OBJECT_CREDIT_OVERRIDE = 'credit_override'
     OBJECT_CHANNEL_PRICE = 'channel_price'
+    OBJECT_PRODUCT_IMAGE = 'product_image'
     OBJECT_CUSTOMER_LOOKUP = 'customer_lookup'
     OBJECT_STOCK_WRITE_OFF = 'stock_write_off'
 

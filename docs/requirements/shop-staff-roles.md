@@ -31,10 +31,11 @@ See `retailers/permissions_catalog.py` (`PERMISSION_CATALOG_VERSION`).
 | `api_keys.manage` | Create / list / revoke org partner API keys (OE-182) |
 | `inventory.adjust` | Hand-set on-hand quantity on product update / bulk (OE-127). Also required to change parent-child pack link fields on product create / update (OE-103), batch `expiry_date` on product update (OE-136), and damage / expiry / spoilage write-off (OE-141). Admin bootstrap includes it; cashier does not. |
 | `catalog.price` | Set or clear `Product.app_price` (owned-app list, OE-106). Echoing the current app price does not require the perm. Store `price` edits stay on the existing product path and do not use this code. Admin bootstrap includes it; cashier does not. |
+| `catalog.image` | Bulk-import and replace `Product` photos via zip or csv+files (OE-124). Admin bootstrap includes it; cashier does not. Unauthenticated callers cannot upload. |
 | `orders.update` | Retailer-side order status mutations (OE-131). Also required to grant an explicit POS `credit_override` when khata limit / due-days would lock the sale (OE-143). No separate finance catalog code. |
 | `orders.read` | View orders (OE-131). Also required to export a customer’s **full** order history (`GET /api/customer/retailer/lookup/?export=1`, OE-212). Catalog has no `crm.*` / `customers.read`. Recent phone lookup (20 rows) uses the `customers` module only. |
 
-Deny-by-default: unknown codes are rejected on role save. Org **owner** always has the full catalog (implicit admin). Bootstrap creates system **Admin** (all codes, including `inventory.adjust` and `catalog.price`) and **Cashier** (empty — no inventory or app-price permissions) roles and an Admin membership for the owner. There is no manager system role; grant `inventory.adjust` or `catalog.price` on a named role when needed.
+Deny-by-default: unknown codes are rejected on role save. Org **owner** always has the full catalog (implicit admin). Bootstrap creates system **Admin** (all codes, including `inventory.adjust`, `catalog.price`, and `catalog.image`) and **Cashier** (empty — no inventory, app-price, or photo-import permissions) roles and an Admin membership for the owner. There is no manager system role; grant `inventory.adjust`, `catalog.price`, or `catalog.image` on a named role when needed.
 
 ## API
 
