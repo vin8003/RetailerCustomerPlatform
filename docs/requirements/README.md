@@ -19,5 +19,7 @@ Ticket snapshots (acceptance context, ship notes) stay in [`../tickets/`](../tic
 | [inactive-product-edit.md](inactive-product-edit.md) | KAN-62 |
 | [pos-saleable-products.md](pos-saleable-products.md) | OE-190 |
 | [inventory-adjust-permission.md](inventory-adjust-permission.md) | OE-127 |
+| [parent-child-pack-skus.md](parent-child-pack-skus.md) | OE-103 |
+| [product-batch-expiry.md](product-batch-expiry.md) | OE-136 |
 | [retailer-web-mobile.md](retailer-web-mobile.md) | KAN-11 |
 | [customer-retailer-city-map.md](customer-retailer-city-map.md) | KAN-69 |

@@ -29,7 +29,7 @@ See `retailers/permissions_catalog.py` (`PERMISSION_CATALOG_VERSION`).
 | `roles.manage` | Create / edit named roles |
 | `staff.manage` | Assign / change / revoke staff seats |
 | `api_keys.manage` | Create / list / revoke org partner API keys (OE-182) |
-| `inventory.adjust` | Hand-set on-hand quantity on product update / bulk (OE-127). Also required to change parent-child pack link fields on product create / update (OE-103). Admin bootstrap includes it; cashier does not. |
+| `inventory.adjust` | Hand-set on-hand quantity on product update / bulk (OE-127). Also required to change parent-child pack link fields on product create / update (OE-103) and batch `expiry_date` on product update (OE-136). Admin bootstrap includes it; cashier does not. |
 
 Deny-by-default: unknown codes are rejected on role save. Org **owner** always has the full catalog (implicit admin). Bootstrap creates system **Admin** (all codes, including `inventory.adjust`) and **Cashier** (empty — no inventory permissions) roles and an Admin membership for the owner. There is no manager system role; grant `inventory.adjust` on a named role when needed.
 

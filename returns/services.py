@@ -182,7 +182,9 @@ def process_purchase_return(retailer, supplier, invoice, items_data, notes, crea
                     raise ValueError(f"Cannot return {qty} units of {product.name}. Already returned: {already_returned}, Purchased: {purchase_item.quantity}")
 
             # 1. Update Inventory (- quantity)
-            product.reduce_quantity(qty, batch=batch, allow_negative=True)
+            product.reduce_quantity(
+                qty, batch=batch, allow_negative=True, forbid_expired=False
+            )
             
             # 2. Log Change
             ProductInventoryLog.objects.create(
