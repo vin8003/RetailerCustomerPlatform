@@ -605,6 +605,10 @@ class OrderCreateSerializer(serializers.Serializer):
         master_product_demand = {}
         
         for cart_item in cart_items:
+            if not cart_item.product.is_active or not cart_item.product.is_available:
+                raise serializers.ValidationError(
+                    f"Product '{cart_item.product.name}' is no longer available. Remove it from your cart."
+                )
             quantity = cart_item.quantity
             if cart_item.id in item_discounts:
                 quantity = item_discounts[cart_item.id].get('total_display_quantity', cart_item.quantity)
