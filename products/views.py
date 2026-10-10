@@ -3,7 +3,7 @@ from rest_framework.decorators import api_view, parser_classes, permission_class
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Q, Avg, Count, Sum, Max
-from django.db.models import Q, Avg, Count, Sum, Max, F, Value, Case, When, FloatField, TextField, IntegerField, DecimalField
+from django.db.models import Q, Avg, Count, Sum, Max, F, Value, Case, When, FloatField, TextField, IntegerField, DecimalField, Prefetch
 from django.db.models.functions import Coalesce, Greatest, Cast
 from django.contrib.postgres.search import SearchVector, SearchQuery, SearchRank
 from django.shortcuts import get_object_or_404
@@ -32,7 +32,10 @@ from .serializers import (
     ProductReviewSerializer, ProductUploadSerializer, ProductBulkUploadSerializer,
     ProductStatsSerializer, MasterProductSerializer,
     ProductUploadSessionSerializer, UploadSessionItemSerializer,
-    ProductSearchSerializer
+    ProductSearchSerializer,
+    cache_group_siblings,
+    fractional_children_payload,
+    safe_group_variants_payload,
 )
 from retailers.models import OrgAuditLog, RetailerProfile
 from common.permissions import IsRetailerOwner
@@ -69,6 +72,11 @@ from products.write_off import (
     parse_write_off_batch_id,
     parse_write_off_quantity,
     write_off_stock,
+)
+from products.supplier_last_costs import (
+    include_purchase_margin,
+    last_pi_unit_costs_by_product_id,
+    selling_margin_percent,
 )
 
 from retailers.module_flags import module_required
@@ -385,8 +393,29 @@ def get_retailer_products(request):
 
         # Fast path for POS / Bulk Select All (all products, no pagination, lightweight serialization)
         if request.query_params.get('no_page') == 'true':
-            pos_products = products.select_related('category').prefetch_related('batches')[:10000]  # OOM safety limit
-            
+            pos_products = list(
+                products.select_related(
+                    'category', 'parent_bulk_product', 'brand'
+                ).prefetch_related(
+                    'batches',
+                    Prefetch(
+                        'fractional_children',
+                        queryset=Product.objects.filter(is_active=True).order_by('id'),
+                    ),
+                )[:10000]
+            )  # OOM safety limit
+            Product.cache_saleable_quantities(pos_products)
+            pos_variant_context = {
+                'request': request,
+                'group_siblings_by_key': cache_group_siblings(pos_products),
+            }
+            include_margin = include_purchase_margin(request.user)
+            last_pi_costs = (
+                last_pi_unit_costs_by_product_id(pos_products)
+                if include_margin
+                else {}
+            )
+
             data = []
             for p in pos_products:
                 batches = []
@@ -401,7 +430,9 @@ def get_retailer_products(request):
                                 'original_price': b.original_price,
                                 'quantity': b.quantity,
                                 'is_active': b.is_active,
-                                'show_on_app': b.show_on_app
+                                'show_on_app': b.show_on_app,
+                                'expiry_date': b.expiry_date,
+                                'is_expired': b.is_expired(),
                             })
                 
                 img_url = None
@@ -410,7 +441,7 @@ def get_retailer_products(request):
                 except Exception:
                     img_url = p.image_url
 
-                data.append({
+                row = {
                     'id': p.id,
                     'name': p.name,
                     'price': p.price,
@@ -418,20 +449,49 @@ def get_retailer_products(request):
                     'discounted_price': p.discounted_price or p.price,
                     'original_price': p.original_price,
                     'quantity': p.quantity,
+                    'saleable_quantity': p.saleable_quantity(),
                     'track_inventory': p.track_inventory,
+                    'unit': p.unit,
                     'image': img_url,
                     'category_name': p.category.name if p.category else 'Uncategorized',
+                    'brand_name': p.brand.name if p.brand else None,
                     'barcode': p.barcode,
                     'is_active': p.is_active,
+                    'is_featured': p.is_featured,
+                    'is_available': p.is_available,
+                    'is_in_stock': p.is_in_stock,
                     'is_seasonal': p.is_seasonal,
+                    'product_group': p.product_group,
                     'has_batches': p.has_batches,
-                    'batches': batches
-                })
+                    'batches': batches,
+                    'group_variants': safe_group_variants_payload(p, pos_variant_context),
+                    'is_parent_bulk': p.is_parent_bulk,
+                    'parent_bulk_product': p.parent_bulk_product_id,
+                    'conversion_factor': p.conversion_factor,
+                    'fractional_children': fractional_children_payload(
+                        p, pos_variant_context
+                    ),
+                }
+                if include_margin:
+                    if p.purchase_price is not None:
+                        cost = p.purchase_price
+                    else:
+                        cost = last_pi_costs.get(p.id)
+                    margin = selling_margin_percent(p.price, cost)
+                    row['margin_percent'] = (
+                        format(margin, 'f') if margin is not None else None
+                    )
+                data.append(row)
             return Response(data, status=status.HTTP_200_OK)
 
         # Apply expensive annotations for normal paginated path
         products = products.select_related(
             'retailer', 'category', 'brand', 'master_product'
+        ).prefetch_related(
+            Prefetch(
+                'fractional_children',
+                queryset=Product.objects.filter(is_active=True).order_by('id'),
+            )
         ).annotate(
             average_rating_annotated=Avg('reviews__rating'),
             review_count_annotated=Count('reviews')
@@ -453,10 +513,33 @@ def get_retailer_products(request):
         page = paginator.paginate_queryset(products, request)
 
         if page is not None:
-            serializer = ProductListSerializer(page, many=True, context={'request': request, 'active_offers': active_offers})
+            Product.cache_saleable_quantities(page)
+            serializer = ProductListSerializer(
+                page,
+                many=True,
+                context={
+                    'request': request,
+                    'active_offers': active_offers,
+                    'include_saleable_quantity': True,
+                    'include_fractional_children': True,
+                    'include_margin_percent': include_purchase_margin(request.user),
+                },
+            )
             return paginator.get_paginated_response(serializer.data)
 
-        serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
+        products = list(products)
+        Product.cache_saleable_quantities(products)
+        serializer = ProductListSerializer(
+            products,
+            many=True,
+            context={
+                'request': request,
+                'active_offers': active_offers,
+                'include_saleable_quantity': True,
+                'include_fractional_children': True,
+                'include_margin_percent': include_purchase_margin(request.user),
+            },
+        )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     except Exception as e:
@@ -530,10 +613,26 @@ def search_products(request):
 
         # Limit results for search
         limit = int(request.query_params.get('limit', 50))
-        products = products[:limit]
+        products = products.select_related(
+            'parent_bulk_product', 'brand', 'category'
+        ).prefetch_related(
+            Prefetch(
+                'fractional_children',
+                queryset=Product.objects.filter(is_active=True).order_by('id'),
+            )
+        )
+        products = list(products[:limit])
+        Product.cache_saleable_quantities(products)
 
         serializer = ProductSearchSerializer(
-            products, many=True, context={'request': request}
+            products,
+            many=True,
+            context={
+                'request': request,
+                'include_saleable_quantity': True,
+                'include_fractional_children': True,
+                'include_margin_percent': include_purchase_margin(request.user),
+            },
         )
         return Response({
             'results': serializer.data,
@@ -664,12 +763,22 @@ def get_product_detail(request, product_id):
 
         # Optimize query with select_related and prefetch_related
         queryset = Product.objects.select_related(
-            'retailer', 'category', 'brand'
+            'retailer', 'category', 'brand', 'parent_bulk_product'
         ).prefetch_related(
-            'additional_images', 'reviews', 'reviews__customer'
+            'additional_images', 'reviews', 'reviews__customer', 'batches',
+            Prefetch(
+                'fractional_children',
+                queryset=Product.objects.filter(is_active=True).order_by('id'),
+            ),
         )
-        
-        product = get_object_or_404(queryset, id=product_id, retailer=retailer)
+
+        try:
+            product = queryset.get(id=product_id, retailer=retailer)
+        except Product.DoesNotExist:
+            return Response(
+                {'error': 'Product not found'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
         # Pre-fetch active offers for optimization
         from offers.models import Offer
         from django.utils import timezone
@@ -681,7 +790,17 @@ def get_product_detail(request, product_id):
             Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
         ).order_by('-priority').prefetch_related('targets'))
 
-        serializer = ProductDetailSerializer(product, context={'request': request, 'active_offers': active_offers, 'include_inactive_batches': True})
+        serializer = ProductDetailSerializer(
+            product,
+            context={
+                'request': request,
+                'active_offers': active_offers,
+                'include_inactive_batches': True,
+                'include_saleable_quantity': True,
+                'include_fractional_children': True,
+                'include_margin_percent': include_purchase_margin(request.user),
+            },
+        )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     except Exception as e:
@@ -1420,7 +1539,7 @@ def search_products_public(request, retailer_id):
 
         # Limit results for search
         limit = int(request.query_params.get('limit', 50))
-        products = products[:limit]
+        products = products.select_related('brand', 'category')[:limit]
 
         serializer = ProductSearchSerializer(products, many=True)
         return Response({

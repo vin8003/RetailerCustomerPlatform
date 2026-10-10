@@ -3,6 +3,7 @@
 - **Ticket:** [OE-170](https://vin8003.atlassian.net/browse/OE-170) · backlog `F-0072` (thin slice) · [snapshot](../tickets/OE-170.md)
 - **Implementation:** EXTEND (`smart_product_search` already used by POS and catalog)
 - **Depends on:** [pos-saleable-products.md](pos-saleable-products.md) (F-0017 catalog identity)
+- **Related:** [search-barcode.md](search-barcode.md) (OE-290 primary `barcode` echo on search rows)
 
 POS and catalog product search resolve `Product.additional_barcodes` the same way they already resolve primary `Product.barcode`. The field name stays `additional_barcodes`. Match is the existing `icontains` path (query is space-normalized and lowercased first). Lookups stay retailer-scoped.
 

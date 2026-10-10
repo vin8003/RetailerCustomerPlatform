@@ -15,6 +15,11 @@ from products.channel_price import (
     channel_from_context,
     resolve_channel_price,
 )
+from products.supplier_last_costs import (
+    draft_or_last_pi_cost,
+    last_pi_unit_costs_by_product_id,
+    selling_margin_percent,
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -26,6 +31,253 @@ class ChannelPriceRepresentationMixin:
     def to_representation(self, instance):
         data = super().to_representation(instance)
         return apply_channel_price_representation(data, instance, self.context)
+
+
+def json_qty(val):
+    """Match existing quantity SerializerMethodField JSON shape."""
+    if val is None:
+        return 0
+    if isinstance(val, Decimal):
+        if val == val.to_integral_value():
+            return int(val)
+        return float(val.normalize())
+    return val
+
+
+_MARGIN_PERCENT = serializers.DecimalField(
+    max_digits=10, decimal_places=2, allow_null=True
+)
+
+
+class PurchaseMarginReadMixin:
+    """Purchase-role catalog reads expose margin%; cashiers/public omit it.
+
+    Subclasses must redeclare ``margin_percent`` as a SerializerMethodField.
+    """
+
+    margin_percent = serializers.SerializerMethodField()
+
+    def _include_margin_percent(self):
+        return bool(self.context.get('include_margin_percent'))
+
+    def get_margin_percent(self, obj):
+        if not self._include_margin_percent():
+            return None
+        cache = self.context.get('last_pi_cost_by_product_id')
+        if obj.purchase_price is not None:
+            cost = obj.purchase_price
+        elif cache is not None:
+            cost = cache.get(obj.id)
+        else:
+            cost, _source = draft_or_last_pi_cost(obj)
+        margin = selling_margin_percent(obj.price, cost)
+        if margin is None:
+            return None
+        return _MARGIN_PERCENT.to_representation(margin)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if not self._include_margin_percent():
+            data.pop('margin_percent', None)
+        return data
+
+
+class SaleableQuantityReadMixin:
+    """Retailer/POS reads expose saleable qty; customer/public omit the field."""
+
+    saleable_quantity = serializers.SerializerMethodField()
+
+    def _include_saleable_quantity(self):
+        return bool(self.context.get('include_saleable_quantity'))
+
+    def get_saleable_quantity(self, obj):
+        if not self._include_saleable_quantity():
+            return None
+        return json_qty(obj.saleable_quantity())
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if not self._include_saleable_quantity():
+            data.pop('saleable_quantity', None)
+        return data
+
+
+class FractionalChildReadSerializer(serializers.ModelSerializer):
+    """Active pack child on a parent SKU retailer read (OE-191)."""
+
+    saleable_quantity = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Product
+        fields = ('id', 'name', 'conversion_factor', 'saleable_quantity')
+
+    def get_saleable_quantity(self, obj):
+        parent = self.context.get('pack_parent')
+        if parent is not None:
+            obj.parent_bulk_product = parent
+        return json_qty(obj.saleable_quantity())
+
+
+def active_fractional_children(obj):
+    """Same-shop active pack children; uses prefetch when present."""
+    cached = getattr(obj, '_prefetched_objects_cache', {}).get(
+        'fractional_children'
+    )
+    if cached is not None:
+        children = cached
+    else:
+        children = obj.fractional_children.filter(is_active=True)
+    return [
+        child
+        for child in children
+        if child.is_active and child.retailer_id == obj.retailer_id
+    ]
+
+
+def fractional_children_payload(obj, context=None):
+    """Same child rows list/detail return. Non-parent → []."""
+    if not obj.is_parent_bulk:
+        return []
+    return FractionalChildReadSerializer(
+        active_fractional_children(obj),
+        many=True,
+        context={**(context or {}), 'pack_parent': obj},
+    ).data
+
+
+class FractionalChildrenReadMixin:
+    """Retailer reads expose active pack children on parent SKUs; else [].
+
+    Subclasses must redeclare ``fractional_children`` as a
+    SerializerMethodField. A plain mixin attribute is not collected by DRF.
+    """
+
+    fractional_children = serializers.SerializerMethodField()
+
+    def _include_fractional_children(self):
+        return bool(self.context.get('include_fractional_children'))
+
+    def get_fractional_children(self, obj):
+        if not self._include_fractional_children():
+            return []
+        return fractional_children_payload(obj, self.context)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if not self._include_fractional_children():
+            data.pop('fractional_children', None)
+        return data
+
+
+def group_sibling_queryset(retailer_ids, product_groups):
+    """Active, available siblings for the given shops and group names."""
+    return Product.objects.filter(
+        retailer_id__in=retailer_ids,
+        product_group__in=product_groups,
+        is_active=True,
+        is_available=True,
+    ).select_related('master_product')
+
+
+def cache_group_siblings(products):
+    """One shop-scoped query of group siblings, keyed by (retailer_id, group)."""
+    groups = {product.product_group for product in products if product.product_group}
+    if not groups:
+        return {}
+    retailer_ids = {product.retailer_id for product in products}
+    by_key = {}
+    for sibling in group_sibling_queryset(retailer_ids, groups):
+        by_key.setdefault((sibling.retailer_id, sibling.product_group), []).append(sibling)
+    return by_key
+
+
+def serialize_group_variant(sibling, channel):
+    selling = resolve_channel_price(sibling, channel)
+    return {
+        'id': sibling.id,
+        'name': sibling.name,
+        'unit': sibling.unit,
+        'price': float(selling),
+        'original_price': float(sibling.original_price) if sibling.original_price else float(selling),
+        'image': sibling.image_display_url,
+        'minimum_order_quantity': float(sibling.minimum_order_quantity) if sibling.minimum_order_quantity else 1,
+        'maximum_order_quantity': float(sibling.maximum_order_quantity) if sibling.maximum_order_quantity else None,
+        'track_inventory': sibling.track_inventory,
+        'quantity': float(sibling.quantity) if sibling.quantity else 0,
+    }
+
+
+def sort_group_siblings(siblings):
+    return sorted(
+        siblings,
+        key=lambda sibling: (
+            0 if (sibling.is_parent_bulk or sibling.parent_bulk_product_id is not None) else 1,
+            sibling.id,
+        ),
+    )
+
+
+def group_variants_payload(obj, context):
+    """Same sibling rows detail already returns. Empty group → []."""
+    if not obj.product_group:
+        return []
+    context = context or {}
+    cache = context.get('group_siblings_by_key')
+    if cache is not None:
+        siblings = [
+            sibling
+            for sibling in cache.get((obj.retailer_id, obj.product_group), [])
+            if sibling.id != obj.id
+        ]
+    else:
+        siblings = list(
+            group_sibling_queryset([obj.retailer_id], [obj.product_group]).exclude(
+                id=obj.id
+            )
+        )
+    channel = channel_from_context(context)
+    return [
+        serialize_group_variant(sibling, channel)
+        for sibling in sort_group_siblings(siblings)
+    ]
+
+
+def safe_group_variants_payload(obj, context):
+    """Same as group_variants_payload; catalog reads stay [] on helper errors."""
+    try:
+        return group_variants_payload(obj, context)
+    except Exception as e:
+        logger.error(f"Error getting group variants: {e}")
+        return []
+
+
+class GroupVariantsListSerializer(serializers.ListSerializer):
+    """Prefetch group siblings once for a multi-product payload."""
+
+    def to_representation(self, data):
+        products = list(data)
+        if self.context.get('group_siblings_by_key') is None:
+            self.context['group_siblings_by_key'] = cache_group_siblings(products)
+        if (
+            self.context.get('include_margin_percent')
+            and self.context.get('last_pi_cost_by_product_id') is None
+        ):
+            self.context['last_pi_cost_by_product_id'] = (
+                last_pi_unit_costs_by_product_id(products)
+            )
+        return super().to_representation(products)
+
+
+class GroupVariantsReadMixin:
+    """Same-shop product_group siblings; empty group → [].
+
+    Subclasses must redeclare ``group_variants`` as a SerializerMethodField.
+    """
+
+    group_variants = serializers.SerializerMethodField()
+
+    def get_group_variants(self, obj):
+        return safe_group_variants_payload(obj, self.context)
 
 
 def parent_bulk_cycle_exists(child_pk, parent_product):
@@ -103,13 +355,19 @@ class ProductBatchSerializer(serializers.ModelSerializer):
     """
     Serializer for product batches
     """
+    is_expired = serializers.SerializerMethodField()
+
     class Meta:
         model = ProductBatch
         fields = [
             'id', 'batch_number', 'barcode', 'purchase_price',
             'price', 'original_price', 'quantity', 'is_active', 'show_on_app',
             'expiry_date',
+            'is_expired',
         ]
+
+    def get_is_expired(self, obj):
+        return obj.is_expired()
 
 
 class ExpiringBatchListSerializer(ProductBatchSerializer):
@@ -169,7 +427,7 @@ class ProductReviewSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'customer_name', 'is_verified_purchase', 'created_at']
 
 
-class ProductListSerializer(ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product list view
     """
@@ -185,19 +443,27 @@ class ProductListSerializer(ChannelPriceRepresentationMixin, serializers.ModelSe
     is_wishlisted = serializers.SerializerMethodField()
     batches = serializers.SerializerMethodField()
     quantity = serializers.SerializerMethodField()
+    saleable_quantity = serializers.SerializerMethodField()
+    fractional_children = serializers.SerializerMethodField()
+    group_variants = serializers.SerializerMethodField()
+    margin_percent = serializers.SerializerMethodField()
     minimum_order_quantity = serializers.SerializerMethodField()
     maximum_order_quantity = serializers.SerializerMethodField()
     class Meta:
         model = Product
+        list_serializer_class = GroupVariantsListSerializer
         fields = [
             'id', 'name', 'description', 'price', 'app_price', 'purchase_price', 'discounted_price',
-            'original_price', 'discount_percentage', 'quantity', 'track_inventory', 'unit',
+            'original_price', 'discount_percentage', 'quantity', 'saleable_quantity',
+            'margin_percent',
+            'track_inventory', 'unit',
             'minimum_order_quantity', 'maximum_order_quantity',
             'image', 'image_url', 'category_name', 'brand_name', 'retailer_name',
             'is_in_stock', 'is_featured', 'is_active', 'is_seasonal', 'is_available',
             'average_rating', 'review_count', 'created_at', 'product_group',
             'active_offer_text', 'is_wishlisted', 'barcode', 'has_batches', 'batches',
-            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor'
+            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor',
+            'fractional_children', 'group_variants',
         ]
 
     def get_quantity(self, obj):
@@ -343,17 +609,39 @@ class ProductListSerializer(ChannelPriceRepresentationMixin, serializers.ModelSe
             return False
 
 
-class ProductSearchSerializer(ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Lightweight serializer for product search results
     """
     image = serializers.SerializerMethodField()
-    
+    category_name = serializers.SerializerMethodField()
+    brand_name = serializers.SerializerMethodField()
     batches = serializers.SerializerMethodField()
-    
+    saleable_quantity = serializers.SerializerMethodField()
+    fractional_children = serializers.SerializerMethodField()
+    group_variants = serializers.SerializerMethodField()
+    margin_percent = serializers.SerializerMethodField()
+    discounted_price = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    is_in_stock = serializers.BooleanField(read_only=True)
+
     class Meta:
         model = Product
-        fields = ['id', 'name', 'price', 'app_price', 'unit', 'image', 'track_inventory', 'quantity', 'has_batches', 'batches']
+        list_serializer_class = GroupVariantsListSerializer
+        fields = [
+            'id', 'name', 'price', 'app_price', 'discounted_price', 'original_price', 'unit', 'image',
+            'category_name', 'brand_name',
+            'barcode',
+            'is_featured',
+            'is_active',
+            'is_seasonal',
+            'is_available',
+            'is_in_stock',
+            'product_group',
+            'track_inventory',
+            'quantity', 'saleable_quantity', 'margin_percent', 'has_batches', 'batches',
+            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor',
+            'fractional_children', 'group_variants',
+        ]
         
     def get_batches(self, obj):
         if obj.has_batches:
@@ -368,7 +656,21 @@ class ProductSearchSerializer(ChannelPriceRepresentationMixin, serializers.Model
             logger.error(f"Error getting search image: {e}")
             return None
 
-class ProductDetailSerializer(ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+    def get_category_name(self, obj):
+        try:
+            return obj.category.name if obj.category else None
+        except Exception as e:
+            logger.error(f"Error getting category name: {e}")
+            return None
+
+    def get_brand_name(self, obj):
+        try:
+            return obj.brand.name if obj.brand else None
+        except Exception as e:
+            logger.error(f"Error getting brand name: {e}")
+            return None
+
+class ProductDetailSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product detail view
     """
@@ -391,15 +693,20 @@ class ProductDetailSerializer(ChannelPriceRepresentationMixin, serializers.Model
     offers = serializers.SerializerMethodField()
     is_wishlisted = serializers.SerializerMethodField()
     quantity = serializers.SerializerMethodField()
+    saleable_quantity = serializers.SerializerMethodField()
+    fractional_children = serializers.SerializerMethodField()
     minimum_order_quantity = serializers.SerializerMethodField()
     maximum_order_quantity = serializers.SerializerMethodField()
     group_variants = serializers.SerializerMethodField()
+    margin_percent = serializers.SerializerMethodField()
     
     class Meta:
         model = Product
         fields = [
             'id', 'name', 'description', 'price', 'app_price', 'purchase_price', 'discounted_price',
-            'original_price', 'discount_percentage', 'savings', 'quantity', 'track_inventory',
+            'original_price', 'discount_percentage', 'savings', 'quantity', 'saleable_quantity',
+            'margin_percent',
+            'track_inventory',
             'unit', 'minimum_order_quantity', 'maximum_order_quantity', 'has_batches', 'batches',
             'image', 'image_url', 'images', 'additional_images', 'category', 
             'category_name', 'brand', 'brand_name',
@@ -407,7 +714,8 @@ class ProductDetailSerializer(ChannelPriceRepresentationMixin, serializers.Model
             'is_in_stock', 'is_featured', 'is_active', 'is_seasonal', 'is_available', 
             'average_rating', 'review_count', 'created_at', 'updated_at',
             'product_group', 'active_offer_text', 'offers', 'is_wishlisted', 'barcode',
-            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor', 'group_variants'
+            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor',
+            'fractional_children', 'group_variants'
         ]
 
     def get_quantity(self, obj):
@@ -618,49 +926,6 @@ class ProductDetailSerializer(ChannelPriceRepresentationMixin, serializers.Model
             return False
         except Exception:
             return False
-
-    def get_group_variants(self, obj):
-        """Get all other active products in the same group for this retailer, sorting parent/child first"""
-        try:
-            if obj.product_group:
-                siblings = Product.objects.filter(
-                    retailer=obj.retailer,
-                    product_group=obj.product_group,
-                    is_active=True,
-                    is_available=True
-                ).exclude(id=obj.id).only(
-                    'id', 'name', 'unit', 'price', 'app_price', 'original_price',
-                    'is_parent_bulk', 'parent_bulk_product'
-                )
-                
-                # Sort: items where is_parent_bulk is True or parent_bulk_product_id is not None come first
-                sorted_siblings = sorted(
-                    list(siblings),
-                    key=lambda s: (0 if (s.is_parent_bulk or s.parent_bulk_product_id is not None) else 1, s.id)
-                )
-                channel = channel_from_context(self.context)
-                
-                variants = []
-                for s in sorted_siblings:
-                    selling = resolve_channel_price(s, channel)
-                    variants.append({
-                        'id': s.id,
-                        'name': s.name,
-                        'unit': s.unit,
-                        'price': float(selling),
-                        'original_price': float(s.original_price) if s.original_price else float(selling),
-                        'image': s.image_display_url,
-                        'minimum_order_quantity': float(s.minimum_order_quantity) if s.minimum_order_quantity else 1,
-                        'maximum_order_quantity': float(s.maximum_order_quantity) if s.maximum_order_quantity else None,
-                        'track_inventory': s.track_inventory,
-                        'quantity': float(s.quantity) if s.quantity else 0
-                    })
-                return variants
-            return []
-        except Exception as e:
-            logger.error(f"Error getting group variants: {e}")
-            return []
-
 
 class MasterProductSerializer(serializers.ModelSerializer):
     """
@@ -1111,14 +1376,25 @@ class PurchaseItemSerializer(serializers.ModelSerializer):
     Serializer for Purchase Items
     """
     product_name = serializers.CharField(source='product.name', read_only=True)
+    # OE-310: echo Product.unit already on list/detail. Null/empty stays null/empty.
+    unit = serializers.CharField(
+        source='product.unit',
+        read_only=True,
+        allow_null=True,
+        allow_blank=True,
+    )
     # Fields to allow updating product prices during purchase
     new_price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, write_only=True)
     new_original_price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, write_only=True)
 
     class Meta:
         model = PurchaseItem
-        fields = ['id', 'product', 'product_name', 'quantity', 'purchase_price', 'total', 'mrp_updated', 'new_price', 'new_original_price', 'returned_quantity', 'net_quantity']
-        read_only_fields = ['id']
+        fields = [
+            'id', 'product', 'product_name', 'unit', 'quantity', 'purchase_price',
+            'total', 'mrp_updated', 'new_price', 'new_original_price',
+            'returned_quantity', 'net_quantity',
+        ]
+        read_only_fields = ['id', 'unit']
 
     returned_quantity = serializers.SerializerMethodField()
     net_quantity = serializers.SerializerMethodField()
@@ -1440,4 +1716,18 @@ class SkuLastSupplierCostsSerializer(serializers.Serializer):
 
     product_id = serializers.IntegerField()
     suppliers = SkuSupplierLastCostSerializer(many=True)
+
+
+class SkuMarginPreviewSerializer(serializers.Serializer):
+    """Purchase-role margin% preview. Missing cost → null, not 0."""
+
+    product_id = serializers.IntegerField()
+    selling_price = serializers.DecimalField(max_digits=10, decimal_places=2)
+    cost = serializers.DecimalField(
+        max_digits=10, decimal_places=2, allow_null=True
+    )
+    cost_source = serializers.CharField(allow_null=True, allow_blank=True)
+    margin_percent = serializers.DecimalField(
+        max_digits=10, decimal_places=2, allow_null=True
+    )
 

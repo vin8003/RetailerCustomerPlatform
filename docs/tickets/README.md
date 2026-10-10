@@ -44,8 +44,32 @@ They are **not** automatically durable knowledge. Many pages are builder briefs,
 | [OE-190.md](OE-190.md) | durable | [pos-saleable-products](../requirements/pos-saleable-products.md) |
 | [OE-127.md](OE-127.md) | durable | [inventory-adjust-permission](../requirements/inventory-adjust-permission.md) |
 | [OE-103.md](OE-103.md) | durable | [parent-child-pack-skus](../requirements/parent-child-pack-skus.md) |
+| [OE-191.md](OE-191.md) | durable | [pack-children-reads](../requirements/pack-children-reads.md) |
+| [OE-283.md](OE-283.md) | durable | [pack-children-reads](../requirements/pack-children-reads.md) |
+| [OE-285.md](OE-285.md) | durable | [pack-children-reads](../requirements/pack-children-reads.md) |
+| [OE-286.md](OE-286.md) | durable | [pos-nopage-unit](../requirements/pos-nopage-unit.md) |
+| [OE-310.md](OE-310.md) | durable | [purchase-invoice-item-unit](../requirements/purchase-invoice-item-unit.md) |
+| [OE-287.md](OE-287.md) | durable | [search-pos-brand-name](../requirements/search-pos-brand-name.md) |
+| [OE-290.md](OE-290.md) | durable | [search-barcode](../requirements/search-barcode.md) |
+| [OE-291.md](OE-291.md) | durable | [search-category-name](../requirements/search-category-name.md) |
+| [OE-293.md](OE-293.md) | durable | [search-original-price](../requirements/search-original-price.md) |
+| [OE-294.md](OE-294.md) | durable | [search-is-seasonal](../requirements/search-is-seasonal.md) |
+| [OE-295.md](OE-295.md) | durable | [search-product-group](../requirements/search-product-group.md) |
+| [OE-298.md](OE-298.md) | durable | [search-discounted-price](../requirements/search-discounted-price.md) |
+| [OE-299.md](OE-299.md) | durable | [search-is-featured](../requirements/search-is-featured.md) |
+| [OE-300.md](OE-300.md) | durable | [search-is-active](../requirements/search-is-active.md) |
+| [OE-301.md](OE-301.md) | durable | [order-list-fee-discount](../requirements/order-list-fee-discount.md) |
+| [OE-302.md](OE-302.md) | durable | [pos-nopage-availability-flags](../requirements/pos-nopage-availability-flags.md) |
+| [OE-303.md](OE-303.md) | durable | [search-is-available](../requirements/search-is-available.md) |
+| [OE-313.md](OE-313.md) | durable | [sales-return-item-unit](../requirements/sales-return-item-unit.md) |
+| [OE-314.md](OE-314.md) | durable | [cart-brand-name](../requirements/cart-brand-name.md) |
+| [OE-312.md](OE-312.md) | durable | [search-is-in-stock](../requirements/search-is-in-stock.md) |
+| [OE-192.md](OE-192.md) | durable | [group-variants-reads](../requirements/group-variants-reads.md) |
 | [OE-136.md](OE-136.md) | durable | [product-batch-expiry](../requirements/product-batch-expiry.md) |
+| [OE-144.md](OE-144.md) | durable | [product-batch-expiry](../requirements/product-batch-expiry.md) |
+| [OE-149.md](OE-149.md) | durable | [product-batch-expiry](../requirements/product-batch-expiry.md) |
 | [OE-141.md](OE-141.md) | durable | [damage-expiry-write-off](../requirements/damage-expiry-write-off.md) |
+| [OE-315.md](OE-315.md) | durable | [inventory-ledger-product-identity](../requirements/inventory-ledger-product-identity.md) |
 | [OE-106.md](OE-106.md) | durable | [app-vs-pos-prices](../requirements/app-vs-pos-prices.md) |
 | [OE-124.md](OE-124.md) | durable | [product-photo-bulk-import](../requirements/product-photo-bulk-import.md) |
 | [OE-143.md](OE-143.md) | durable | [khata-credit-lock](../requirements/khata-credit-lock.md) |
@@ -55,7 +79,11 @@ They are **not** automatically durable knowledge. Many pages are builder briefs,
 | [OE-146.md](OE-146.md) | durable | [block-negative-stock](../requirements/block-negative-stock.md) |
 | [OE-170.md](OE-170.md) | durable | [additional-barcodes-lookup](../requirements/additional-barcodes-lookup.md) |
 | [OE-112.md](OE-112.md) | durable | [compare-supplier-cost](../requirements/compare-supplier-cost.md) |
+| [OE-118.md](OE-118.md) | durable | [purchase-margin-preview](../requirements/purchase-margin-preview.md) |
+| [OE-169.md](OE-169.md) | durable | [purchase-margin-preview](../requirements/purchase-margin-preview.md) |
+| [OE-284.md](OE-284.md) | durable | [purchase-margin-preview](../requirements/purchase-margin-preview.md) |
 | [OE-210.md](OE-210.md) | durable | [expiry-batch-list](../requirements/expiry-batch-list.md) |
+| [OE-132.md](OE-132.md) | durable | [saleable-quantity-reads](../requirements/saleable-quantity-reads.md) |
 
 Skipped (no Confluence page at migration time): KAN-48, KAN-49, KAN-52, KAN-57, KAN-63.
 

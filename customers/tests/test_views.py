@@ -82,6 +82,28 @@ class TestCustomerWishlistViews:
         assert response.status_code == status.HTTP_200_OK
         assert not CustomerWishlist.objects.filter(customer=customer, product=product).exists()
 
+    def test_wishlist_list_includes_brand_name(self, api_client, customer, product):
+        from products.models import ProductBrand
+
+        brand = ProductBrand.objects.create(name="Amul")
+        product.brand = brand
+        product.save(update_fields=["brand"])
+        CustomerWishlist.objects.create(customer=customer, product=product)
+        api_client.force_authenticate(user=customer)
+        response = api_client.get(reverse('get_customer_wishlist'))
+        assert response.status_code == status.HTTP_200_OK
+        rows = response.data["results"] if isinstance(response.data, dict) and "results" in response.data else response.data
+        assert rows[0]["brand_name"] == "Amul"
+
+    def test_wishlist_brand_name_is_null_without_brand(self, api_client, customer, product):
+        product.brand = None
+        product.save(update_fields=["brand"])
+        CustomerWishlist.objects.create(customer=customer, product=product)
+        api_client.force_authenticate(user=customer)
+        response = api_client.get(reverse('get_customer_wishlist'))
+        rows = response.data["results"] if isinstance(response.data, dict) and "results" in response.data else response.data
+        assert rows[0]["brand_name"] is None
+
 
 @pytest.mark.django_db
 class TestCustomerDashboardView:

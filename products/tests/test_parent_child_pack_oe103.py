@@ -435,10 +435,7 @@ class TestPackLinkRbacAndTenancy:
         api_client.force_authenticate(user=owner_b)
         response = api_client.get(reverse("get_product_detail", args=[child.id]))
 
-        # Retailer-scoped get; missing row is 404, or 500 from the view's
-        # broad except around get_object_or_404. Either way the body is not
-        # tenant A's product.
-        assert response.status_code != status.HTTP_200_OK
+        assert response.status_code == status.HTTP_404_NOT_FOUND
         assert response.data.get("id") != child.id
         assert "conversion_factor" not in response.data
 
