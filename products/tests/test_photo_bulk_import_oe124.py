@@ -658,3 +658,21 @@ class TestPhotoImportLimits:
         Image.new("RGB", (20, 20), "white").save(out, "PNG")
         upload = SimpleUploadedFile("ok.png", out.getvalue(), content_type="image/png")
         assert pi.validate_image_payload(upload, "ok.png") is None
+
+
+@pytest.mark.django_db
+class TestIdentityKeyEdgeCases:
+    def test_very_long_numeric_key_does_not_crash_lookup(self):
+        from products.photo_import import _product_identity_q
+
+        owner, shop = _make_retailer("oe124_long", "Long Key Shop")
+        _make_product(shop, "Long", barcode="12345678901234567890")
+        q = _product_identity_q(["12345678901234567890", "42"])
+        # Evaluating must not raise "bigint out of range".
+        from django.db.models import TextField
+        from django.db.models.functions import Cast
+
+        annotated = Product.objects.annotate(
+            additional_barcodes_text=Cast('additional_barcodes', TextField())
+        )
+        assert annotated.filter(q).exists()
