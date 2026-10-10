@@ -465,3 +465,62 @@ class TestCreditSettingsAuthAndTenancy:
             organization=profile.organization, slug=ROLE_SLUG_CASHIER
         )
         assert PERM_CREDIT_OVERRIDE not in (cashier.permissions or [])
+
+
+@pytest.mark.django_db
+class TestCreditPermissions:
+    """Review fix: dedicated credit.override / credit.manage permissions."""
+
+    def _blocked_setup(self, name):
+        owner, profile = _make_retailer(f"{name}_owner", f"{name} Shop")
+        customer = _make_customer(f"{name}_cust", phone=f"9{abs(hash(name)) % 10**9:09d}")
+        product = _product(profile, price=Decimal("50.00"))
+        mapping = RetailerCustomerMapping.objects.create(
+            retailer=profile, customer=customer,
+            credit_limit=Decimal("10.00"), current_balance=Decimal("10.00"),
+        )
+        return owner, profile, customer, product, mapping
+
+    def test_orders_update_alone_cannot_override(self, api_client):
+        _o, profile, customer, product, mapping = self._blocked_setup("cp1")
+        staff = _make_staff(profile.organization, "cp1_staff", ["orders.create", "orders.read", "orders.update"])
+        api_client.force_authenticate(user=staff)
+        resp = api_client.post(
+            reverse("create_pos_order"),
+            {**_pos_credit_payload(product, customer.phone_number, Decimal("50.00"), override=True),
+             "location_id": profile.id},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_403_FORBIDDEN
+        mapping.refresh_from_db()
+        assert mapping.current_balance == Decimal("10.00")
+
+    def test_credit_override_permission_allows_override(self, api_client):
+        _o, profile, customer, product, mapping = self._blocked_setup("cp2")
+        staff = _make_staff(profile.organization, "cp2_staff", ["orders.create", "orders.read", "credit.override"])
+        api_client.force_authenticate(user=staff)
+        resp = api_client.post(
+            reverse("create_pos_order"),
+            {**_pos_credit_payload(product, customer.phone_number, Decimal("50.00"), override=True),
+             "location_id": profile.id},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_201_CREATED
+
+    def test_changing_limit_needs_credit_manage(self, api_client):
+        _o, profile, customer, _product_obj, mapping = self._blocked_setup("cp3")
+        nope = _make_staff(profile.organization, "cp3_nope", ["orders.read"])
+        yes = _make_staff(profile.organization, "cp3_yes", ["credit.manage"])
+        url = reverse("update_customer_credit_limit", args=[customer.id])
+        api_client.force_authenticate(user=nope)
+        assert api_client.patch(url, {"credit_limit": "99999"}, format="json").status_code == status.HTTP_403_FORBIDDEN
+        mapping.refresh_from_db()
+        assert mapping.credit_limit == Decimal("10.00")
+
+    def test_non_finite_limit_rejected(self, api_client):
+        owner, _profile, customer, _p, _m = self._blocked_setup("cp4")
+        api_client.force_authenticate(user=owner)
+        url = reverse("update_customer_credit_limit", args=[customer.id])
+        for bad in ("NaN", "Infinity", "-1"):
+            resp = api_client.patch(url, {"credit_limit": bad}, format="json")
+            assert resp.status_code == status.HTTP_400_BAD_REQUEST, bad

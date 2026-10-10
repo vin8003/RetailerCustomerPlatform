@@ -287,7 +287,8 @@ class TestPhoneLookupAuthAndTenancy:
         url = reverse(LOOKUP_URL)
         # Warm org / module-flag rows so the budget is the hot path.
         api_client.get(url, {"phone": "9000002108"})
-        with django_assert_num_queries(5):
+        # +2: served-location resolution and the lookup audit row.
+        with django_assert_num_queries(7):
             resp = api_client.get(url, {"phone": "9000002108"})
         assert resp.status_code == status.HTTP_200_OK
         assert len(resp.data["recent_orders"]) == 2
@@ -333,15 +334,11 @@ class TestHistoryExportGate:
         )
         order = _order(customer, profile, product, source="pos")
         staff = _make_staff(profile.organization, "oe212_exp_cashier", [])
-        cashier_role = OrgRole.objects.get(
-            organization=profile.organization, slug=ROLE_SLUG_CASHIER
-        )
-        assert PERM_HISTORY_EXPORT not in (cashier_role.permissions or [])
-
         api_client.force_authenticate(user=staff)
+        # Review fix: order history and balances need orders.read even without export.
         lookup = api_client.get(reverse(LOOKUP_URL), {"phone": "9000002111"})
-        assert lookup.status_code == status.HTTP_200_OK
-        assert lookup.data["customer_id"] == customer.id
+        assert lookup.status_code == status.HTTP_403_FORBIDDEN
+        assert "recent_orders" not in lookup.data
 
         resp = api_client.get(
             reverse(LOOKUP_URL), {"phone": "9000002111", "export": "1"}
@@ -398,7 +395,52 @@ class TestHistoryExportGate:
         api_client.force_authenticate(user=owner)
         url = reverse(LOOKUP_URL)
         api_client.get(url, {"phone": "9000002114", "export": "1"})
-        with django_assert_num_queries(6):
+        with django_assert_num_queries(8):  # +2: served locations and audit row
             resp = api_client.get(url, {"phone": "9000002114", "export": "1"})
         assert resp.status_code == status.HTTP_200_OK
         assert resp.data["count"] == 2
+
+
+@pytest.mark.django_db
+class TestLookupReviewFixes:
+    def test_staff_sees_only_served_locations(self, api_client):
+        from retailers.models import RetailerProfile
+
+        owner, profile = _make_retailer("oe212_srv_owner", "OE212 Served A")
+        second_user = User.objects.create_user(
+            username="oe212_srv_b", email="b@t.com", password="TestPass123!",
+            user_type="retailer", is_active=True,
+        )
+        second = RetailerProfile.objects.create(
+            user=second_user, organization=profile.organization, shop_name="OE212 Served B",
+            address_line1="2 Side", city="City", state="State", pincode="110002", is_active=True,
+        )
+        customer = _make_customer("oe212_srv_cust", phone="9000002199")
+        product = _product(profile)
+        RetailerCustomerMapping.objects.create(retailer=profile, customer=customer)
+        _order(customer, profile, product, source="pos")
+        staff = _make_staff(profile.organization, "oe212_srv_staff", ["orders.read"])
+
+        OrgStaffMembership.objects.filter(user=staff).update(served_location_ids=[second.id])
+        api_client.force_authenticate(user=staff)
+        denied = api_client.get(reverse(LOOKUP_URL), {"phone": "9000002199"})
+        assert denied.status_code == status.HTTP_404_NOT_FOUND
+
+        OrgStaffMembership.objects.filter(user=staff).update(served_location_ids=[profile.id])
+        allowed = api_client.get(reverse(LOOKUP_URL), {"phone": "9000002199"})
+        assert allowed.status_code == status.HTTP_200_OK
+
+    def test_lookup_is_audited_without_full_number(self, api_client):
+        from retailers.models import OrgAuditLog
+
+        owner, profile = _make_retailer("oe212_aud_owner", "OE212 Audit")
+        customer = _make_customer("oe212_aud_cust", phone="9000002188")
+        RetailerCustomerMapping.objects.create(retailer=profile, customer=customer)
+        api_client.force_authenticate(user=owner)
+        api_client.get(reverse(LOOKUP_URL), {"phone": "9000002188"})
+        row = OrgAuditLog.objects.get(
+            organization=profile.organization,
+            object_type=OrgAuditLog.OBJECT_CUSTOMER_LOOKUP,
+        )
+        assert row.summary_after["phone_last4"] == "2188"
+        assert "9000002188" not in str(row.summary_after)
