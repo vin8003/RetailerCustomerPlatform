@@ -1329,6 +1329,17 @@ def update_customer_credit_limit(request, customer_id):
         if request.user.user_type != 'retailer':
             return Response({'error': 'Only retailers can manage credit limits'}, status=status.HTTP_403_FORBIDDEN)
             
+        from retailers.organization import get_organization_for_user, user_has_org_permission
+
+        credit_org = get_organization_for_user(request.user)
+        if credit_org is None or not user_has_org_permission(
+            request.user, credit_org, 'credit.manage'
+        ):
+            return Response(
+                {'error': 'Credit limit permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         has_limit = 'credit_limit' in request.data
         has_due_days = 'credit_due_days' in request.data
         if not has_limit and not has_due_days:
@@ -1344,6 +1355,8 @@ def update_customer_credit_limit(request, customer_id):
             credit_limit = request.data.get('credit_limit')
             try:
                 credit_limit = Decimal(str(credit_limit))
+                if not credit_limit.is_finite():
+                    return Response({'error': 'Invalid credit limit'}, status=status.HTTP_400_BAD_REQUEST)
                 if credit_limit < 0:
                     return Response({'error': 'Credit limit cannot be negative'}, status=status.HTTP_400_BAD_REQUEST)
             except Exception:
