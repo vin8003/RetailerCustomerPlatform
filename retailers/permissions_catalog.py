@@ -27,6 +27,7 @@ PERMISSION_DEFINITIONS = {
     'catalog.image': 'Bulk-import and replace Product photos (zip or csv+files) for this shop. Unauthenticated callers cannot upload.',
     'purchasing.terms': 'Set or change supplier payment terms. Echoing the current terms does not require this permission. Creating a supplier without terms is allowed.',
     'purchasing.suppliers': 'Create, edit, deactivate and delete suppliers for this organization',
+    'purchasing.costs.read': 'View supplier purchase costs and margin figures',
     'credit.manage': 'Change a customer credit limit or credit due days',
     'credit.override': 'Complete a POS credit sale that is blocked by the credit limit or overdue lock',
 }

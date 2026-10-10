@@ -17,7 +17,7 @@ from products.models import Product, ProductCategory, PurchaseInvoice, PurchaseI
 from products.supplier_last_costs import last_supplier_cost_rows_for_product
 from retailers.models import OrgRole, OrgStaffMembership, RetailerProfile, Supplier
 from retailers.organization import ensure_organization_for_profile
-from retailers.suppliers import PERM_PURCHASING_TERMS
+PERM_PURCHASING_TERMS = 'purchasing.costs.read'  # purchase-role permission
 
 
 def _make_retailer(username, shop_name):
