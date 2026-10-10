@@ -863,7 +863,7 @@ class TestPickupQueryCounts:
         order = _packed_pickup_order(customer, profile, product, pickup_code="424242")
 
         api_client.force_authenticate(user=owner)
-        with django_assert_num_queries(35):
+        with django_assert_num_queries(37):  # +2: atomic status update savepoint
             resp = api_client.post(
                 reverse("retailer_inbox_action", args=[order.id]),
                 {

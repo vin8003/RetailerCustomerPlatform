@@ -41,6 +41,8 @@ INBOX_ACTION_TO_STATUS = {
     'mark_packed': 'packed',
     'dispatch': 'out_for_delivery',
     'mark_delivered': 'delivered',
+    # Shop close-out (OE-281): OFD failed → cancelled. No new Order status.
+    'mark_failed': 'cancelled',
 }
 
 INBOX_ACTION_CHOICES = tuple((key, key) for key in INBOX_ACTION_TO_STATUS)
@@ -51,14 +53,39 @@ def target_status_for_inbox_action(action: str) -> str | None:
     return INBOX_ACTION_TO_STATUS.get(action)
 
 
-def allowed_inbox_actions_for_status(current_status: str) -> list[str]:
+def allowed_inbox_actions_for_status(
+    current_status: str, *, delivery_mode: str | None = None
+) -> list[str]:
     """Return inbox action names permitted from the given order status."""
     allowed_targets = set(ALLOWED_STATUS_TRANSITIONS.get(current_status, []))
-    return sorted(
-        action
-        for action, target in INBOX_ACTION_TO_STATUS.items()
-        if target in allowed_targets
-    )
+    actions = []
+    for action, target in INBOX_ACTION_TO_STATUS.items():
+        if target not in allowed_targets:
+            continue
+        if delivery_mode == 'pickup' and action == 'dispatch':
+            continue
+        if action == 'mark_failed' and (
+            current_status != 'out_for_delivery' or delivery_mode == 'pickup'
+        ):
+            continue
+        actions.append(action)
+    return sorted(actions)
+
+
+def require_failed_closeout_reason(reason) -> str:
+    """Require a non-empty close-out reason for OFD mark_failed / OFD→cancelled."""
+    text = '' if reason is None else str(reason).strip()
+    if not text:
+        raise ValueError('reason is required when marking delivery as failed')
+    return text
+
+
+def resolve_failed_closeout_reason(attrs) -> str:
+    """Prefer `reason`, then `notes`, then reject empty/whitespace."""
+    raw = attrs.get('reason')
+    if raw is None or not str(raw).strip():
+        raw = attrs.get('notes')
+    return require_failed_closeout_reason(raw)
 
 
 def validate_inbox_action(current_status: str, action: str, *, delivery_mode: str | None = None) -> str:
@@ -75,6 +102,15 @@ def validate_inbox_action(current_status: str, action: str, *, delivery_mode: st
             "Dispatch is not applicable for shop pickup orders; "
             "use mark_delivered when the customer collects the order"
         )
+    if action == 'mark_failed':
+        if current_status != 'out_for_delivery':
+            raise ValueError(
+                "mark_failed is only allowed from out_for_delivery"
+            )
+        if delivery_mode == 'pickup':
+            raise ValueError(
+                "mark_failed is not applicable for shop pickup orders"
+            )
     try:
         ensure_transition_allowed(current_status, target)
     except Exception as exc:

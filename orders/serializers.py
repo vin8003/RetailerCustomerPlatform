@@ -937,10 +937,18 @@ class OrderStatusUpdateSerializer(serializers.Serializer):
     delivery_person_name = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     delivery_person_phone = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     estimated_delivery_time = serializers.DateTimeField(required=False, allow_null=True)
+    reason = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     
     def validate(self, attrs):
         order = self.context['order']
         new_status = attrs.get('status', order.status)
+        if new_status == 'cancelled' and order.status == 'out_for_delivery':
+            from .inbox import resolve_failed_closeout_reason
+
+            try:
+                attrs['notes'] = resolve_failed_closeout_reason(attrs)
+            except ValueError as exc:
+                raise serializers.ValidationError({'reason': [str(exc)]}) from exc
         if (
             new_status == 'delivered'
             and order.delivery_mode == 'pickup'
@@ -982,6 +990,7 @@ class OrderStatusUpdateSerializer(serializers.Serializer):
         
         return value
     
+    @transaction.atomic
     def update(self, instance, validated_data):
         """Update order status"""
         new_status = validated_data['status']
@@ -1012,6 +1021,7 @@ class OrderStatusUpdateSerializer(serializers.Serializer):
         except InvalidStatusTransitionError as exc:
             raise serializers.ValidationError({'status': [str(exc)]})
 
+        old_status = instance.status
         # Update order status
         instance.update_status(new_status, user)
 
@@ -1028,7 +1038,19 @@ class OrderStatusUpdateSerializer(serializers.Serializer):
         if new_status == 'cancelled':
             from .inventory import restore_order_inventory
 
-            restore_order_inventory(instance, user)
+            restore_order_inventory(
+                instance,
+                user,
+                reason=notes.strip() or None,
+            )
+            if old_status == 'out_for_delivery':
+                if notes.strip():
+                    instance.cancellation_reason = notes.strip()
+                    instance.cancelled_by = 'retailer'
+                    instance.save(update_fields=['cancellation_reason', 'cancelled_by'])
+                from .delivery import mark_order_delivery_failed
+
+                mark_order_delivery_failed(instance)
 
         # Update status log with notes
         if notes:
@@ -1378,6 +1400,7 @@ class OrderInboxActionSerializer(serializers.Serializer):
     delivery_person_name = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     delivery_person_phone = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     estimated_delivery_time = serializers.DateTimeField(required=False, allow_null=True)
+    reason = serializers.CharField(required=False, allow_blank=True, allow_null=True)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1412,6 +1435,14 @@ class OrderInboxActionSerializer(serializers.Serializer):
                 )
             except ValueError as exc:
                 raise serializers.ValidationError({'non_field_errors': [str(exc)]}) from exc
+
+        if action == 'mark_failed':
+            from .inbox import resolve_failed_closeout_reason
+
+            try:
+                attrs['notes'] = resolve_failed_closeout_reason(attrs)
+            except ValueError as exc:
+                raise serializers.ValidationError({'reason': [str(exc)]}) from exc
 
         if (
             action == 'mark_delivered'

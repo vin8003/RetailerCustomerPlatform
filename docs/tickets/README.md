@@ -40,6 +40,7 @@ They are **not** automatically durable knowledge. Many pages are builder briefs,
 | [OE-97.md](OE-97.md) | durable | [retailer-organization](../requirements/retailer-organization.md) |
 | [OE-98.md](OE-98.md) | durable | [shop-staff-roles](../requirements/shop-staff-roles.md) |
 | [OE-182.md](OE-182.md) | durable | [api-versioning](../requirements/api-versioning.md) |
+| [OE-281.md](OE-281.md) | durable | [order-lifecycle](../07-KEY-FLOWS/order-lifecycle.md) |
 
 Skipped (no Confluence page at migration time): KAN-48, KAN-49, KAN-52, KAN-57, KAN-63.
 
