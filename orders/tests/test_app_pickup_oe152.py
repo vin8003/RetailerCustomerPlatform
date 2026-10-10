@@ -427,8 +427,8 @@ class TestPickupPermissions:
             source="app",
         )
 
-        cashier_role = OrgRole.objects.get(organization=org, slug=ROLE_SLUG_CASHIER)
-        staff = _make_staff(org, "oe152_cashier", cashier_role.permissions)
+        # System cashier has orders.read by default now; use a role with no permissions.
+        staff = _make_staff(org, "oe152_cashier", [])
         api_client.force_authenticate(user=staff)
         resp = api_client.get(reverse("list_retailer_inbox"))
         assert resp.status_code == status.HTTP_403_FORBIDDEN
@@ -888,7 +888,7 @@ class TestPickupQueryCounts:
         order.pickup_ready_at = timezone.now() - timezone.timedelta(hours=25)
         order.save(update_fields=["pickup_ready_at"])
 
-        with django_assert_num_queries(15):
+        with django_assert_num_queries(19):  # +4: per-order lock/savepoint
             expired = expire_uncollected_pickup_orders(now=timezone.now(), actor=owner)
         assert len(expired) == 1
         assert expired[0]["order_id"] == order.id
@@ -915,9 +915,75 @@ class TestPickupQueryCounts:
 
         # With prefetch: one batched items query per chunk. Without it, +1 items
         # SELECT per expired order (restore_order_inventory fallback).
-        with django_assert_num_queries(63):
+        with django_assert_num_queries(83):  # +4 per order: lock, re-check, savepoint
             expired = expire_uncollected_pickup_orders(
                 now=timezone.now(), actor=owner, retailer_id=profile.id
             )
         assert len(expired) == 5
         assert {row["order_id"] for row in expired} == set(order_ids)
+
+
+@pytest.mark.django_db
+class TestPickupReviewFixes:
+    def test_shop_cannot_read_pickup_code_customer_can(self, api_client):
+        owner, profile = _make_retailer("oe152_rf_vis", "RF Visibility")
+        customer = _make_customer("oe152_rf_vis_cust")
+        product = _product(profile)
+        order = _packed_pickup_order(customer, profile, product, pickup_code="246810")
+
+        api_client.force_authenticate(user=owner)
+        shop = api_client.get(reverse("get_order_detail", args=[order.id]))
+        assert shop.status_code == status.HTTP_200_OK
+        assert "pickup_code" not in shop.data
+
+        api_client.force_authenticate(user=customer)
+        mine = api_client.get(reverse("get_order_detail", args=[order.id]))
+        assert mine.data["pickup_code"] == "246810"
+
+    def test_wrong_codes_lock_collection_after_five_attempts(self, api_client, settings):
+        from django.core.cache import cache
+
+        # The test settings use DummyCache; the lockout needs a real cache backend.
+        settings.CACHES = {
+            "default": {
+                "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+                "LOCATION": "pickup-lockout-test",
+            }
+        }
+        cache.clear()
+        owner, profile = _make_retailer("oe152_rf_lock", "RF Lock")
+        customer = _make_customer("oe152_rf_lock_cust")
+        product = _product(profile)
+        order = _packed_pickup_order(customer, profile, product, pickup_code="135791")
+        api_client.force_authenticate(user=owner)
+        url = reverse("retailer_inbox_action", args=[order.id])
+        for _ in range(5):
+            bad = api_client.post(
+                url, {"action": "mark_delivered", "pickup_code": "000000"}, format="json"
+            )
+            assert bad.status_code == status.HTTP_400_BAD_REQUEST
+        locked = api_client.post(
+            url, {"action": "mark_delivered", "pickup_code": "135791"}, format="json"
+        )
+        assert locked.status_code == status.HTTP_400_BAD_REQUEST
+        order.refresh_from_db()
+        assert order.status == "packed"
+        cache.clear()
+
+    def test_expire_skips_orders_no_longer_packed(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        from orders.models import Order
+        from orders.pickup import expire_uncollected_pickup_orders
+
+        owner, profile = _make_retailer("oe152_rf_exp", "RF Expire")
+        customer = _make_customer("oe152_rf_exp_cust")
+        product = _product(profile)
+        order = _packed_pickup_order(customer, profile, product)
+        Order.objects.filter(pk=order.pk).update(
+            pickup_ready_at=timezone.now() - timedelta(hours=100)
+        )
+        first = expire_uncollected_pickup_orders()
+        second = expire_uncollected_pickup_orders()
+        assert [r["order_id"] for r in first] == [order.id]
+        assert second == []

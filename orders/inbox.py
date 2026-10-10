@@ -108,6 +108,11 @@ def apply_inbox_filters(queryset, query_params):
         if status_filter:
             if status_filter == 'shipped':
                 status_filter = 'out_for_delivery'
+            if status_filter not in ALLOWED_STATUS_TRANSITIONS:
+                allowed = ', '.join(sorted(ALLOWED_STATUS_TRANSITIONS))
+                raise ValueError(
+                    f"Unknown status filter '{status_filter}'; allowed values: {allowed}"
+                )
             queryset = queryset.filter(status=status_filter)
         else:
             queryset = queryset.filter(status__in=DEFAULT_INBOX_STATUSES)
@@ -130,8 +135,7 @@ def apply_inbox_filters(queryset, query_params):
         try:
             queryset = queryset.filter(retailer_id=int(location_id))
         except (TypeError, ValueError):
-            # Ignore non-numeric location_id rather than 400 — staff may paste bad IDs.
-            pass
+            raise ValueError("location_id must be an integer")
 
     search = query_params.get('search')
     if search:
@@ -141,18 +145,16 @@ def apply_inbox_filters(queryset, query_params):
     if start_date:
         try:
             start = timezone.datetime.strptime(start_date, '%Y-%m-%d').date()
-            queryset = queryset.filter(created_at__date__gte=start)
         except ValueError:
-            # Ignore unparseable start_date — treat as no date bound.
-            pass
+            raise ValueError("start_date must be YYYY-MM-DD")
+        queryset = queryset.filter(created_at__date__gte=start)
 
     end_date = query_params.get('end_date')
     if end_date:
         try:
             end = timezone.datetime.strptime(end_date, '%Y-%m-%d').date()
-            queryset = queryset.filter(created_at__date__lte=end)
         except ValueError:
-            # Ignore unparseable end_date — treat as no date bound.
-            pass
+            raise ValueError("end_date must be YYYY-MM-DD")
+        queryset = queryset.filter(created_at__date__lte=end)
 
     return queryset

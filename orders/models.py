@@ -298,11 +298,18 @@ class Order(models.Model):
             from common.notification_dispatcher import dispatch_order_status_notification
             from common.notifications import send_push_notification
 
-            dispatch_order_status_notification(
-                order=self,
-                new_status=new_status,
-                old_status=old_status,
-            )
+            try:
+                dispatch_order_status_notification(
+                    order=self,
+                    new_status=new_status,
+                    old_status=old_status,
+                )
+            except Exception:
+                # A notification problem must never roll back or block the status change.
+                import logging
+                logging.getLogger(__name__).exception(
+                    'Order status notification failed for order %s', self.pk
+                )
             
             # If customer updated the status (accepted/rejected), 
             # send a visible push to the retailer
