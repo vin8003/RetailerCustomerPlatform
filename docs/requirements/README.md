@@ -27,5 +27,6 @@ Ticket snapshots (acceptance context, ship notes) stay in [`../tickets/`](../tic
 | [khata-credit-lock.md](khata-credit-lock.md) | OE-143 |
 | [customer-profile-order-history.md](customer-profile-order-history.md) | OE-212 |
 | [shop-rewards-otp-redeem.md](shop-rewards-otp-redeem.md) | OE-220 |
+| [suppliers.md](suppliers.md) | OE-100 |
 | [retailer-web-mobile.md](retailer-web-mobile.md) | KAN-11 |
 | [customer-retailer-city-map.md](customer-retailer-city-map.md) | KAN-69 |

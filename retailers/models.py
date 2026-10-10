@@ -324,6 +324,7 @@ class OrgAuditLog(models.Model):
     OBJECT_CREDIT_OVERRIDE = 'credit_override'
     OBJECT_CHANNEL_PRICE = 'channel_price'
     OBJECT_PRODUCT_IMAGE = 'product_image'
+    OBJECT_SUPPLIER = 'supplier'
     OBJECT_CUSTOMER_LOOKUP = 'customer_lookup'
     OBJECT_STOCK_WRITE_OFF = 'stock_write_off'
 
@@ -862,7 +863,16 @@ class Supplier(models.Model):
     company_name = models.CharField(max_length=255)
     contact_person = models.CharField(max_length=255, blank=True)
     phone_number = models.CharField(max_length=20, blank=True)
-    gst_number = models.CharField(max_length=15, blank=True)
+    gst_number = models.CharField(
+        max_length=15,
+        blank=True,
+        help_text='GSTIN. Optional. Duplicate non-blank values are flagged per organization.',
+    )
+    payment_terms = models.CharField(
+        max_length=80,
+        blank=True,
+        help_text='Vendor payment terms (e.g. Net 30, COD). Changes require purchasing.terms.',
+    )
     address = models.TextField(blank=True)
     balance_due = models.DecimalField(max_digits=12, decimal_places=2, default=0.0)
     is_active = models.BooleanField(default=True)
@@ -873,6 +883,7 @@ class Supplier(models.Model):
         db_table = 'supplier'
         indexes = [
             models.Index(fields=['retailer', 'company_name']),
+            models.Index(fields=['gst_number']),
         ]
 
     def __str__(self):

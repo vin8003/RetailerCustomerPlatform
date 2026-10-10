@@ -170,9 +170,15 @@ class RetailerBlacklistAdmin(admin.ModelAdmin):
 
 @admin.register(Supplier)
 class SupplierAdmin(admin.ModelAdmin):
-    list_display = ['company_name', 'retailer', 'contact_person', 'phone_number', 'balance_due', 'is_active']
+    list_display = [
+        'company_name', 'retailer', 'contact_person', 'phone_number',
+        'gst_number', 'payment_terms', 'balance_due', 'is_active',
+    ]
     list_filter = ['is_active', 'created_at']
-    search_fields = ['company_name', 'contact_person', 'phone_number', 'retailer__shop_name']
+    search_fields = [
+        'company_name', 'contact_person', 'phone_number',
+        'gst_number', 'retailer__shop_name',
+    ]
 
 
 @admin.register(RetailerCustomerMapping)

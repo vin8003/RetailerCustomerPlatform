@@ -51,6 +51,7 @@ They are **not** automatically durable knowledge. Many pages are builder briefs,
 | [OE-143.md](OE-143.md) | durable | [khata-credit-lock](../requirements/khata-credit-lock.md) |
 | [OE-212.md](OE-212.md) | durable | [customer-profile-order-history](../requirements/customer-profile-order-history.md) |
 | [OE-220.md](OE-220.md) | durable | [shop-rewards-otp-redeem](../requirements/shop-rewards-otp-redeem.md) |
+| [OE-100.md](OE-100.md) | durable | [suppliers](../requirements/suppliers.md) |
 
 Skipped (no Confluence page at migration time): KAN-48, KAN-49, KAN-52, KAN-57, KAN-63.
 
