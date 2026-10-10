@@ -32,6 +32,9 @@ MANIFEST_BASENAMES = frozenset({'manifest.csv', 'images.csv', 'mapping.csv'})
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_ARCHIVE_BYTES = 20 * 1024 * 1024
 MAX_ROWS = 200
+MAX_ZIP_MEMBERS = 500
+MAX_ARCHIVE_UNCOMPRESSED_BYTES = 60 * 1024 * 1024
+MAX_IMAGE_PIXELS = 40_000_000
 
 _AMBIGUOUS = object()
 
@@ -141,6 +144,10 @@ def validate_image_payload(file_obj, name):
         return 'bad file'
     try:
         image = Image.open(io.BytesIO(data))
+        width, height = image.size
+        if width * height > MAX_IMAGE_PIXELS:
+            # A small file can decode to a huge bitmap; refuse before anything decodes it.
+            return 'bad file'
         image.verify()
     except (UnidentifiedImageError, OSError, ValueError):
         return 'bad file'
@@ -174,11 +181,16 @@ def replace_product_default_image(product, image_file):
     New file becomes ``Product.image``. Old file is deleted; ``image_url``
     and additional ``is_primary`` flags are cleared so they are not default.
     """
-    if product.image:
-        product.image.delete(save=False)
+    old_image = product.image if product.image else None
+    old_name = old_image.name if old_image else None
+    old_storage = old_image.storage if old_image else None
     product.image = image_file
     product.image_url = None
     product.save(update_fields=['image', 'image_url', 'updated_at'])
+    if old_name and old_name != product.image.name:
+        # Delete the previous file only once the new one is saved and the transaction commits;
+        # a failed save must not leave the product pointing at a removed file.
+        transaction.on_commit(lambda: old_storage.delete(old_name))
     product.additional_images.filter(is_primary=True).update(is_primary=False)
     return product
 
@@ -298,7 +310,12 @@ def _read_zip_members(archive):
     files = {}
     manifest = None
     with zf:
-        for info in zf.infolist():
+        members = zf.infolist()
+        if len(members) > MAX_ZIP_MEMBERS:
+            raise ValueError('Archive has too many files')
+        if sum(info.file_size for info in members) > MAX_ARCHIVE_UNCOMPRESSED_BYTES:
+            raise ValueError('Archive is too large when unpacked')
+        for info in members:
             path = _safe_zip_member(info.filename)
             if path is None:
                 continue
