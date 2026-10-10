@@ -551,6 +551,30 @@ class Product(models.Model):
         )
 
     @classmethod
+    def lock_for_sale(cls, retailer, products):
+        """Lock sold SKUs and pack parents in pk order under the current atomic."""
+        ids = set()
+        for product in products:
+            if product is None:
+                continue
+            ids.add(product.pk)
+            if product.parent_bulk_product_id:
+                ids.add(product.parent_bulk_product_id)
+        if not ids:
+            return {}
+        locked = {
+            row.id: row
+            for row in cls.objects.select_for_update()
+            .filter(id__in=ids, retailer=retailer)
+            .order_by('id')
+        }
+        for row in locked.values():
+            parent_id = row.parent_bulk_product_id
+            if parent_id and parent_id in locked:
+                row.parent_bulk_product = locked[parent_id]
+        return locked
+
+    @classmethod
     def cache_saleable_quantities(cls, products):
         """Stamp saleable_quantity_annotated on Product instances (one query)."""
         instances = []
@@ -628,17 +652,25 @@ class Product(models.Model):
             return True
             
         # If this is a child fractional product, deduct stock from parent bulk product
-        if self.parent_bulk_product:
+        if self.parent_bulk_product_id:
             if self.conversion_factor and self.conversion_factor > 0:
+                try:
+                    parent = Product.objects.select_for_update().get(
+                        pk=self.parent_bulk_product_id,
+                        retailer_id=self.retailer_id,
+                    )
+                except Product.DoesNotExist:
+                    return False
                 parent_qty_needed = Decimal(str(quantity)) * self.conversion_factor
-                success = self.parent_bulk_product.reduce_quantity(
+                success = parent.reduce_quantity(
                     parent_qty_needed,
                     batch=None,
                     allow_negative=allow_negative,
                     forbid_expired=forbid_expired,
                 )
                 if success:
-                    self.parent_bulk_product.sync_fractional_inventories()
+                    parent.sync_fractional_inventories()
+                self.parent_bulk_product = parent
                 return success
             return False
             

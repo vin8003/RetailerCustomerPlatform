@@ -41,7 +41,7 @@ OrderEasy can track stock in two ways:
 
 ### Simple quantity
 
-One number per product — goes down on sale, up on purchase or return.
+One number per product — goes down on sale, up on purchase or return. POS and online checkout cannot sell more than on-hand (stock will not go negative).
 
 Cashiers cannot type a **new** stock number on the product screen (saving other fields is fine). Owners (and staff given inventory-adjust permission) can still correct on-hand that way. Everyday sales and purchases still change stock automatically.
 

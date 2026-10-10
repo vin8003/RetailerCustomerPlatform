@@ -54,7 +54,7 @@ Credit sales require the customer to be attached and within their **credit limit
 3. **Complete** the sale
 4. **Print receipt** if you use a printer
 
-Stock reduces immediately for sold items.
+Stock reduces immediately for sold items. A sale that would take on-hand below zero is blocked.
 
 ## Returns at POS
 

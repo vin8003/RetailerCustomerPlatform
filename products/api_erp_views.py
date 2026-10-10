@@ -583,8 +583,27 @@ def create_pos_order(request):
 
             # Create Order Items and Reduce Inventory
             item_discounts = offer_results.get('item_discounts', {})
+            # Selling below zero stock is a client request, so it needs its own permission.
+            allow_negative = data.get('allow_negative') is True
+            if allow_negative:
+                from retailers.organization import get_organization_for_user, user_has_org_permission
+
+                oversell_org = get_organization_for_user(request.user)
+                if oversell_org is None or not user_has_org_permission(
+                    request.user, oversell_org, 'orders.oversell'
+                ):
+                    raise CreditOverrideDenied(
+                        'Selling more than the stock on hand needs the orders.oversell permission'
+                    )
+            # One pk-ASC lock for every sold SKU (+ pack parents). Do not
+            # lock child-then-parent ad hoc — that AB-BA deadlocks with
+            # place_order / modify lock_for_sale.
+            locked_products = Product.lock_for_sale(
+                retailer,
+                [pos_item.product for pos_item in pos_items],
+            )
             for i, item in enumerate(items_data):
-                product = Product.objects.select_for_update().get(id=item['product_id'], retailer=retailer)
+                product = locked_products[item['product_id']]
                 batch_id = item.get('batch_id')
                 batch = None
                 if batch_id:
@@ -603,10 +622,14 @@ def create_pos_order(request):
                 # Calculate previous quantity for logging
                 prev_qty = batch.quantity if (batch and product.track_inventory) else product.quantity
                 
-                # Reduce inventory using the model method (handles FIFO if batch is None)
-                # POS allows negative stock (allow_negative=True)
-                if not product.reduce_quantity(qty, batch=batch, allow_negative=True):
-                    raise ValueError(f"Unexpected error reducing stock for {product.name}")
+                # Sale deduct blocks when on-hand would go negative unless
+                # the caller already passed the existing allow_negative flag.
+                if not product.reduce_quantity(
+                    qty, batch=batch, allow_negative=allow_negative
+                ):
+                    raise ValueError(
+                        f"Not enough saleable stock for {product.name}"
+                    )
                 
                 new_qty = batch.quantity if (batch and product.track_inventory) else product.quantity
 
