@@ -616,3 +616,63 @@ class TestPhotoImportApi:
         assert resp.data['successful_rows'] == 1
         product.refresh_from_db()
         assert product.image
+
+
+class TestPhotoImportLimits:
+    def test_zip_with_too_many_members_rejected(self):
+        from products.photo_import import MAX_ZIP_MEMBERS, _read_zip_members
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            for i in range(MAX_ZIP_MEMBERS + 1):
+                zf.writestr(f"a{i}.gif", b"x")
+        buf.seek(0)
+        with pytest.raises(ValueError, match="too many files"):
+            _read_zip_members(SimpleUploadedFile("many.zip", buf.getvalue()))
+
+    def test_zip_unpacked_size_capped(self, monkeypatch):
+        import products.photo_import as pi
+
+        monkeypatch.setattr(pi, "MAX_ARCHIVE_UNCOMPRESSED_BYTES", 100)
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("big.gif", b"0" * 5000)
+        with pytest.raises(ValueError, match="too large when unpacked"):
+            pi._read_zip_members(SimpleUploadedFile("big.zip", buf.getvalue()))
+
+    def test_pixel_bomb_rejected(self, monkeypatch):
+        import products.photo_import as pi
+        from PIL import Image
+
+        monkeypatch.setattr(pi, "MAX_IMAGE_PIXELS", 100)
+        out = io.BytesIO()
+        Image.new("RGB", (20, 20), "white").save(out, "PNG")
+        upload = SimpleUploadedFile("p.png", out.getvalue(), content_type="image/png")
+        assert pi.validate_image_payload(upload, "p.png") == "bad file"
+
+    def test_normal_image_still_valid(self):
+        import products.photo_import as pi
+        from PIL import Image
+
+        out = io.BytesIO()
+        Image.new("RGB", (20, 20), "white").save(out, "PNG")
+        upload = SimpleUploadedFile("ok.png", out.getvalue(), content_type="image/png")
+        assert pi.validate_image_payload(upload, "ok.png") is None
+
+
+@pytest.mark.django_db
+class TestIdentityKeyEdgeCases:
+    def test_very_long_numeric_key_does_not_crash_lookup(self):
+        from products.photo_import import _product_identity_q
+
+        owner, shop = _make_retailer("oe124_long", "Long Key Shop")
+        _make_product(shop, "Long", barcode="12345678901234567890")
+        q = _product_identity_q(["12345678901234567890", "42"])
+        # Evaluating must not raise "bigint out of range".
+        from django.db.models import TextField
+        from django.db.models.functions import Cast
+
+        annotated = Product.objects.annotate(
+            additional_barcodes_text=Cast('additional_barcodes', TextField())
+        )
+        assert annotated.filter(q).exists()

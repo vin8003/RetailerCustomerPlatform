@@ -321,7 +321,8 @@ class TestModuleFlagsQueryBudget:
         owner, profile = _make_retailer("mod_q_patch", "Mod Query Patch")
         org = profile.organization
         api_client.force_authenticate(user=owner)
-        with django_assert_num_queries(4):
+        # 4 base queries + savepoint, row lock and release for the concurrent-PATCH guard.
+        with django_assert_num_queries(7):
             resp = api_client.patch(
                 _module_flags_url(org.id),
                 {"flags": {"catalog": False}},
@@ -396,3 +397,39 @@ class TestModuleFlagsAuthMatrix:
         assert resp.status_code == status.HTTP_400_BAD_REQUEST
         after = OrgModuleFlags.objects.get(organization=org).flags
         assert after == before
+
+
+@pytest.mark.django_db
+class TestModuleGateOnWriteEndpoints:
+    """Review fix: disabled modules also block the write endpoints."""
+
+    def _disable(self, org, code):
+        row = OrgModuleFlags.objects.get(organization=org)
+        row.flags = {**row.flags, code: False}
+        row.save()
+
+    def test_catalog_off_blocks_product_writes(self, api_client):
+        owner, profile = _make_retailer("gate_cat", "Gate Cat")
+        self._disable(profile.organization, "catalog")
+        api_client.force_authenticate(user=owner)
+        for method, url in (
+            ("post", "/api/products/create/"),
+            ("patch", "/api/products/bulk-update/"),
+        ):
+            resp = getattr(api_client, method)(url, {}, format="json")
+            assert resp.status_code == status.HTTP_403_FORBIDDEN, url
+            assert resp.data.get("error_code") == "module_disabled"
+
+    def test_customers_off_blocks_payment_and_credit(self, api_client):
+        owner, profile = _make_retailer("gate_cus", "Gate Cus")
+        self._disable(profile.organization, "customers")
+        api_client.force_authenticate(user=owner)
+        resp = api_client.post("/api/customer/retailer/payment/record/", {}, format="json")
+        assert resp.status_code == status.HTTP_403_FORBIDDEN
+        assert resp.data.get("error_code") == "module_disabled"
+
+    def test_enabled_module_not_blocked(self, api_client):
+        owner, _profile = _make_retailer("gate_ok", "Gate Ok")
+        api_client.force_authenticate(user=owner)
+        resp = api_client.post("/api/products/create/", {}, format="json")
+        assert resp.data.get("error_code") != "module_disabled"
