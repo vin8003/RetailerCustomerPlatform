@@ -21,7 +21,7 @@ Customers are often created automatically when:
 - Staff attaches a new person at POS
 - You add manually from Customers → Add
 
-Keep phone numbers accurate for OTP login and delivery calls.
+Keep phone numbers accurate for OTP login, delivery calls, and loyalty redeem codes when you require OTP to burn points.
 
 ## Customer credit (udhaar / khata)
 

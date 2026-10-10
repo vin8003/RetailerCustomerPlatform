@@ -56,6 +56,7 @@ If you have **loyalty points** with this shop:
 
 - You may apply them at checkout for a discount
 - Points are **per shop** — not transferable between shops
+- Some shops send a one-time code to your phone before the discount applies
 
 → [Rewards and referrals](rewards-and-referrals.md)
 

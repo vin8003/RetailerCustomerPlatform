@@ -156,8 +156,8 @@ class RetailerReviewAdmin(admin.ModelAdmin):
 
 @admin.register(RetailerRewardConfig)
 class RetailerRewardConfigAdmin(admin.ModelAdmin):
-    list_display = ['retailer', 'earning_type', 'loyalty_earning_value', 'is_referral_enabled', 'is_active']
-    list_filter = ['earning_type', 'is_referral_enabled', 'is_active']
+    list_display = ['retailer', 'earning_type', 'loyalty_earning_value', 'otp_required_for_redeem', 'is_referral_enabled', 'is_active']
+    list_filter = ['earning_type', 'otp_required_for_redeem', 'is_referral_enabled', 'is_active']
     search_fields = ['retailer__shop_name']
 
 

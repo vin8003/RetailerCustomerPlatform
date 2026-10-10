@@ -29,6 +29,9 @@ urlpatterns = [
     path('loyalty/all/', views.get_all_customer_loyalty, name='get_all_customer_loyalty'),
     path('loyalty/transactions/', views.get_loyalty_transactions, name='get_loyalty_transactions'),
     path('loyalty/retailer-customers/', views.get_retailer_customers_loyalty, name='get_retailer_customers_loyalty'),
+    path('loyalty/redeem-otp/', views.customer_loyalty_redeem_otp, name='customer_loyalty_redeem_otp'),
+    path('retailer/loyalty/redeem-otp/', views.staff_loyalty_redeem_otp, name='staff_loyalty_redeem_otp'),
+    path('retailer/loyalty/redeem/', views.staff_loyalty_redeem, name='staff_loyalty_redeem'),
     
     # Retailer Customer Management
     path('retailer/list/', views.get_retailer_customers, name='get_retailer_customers'),
