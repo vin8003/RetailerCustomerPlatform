@@ -202,7 +202,12 @@ def dispatch_notification(
     if notification_type not in NOTIFICATION_DEFINITIONS:
         return None, 'unknown_notification_type'
     config = config or ensure_org_notification_config(organization)
-    if not skip_module_check and not is_module_enabled(organization, 'notifications'):
+    # Statutory notices (delivered, cancelled, returned) are never switched off by the module flag.
+    if (
+        not skip_module_check
+        and not is_statutory_notification_type(notification_type)
+        and not is_module_enabled(organization, 'notifications')
+    ):
         return None, 'module_disabled'
     if not is_notification_type_enabled(
         organization, notification_type, config=config
