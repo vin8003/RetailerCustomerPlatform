@@ -25,6 +25,8 @@ from products.models import Product
 
 User = get_user_model()
 
+from retailers.module_flags import module_required
+
 logger = logging.getLogger(__name__)
 
 
@@ -888,6 +890,12 @@ def get_retailer_customers(request):
                 {'error': 'Only retailers can access this endpoint'}, 
                 status=status.HTTP_403_FORBIDDEN
             )
+
+        from retailers.module_flags import require_module_enabled
+
+        _org, module_err = require_module_enabled(request.user, 'customers')
+        if module_err is not None:
+            return module_err
             
         retailer = get_object_or_404(RetailerProfile, user=request.user)
         
@@ -1186,6 +1194,7 @@ def toggle_blacklist(request):
 
 @api_view(['PATCH'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('customers')
 def update_retailer_customer(request, customer_id):
     """
     Update retailer-specific customer mapping (nickname and notes)
@@ -1228,6 +1237,7 @@ def update_retailer_customer(request, customer_id):
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('customers')
 def get_customer_ledger(request, customer_id):
     """
     Get full ledger (Khata) for a customer
@@ -1259,6 +1269,7 @@ def get_customer_ledger(request, customer_id):
 
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('customers')
 def record_customer_payment(request):
     """
     Record a manual payment from a customer (Credit to Ledger)
@@ -1307,6 +1318,7 @@ def record_customer_payment(request):
 
 @api_view(['PATCH'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('customers')
 def update_customer_credit_limit(request, customer_id):
     """
     Update credit limit for a customer

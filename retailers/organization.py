@@ -145,6 +145,10 @@ def ensure_org_rbac_bootstrap(organization):
                 updates.append('updated_at')
                 membership.save(update_fields=updates)
 
+        from .module_flags import ensure_org_module_flags
+
+        ensure_org_module_flags(org)
+
 
 def get_organization_for_user(user):
     """

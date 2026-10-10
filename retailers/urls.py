@@ -60,6 +60,16 @@ urlpatterns = [
         views.organization_audit_log,
         name='organization_audit_log',
     ),
+    path(
+        'org/<int:org_id>/module-flags/catalog/',
+        views.organization_module_flags_catalog,
+        name='organization_module_flags_catalog',
+    ),
+    path(
+        'org/<int:org_id>/module-flags/',
+        views.organization_module_flags,
+        name='organization_module_flags',
+    ),
 
     # Public retailer endpoints
     path('', views.list_retailers, name='list_retailers'),
