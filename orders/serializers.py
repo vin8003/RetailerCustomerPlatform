@@ -357,6 +357,16 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             pass
         return None
     
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # The pickup code is the customer's proof of collection; the shop that verifies it
+        # must not be able to read it from the API.
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if getattr(user, 'id', None) is None or user.id != instance.customer_id:
+            data.pop('pickup_code', None)
+        return data
+
     def get_customer_name(self, obj):
         """Get unified customer name based on priority"""
         from retailers.models import RetailerCustomerMapping
@@ -602,6 +612,10 @@ class OrderCreateSerializer(serializers.Serializer):
         master_product_demand = {}
         
         for cart_item in cart_items:
+            if not cart_item.product.is_active or not cart_item.product.is_available:
+                raise serializers.ValidationError(
+                    f"Product '{cart_item.product.name}' is no longer available. Remove it from your cart."
+                )
             quantity = cart_item.quantity
             if cart_item.id in item_discounts:
                 quantity = item_discounts[cart_item.id].get('total_display_quantity', cart_item.quantity)
@@ -992,6 +1006,7 @@ class OrderStatusUpdateSerializer(serializers.Serializer):
         
         return value
     
+    @transaction.atomic
     def update(self, instance, validated_data):
         """Update order status"""
         new_status = validated_data['status']

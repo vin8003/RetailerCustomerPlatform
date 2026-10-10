@@ -174,7 +174,9 @@ class TestFulfillmentSlotList:
             {"delivery_mode": "pickup", "days": 1},
         )
         assert resp.status_code == status.HTTP_200_OK
-        assert resp.data["slot_capacity"] == 5
+        # Anonymous callers see availability only, not how busy the shop is.
+        assert "slot_capacity" not in resp.data
+        assert all("booked" not in s and "capacity" not in s for s in resp.data["slots"])
         assert resp.data["timezone"] == "Asia/Kolkata"
         starts_local = [s["slot_start_local"] for s in resp.data["slots"]]
         assert any("T10:00:00" in value for value in starts_local)
@@ -491,3 +493,44 @@ class TestFulfillmentSlotQueryCounts:
                 format="json",
             )
         assert resp.status_code == status.HTTP_200_OK
+
+
+@pytest.mark.django_db
+@patch("django.utils.timezone.now", side_effect=_frozen_now)
+class TestSlotReviewFixes:
+    def test_shop_staff_sees_capacity_counts(self, mock_now, api_client):
+        owner, profile, _ = _make_retailer("oe243_rf_staff", "RF Staff")
+        api_client.force_authenticate(user=owner)
+        resp = api_client.get(_slots_url(profile.id), {"days": 1})
+        assert resp.data["slot_capacity"] == 5
+        assert "booked" in resp.data["slots"][0]
+
+    @pytest.mark.parametrize("closing", [time(23, 30), time(23, 59), time(0, 0)])
+    def test_late_closing_hours_terminate(self, mock_now, api_client, closing):
+        from orders.fulfillment_slots import generate_day_slot_starts
+
+        _, profile, _ = _make_retailer("oe243_rf_late" + closing.strftime("%H%M"), "RF Late")
+        hours = RetailerOperatingHours.objects.get(retailer=profile, day_of_week="monday")
+        hours.opening_time = time(22, 0)
+        hours.closing_time = closing
+        hours.save()
+        tz = pytz.timezone("Asia/Kolkata")
+        slots = generate_day_slot_starts(datetime(2026, 9, 14).date(), hours, tz)
+        assert slots, "expected evening slots"
+        assert len(slots) < 49
+        assert slots[0].hour == 22
+        # Every slot ends by closing (midnight counts as end of the same day).
+        last_end = slots[-1].replace(tzinfo=None) + __import__("datetime").timedelta(minutes=30)
+        limit = datetime(2026, 9, 15, 0, 0) if closing == time(0, 0) else datetime.combine(datetime(2026, 9, 14).date(), closing)
+        assert last_end <= limit
+
+    def test_overnight_or_equal_hours_yield_no_slots(self, mock_now):
+        from orders.fulfillment_slots import generate_day_slot_starts
+
+        _, profile, _ = _make_retailer("oe243_rf_over", "RF Over")
+        hours = RetailerOperatingHours.objects.get(retailer=profile, day_of_week="monday")
+        hours.opening_time = time(20, 0)
+        hours.closing_time = time(2, 0)
+        hours.save()
+        tz = pytz.timezone("Asia/Kolkata")
+        assert generate_day_slot_starts(datetime(2026, 9, 14).date(), hours, tz) == []
