@@ -205,6 +205,37 @@ class TestOrderStatusDispatch:
             notification_type="order.status.delivered",
         ).exists()
 
+    @patch("common.notification_dispatcher._deliver_via_channel", return_value=(True, None))
+    @patch("common.notifications.send_silent_update")
+    def test_statutory_notice_survives_notifications_module_off(
+        self, mock_silent, mock_deliver, notification_order
+    ):
+        from retailers.models import OrgModuleFlags
+
+        org = notification_order.retailer.organization
+        row = OrgModuleFlags.objects.get(organization=org)
+        row.flags = {**row.flags, "notifications": False}
+        row.save()
+
+        notification_order.update_status("confirmed", user=None)
+        notification_order.update_status("delivered", user=None)
+
+        assert not OrgNotificationDelivery.objects.filter(
+            order=notification_order, notification_type="order.status.confirmed"
+        ).exists()
+        assert OrgNotificationDelivery.objects.filter(
+            order=notification_order, notification_type="order.status.delivered"
+        ).exists()
+
+    @patch(
+        "common.notification_dispatcher.dispatch_order_status_notification",
+        side_effect=RuntimeError("boom"),
+    )
+    def test_dispatcher_error_does_not_block_status_change(self, mock_dispatch, notification_order):
+        notification_order.update_status("confirmed", user=None)
+        notification_order.refresh_from_db()
+        assert notification_order.status == "confirmed"
+
 
 @pytest.mark.django_db
 class TestNotificationRetryAndErrors:

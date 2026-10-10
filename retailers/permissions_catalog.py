@@ -38,7 +38,9 @@ BOOTSTRAP_ROLES = (
     {
         'slug': ROLE_SLUG_CASHIER,
         'name': 'Cashier',
-        'permissions': [],
+        # Order access (OE-131) is required for POS and the inbox; without it every
+        # existing cashier would be locked out when the orders permissions ship.
+        'permissions': ['orders.create', 'orders.read'],
         'is_system': True,
     },
 )

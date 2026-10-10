@@ -75,7 +75,8 @@ class TestPermissionCatalogAndBootstrap:
         roles = {r.slug: r for r in OrgRole.objects.filter(organization=org)}
         assert set(roles) == {ROLE_SLUG_ADMIN, ROLE_SLUG_CASHIER}
         assert set(roles[ROLE_SLUG_ADMIN].permissions) == set(ALL_PERMISSION_CODES)
-        assert roles[ROLE_SLUG_CASHIER].permissions == []
+        # Cashiers get order access by default (OE-131); no org-management permissions.
+        assert set(roles[ROLE_SLUG_CASHIER].permissions) == {'orders.create', 'orders.read'}
 
         memberships = list(
             OrgStaffMembership.objects.filter(organization=org, is_active=True)
@@ -146,7 +147,7 @@ class TestStaffRoleAssignment:
         assert resp.status_code == status.HTTP_201_CREATED
         assert resp.data["role_slug"] == ROLE_SLUG_CASHIER
         assert resp.data["username"] == "cashier_one"
-        assert resp.data["permissions"] == []
+        assert set(resp.data["permissions"]) == {"orders.create", "orders.read"}
 
         staff_user = User.objects.get(username="cashier_one")
         assert staff_user.user_type == "retailer"
