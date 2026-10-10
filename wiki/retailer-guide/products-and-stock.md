@@ -9,7 +9,8 @@ Open **Products** to see everything in your catalog. Each product typically has:
 | Field | Purpose |
 |-------|---------|
 | Name | What customers and staff search for |
-| Selling price | Current price |
+| Selling price | Counter / POS price |
+| App price | Optional online price. If empty, the customer app uses the selling price |
 | MRP | Printed price on pack (optional) |
 | Barcode | For POS scan |
 | Category | Organisation and browsing |
@@ -95,7 +96,7 @@ Best when you already have a spreadsheet.
 
 | Action | When |
 |--------|------|
-| **Edit price** | Regular price change |
+| **Edit price** | Counter price, or a different app price when you want online ≠ store |
 | **Deactivate** | Seasonal item, not selling now — hidden from customers |
 | **Delete** | Rare — prefer deactivate to keep history |
 
@@ -112,6 +113,6 @@ Inactive products may still appear in old orders and reports.
 | Photograph top sellers first | Online conversion improves with images |
 | Barcode every SKU you can | Faster POS |
 | Reconcile stock weekly | Catch theft, damage, or data entry gaps |
-| Match online price to counter | Avoid customer arguments |
+| Set app price when online should differ | Same stock; customers see the app price, POS keeps the counter price |
 
 → [Purchases and suppliers](purchases-and-suppliers.md) · [POS billing](pos-billing.md)

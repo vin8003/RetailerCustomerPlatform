@@ -23,7 +23,7 @@ Bulk compare uses the same `int()` normalization as the write (echo `10.750` aga
 
 Product update writes `Decimal` via the serializer and compares `Decimal` after the row lock — fractional echo does not truncate.
 
-Price, name, and other non-qty / non-pack-link / non-expiry fields are unchanged: they do not require `inventory.adjust`. Pack-link and expiry keys on bulk update are ignored (bulk does not write them).
+Price, name, and other non-qty / non-pack-link / non-expiry fields are unchanged: they do not require `inventory.adjust`. Changing `Product.app_price` uses `catalog.price` instead (see [app-vs-pos-prices.md](app-vs-pos-prices.md)). Pack-link and expiry keys on bulk update are ignored (bulk does not write them).
 
 Retailer tenancy is unchanged: products are still loaded as `id` + the caller's `RetailerProfile`. Cross-tenant ids do not update the other shop's stock.
 

@@ -76,10 +76,13 @@ class TestPermissionCatalogAndBootstrap:
         assert set(roles) == {ROLE_SLUG_ADMIN, ROLE_SLUG_CASHIER}
         assert set(roles[ROLE_SLUG_ADMIN].permissions) == set(ALL_PERMISSION_CODES)
         assert "inventory.adjust" in roles[ROLE_SLUG_ADMIN].permissions
+        assert "catalog.price" in roles[ROLE_SLUG_ADMIN].permissions
         # Cashiers get order access by default (OE-131); no org-management permissions.
         assert set(roles[ROLE_SLUG_CASHIER].permissions) == {'orders.create', 'orders.read'}
         assert "inventory.adjust" not in roles[ROLE_SLUG_CASHIER].permissions
+        assert "catalog.price" not in roles[ROLE_SLUG_CASHIER].permissions
         assert user_has_org_permission(user, org, "inventory.adjust")
+        assert user_has_org_permission(user, org, "catalog.price")
 
         memberships = list(
             OrgStaffMembership.objects.filter(organization=org, is_active=True)
@@ -128,7 +131,9 @@ class TestPermissionCatalogAndBootstrap:
         codes = {p["code"] for p in resp.data["permissions"]}
         assert codes == set(ALL_PERMISSION_CODES)
         assert "inventory.adjust" in codes
+        assert "catalog.price" in codes
         assert "inventory.adjust" in ALL_PERMISSION_CODES
+        assert "catalog.price" in ALL_PERMISSION_CODES
 
 
 @pytest.mark.django_db

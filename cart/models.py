@@ -60,7 +60,8 @@ class Cart(models.Model):
             cart_item.save()
             return cart_item
         except CartItem.DoesNotExist:
-            unit_price = batch.price if batch else product.price
+            from products.channel_price import CHANNEL_APP, resolve_channel_price
+            unit_price = resolve_channel_price(product, CHANNEL_APP, batch=batch)
             cart_item = CartItem.objects.create(
                 cart=self,
                 product=product,
@@ -206,7 +207,10 @@ class CartItem(models.Model):
     def save(self, *args, **kwargs):
         """Override save to update unit price from product/batch"""
         if not self.unit_price:
-            self.unit_price = self.batch.price if self.batch else self.product.price
+            from products.channel_price import CHANNEL_APP, resolve_channel_price
+            self.unit_price = resolve_channel_price(
+                self.product, CHANNEL_APP, batch=self.batch
+            )
         super().save(*args, **kwargs)
         
         # Update cart's updated_at timestamp

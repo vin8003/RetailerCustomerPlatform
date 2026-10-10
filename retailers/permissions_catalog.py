@@ -5,7 +5,7 @@ Deny-by-default: only codes listed here may be stored on a role.
 Org owner always has every permission (implicit admin) until they delegate.
 """
 
-PERMISSION_CATALOG_VERSION = 7
+PERMISSION_CATALOG_VERSION = 8
 
 # code -> human description
 PERMISSION_DEFINITIONS = {
@@ -22,6 +22,7 @@ PERMISSION_DEFINITIONS = {
     'orders.update': 'Update order status and retailer-side order mutations',
     'fulfillment.manage': 'Configure fulfillment slot capacity for shop locations',
     'inventory.adjust': 'Hand-set on-hand quantity on product update or bulk update; change parent-child pack links on product create or update; set or change ProductBatch expiry_date on product update; post damage / expiry / spoilage write-off',
+    'catalog.price': 'Set or clear Product.app_price (owned-app list). Store price stays on existing product update. Echoing the current app_price does not require this permission.',
     'credit.manage': 'Change a customer credit limit or credit due days',
     'credit.override': 'Complete a POS credit sale that is blocked by the credit limit or overdue lock',
 }

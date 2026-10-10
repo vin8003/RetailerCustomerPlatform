@@ -3,6 +3,7 @@ from decimal import Decimal
 from django.db import transaction
 from .models import Cart, CartItem, CartHistory
 from products.models import Product
+from products.channel_price import CHANNEL_APP, resolve_channel_price
 from retailers.models import RetailerProfile
 
 
@@ -12,7 +13,7 @@ class CartItemSerializer(serializers.ModelSerializer):
     """
     product_name = serializers.CharField(source='product.name', read_only=True)
     product_image = serializers.CharField(source='product.image_display_url', read_only=True)
-    product_price = serializers.DecimalField(source='product.price', max_digits=10, decimal_places=2, read_only=True)
+    product_price = serializers.SerializerMethodField()
     product_unit = serializers.CharField(source='product.unit', read_only=True)
     batch_number = serializers.CharField(source='batch.batch_number', read_only=True)
     stock_quantity = serializers.SerializerMethodField()
@@ -31,6 +32,9 @@ class CartItemSerializer(serializers.ModelSerializer):
             'added_at', 'updated_at'
         ]
         read_only_fields = ['id', 'unit_price', 'added_at', 'updated_at']
+
+    def get_product_price(self, obj):
+        return resolve_channel_price(obj.product, CHANNEL_APP)
 
     def get_stock_quantity(self, obj):
         # When inventory tracking is disabled, there is no real stock limit.
@@ -262,7 +266,9 @@ class AddToCartSerializer(serializers.Serializer):
             product=product,
             action='add',
             quantity=quantity,
-            price=last_item.unit_price if last_item else product.price
+            price=last_item.unit_price if last_item else resolve_channel_price(
+                product, CHANNEL_APP
+            )
         )
         
         return last_item

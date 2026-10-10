@@ -296,6 +296,15 @@ class Product(models.Model):
         decimal_places=2,
         validators=[MinValueValidator(Decimal('0.01'))]
     )
+    # OE-106 / F-0023: owned-app list. Null falls back to store ``price``.
+    app_price = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal('0.01'))],
+        help_text='Owned-app selling price. Null means fall back to store price.',
+    )
     original_price = models.DecimalField(
         max_digits=10, 
         decimal_places=2,
@@ -476,6 +485,12 @@ class Product(models.Model):
         if self.master_product and self.master_product.image_url:
             return self.master_product.image_url
         return None
+
+    def channel_selling_price(self, channel='store', batch=None):
+        """Store list is ``price``; app list is ``app_price`` or store fallback."""
+        from products.channel_price import resolve_channel_price
+
+        return resolve_channel_price(self, channel, batch=batch)
 
     @property
     def discounted_price(self):
