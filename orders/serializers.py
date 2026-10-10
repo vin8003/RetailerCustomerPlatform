@@ -310,6 +310,16 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'pickup_code', 'pickup_ready_at',
         ]
     
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # The pickup code is the customer's proof of collection; the shop that verifies it
+        # must not be able to read it from the API.
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if getattr(user, 'id', None) is None or user.id != instance.customer_id:
+            data.pop('pickup_code', None)
+        return data
+
     def get_customer_name(self, obj):
         """Get unified customer name based on priority"""
         from retailers.models import RetailerCustomerMapping
