@@ -43,6 +43,14 @@ User = get_user_model()
 from retailers.module_flags import module_required
 
 
+def _redeem_otp_error_status(message):
+    from .loyalty_redeem import ERR_TOO_MANY_CODES
+
+    if message == ERR_TOO_MANY_CODES:
+        return status.HTTP_429_TOO_MANY_REQUESTS
+    return status.HTTP_400_BAD_REQUEST
+
+
 class RedeemOTPThrottle(UserRateThrottle):
     """Per signed-in user (AnonRateThrottle never applies to authenticated staff)."""
     scope = 'otp'
@@ -1525,7 +1533,7 @@ def customer_loyalty_redeem_otp(request):
         return Response({'error': 'No loyalty wallet at this shop'}, status=status.HTTP_400_BAD_REQUEST)
     _row, err = issue_redeem_otp(request.user, retailer)
     if err:
-        return Response({'error': err}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'error': err}, status=_redeem_otp_error_status(err))
     return Response(otp_sent_payload(), status=status.HTTP_200_OK)
 
 
@@ -1541,7 +1549,7 @@ def staff_loyalty_redeem_otp(request):
         return err
     _row, issue_err = issue_redeem_otp(customer, retailer)
     if issue_err:
-        return Response({'error': issue_err}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'error': issue_err}, status=_redeem_otp_error_status(issue_err))
     return Response(otp_sent_payload(), status=status.HTTP_200_OK)
 
 
