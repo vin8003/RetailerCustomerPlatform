@@ -509,7 +509,8 @@ class TestChannelPriceWrites:
         product = _make_product(shop)
         api_client.force_authenticate(user=owner)
 
-        with django_assert_num_queries(20):
+        # +2: catalog module-flag check on product writes (OE-101).
+        with django_assert_num_queries(22):
             resp = api_client.patch(
                 reverse("update_product", args=[product.id]),
                 {"app_price": "33.00"},
