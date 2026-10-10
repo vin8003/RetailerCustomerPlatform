@@ -47,15 +47,3 @@ def require_api_scope(scope_code: str):
 
     _Scoped.__name__ = f'RequireApiScope_{scope_code.replace(".", "_")}'
     return _Scoped
-
-
-class IsOrgApiKeyManager(BasePermission):
-    """JWT retailer with ``api_keys.manage`` (org owner always qualifies)."""
-    message = 'API key management permission required.'
-
-    def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and getattr(request.user, 'user_type', None) == 'retailer'
-        )

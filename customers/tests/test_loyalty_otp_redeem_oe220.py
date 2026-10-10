@@ -765,3 +765,49 @@ class TestRewardConfigOtpFlagAuth:
         assert config_a.otp_required_for_redeem is True
         config_b = RetailerRewardConfig.objects.get(retailer=retailer_b)
         assert config_b.otp_required_for_redeem is True
+
+
+@pytest.mark.django_db
+class TestOtpIssueLimitAndTotals:
+    @patch("customers.loyalty_redeem.send_sms_otp", return_value=True)
+    def test_fourth_code_in_an_hour_is_refused(self, _sms, api_client):
+        _owner, retailer = _make_retailer("oe220_lim_owner", "OE220 Limit")
+        customer = _make_customer("oe220_lim_cust", "9000002299")
+        _reward_config(retailer)
+        CustomerLoyalty.objects.create(customer=customer, retailer=retailer, points=Decimal("10"))
+        api_client.force_authenticate(user=customer)
+        url = reverse(CUSTOMER_OTP_URL)
+        for _ in range(3):
+            assert api_client.post(url, {"retailer_id": retailer.id}, format="json").status_code == 200
+        fourth = api_client.post(url, {"retailer_id": retailer.id}, format="json")
+        assert fourth.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+        assert LoyaltyRedeemOTP.objects.filter(customer=customer, is_used=False).count() == 1
+
+    @patch("customers.loyalty_redeem.send_sms_otp", return_value=True)
+    def test_reissue_invalidates_the_previous_code(self, _sms, api_client):
+        _owner, retailer = _make_retailer("oe220_inv_owner", "OE220 Invalidate")
+        customer = _make_customer("oe220_inv_cust", "9000002298")
+        _reward_config(retailer)
+        CustomerLoyalty.objects.create(customer=customer, retailer=retailer, points=Decimal("10"))
+        api_client.force_authenticate(user=customer)
+        url = reverse(CUSTOMER_OTP_URL)
+        api_client.post(url, {"retailer_id": retailer.id}, format="json")
+        first = LoyaltyRedeemOTP.objects.get(customer=customer)
+        api_client.post(url, {"retailer_id": retailer.id}, format="json")
+        first.refresh_from_db()
+        assert first.is_used is True
+
+    def test_discount_uses_actual_order_total_including_extra_charges(self):
+        from customers.loyalty_redeem import apply_pending_order_redeem
+
+        _owner, retailer = _make_retailer("oe220_tot_owner", "OE220 Totals")
+        customer = _make_customer("oe220_tot_cust", "9000002297")
+        _reward_config(retailer, otp_required_for_redeem=False)
+        CustomerLoyalty.objects.create(customer=customer, retailer=retailer, points=Decimal("50"))
+        order = _pending_order(customer, retailer, _product(retailer), total=Decimal("118.00"))
+        # Subtotal alone is 100; the 18 is tax/other charges that must survive the redeem.
+        type(order).objects.filter(pk=order.pk).update(subtotal=Decimal("100.00"), delivery_fee=Decimal("0"), discount_amount=Decimal("0"))
+        result, err = apply_pending_order_redeem(order, requested_points=Decimal("10"))
+        assert err is None
+        result.refresh_from_db()
+        assert result.total_amount == Decimal("118.00") - result.discount_from_points
