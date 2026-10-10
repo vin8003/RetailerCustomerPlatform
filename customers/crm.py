@@ -77,12 +77,15 @@ def parse_lookup_phone(raw):
     return last_10, None
 
 
-def find_org_customer_mapping(organization, last_10):
+def find_org_customer_mapping(organization, last_10, location_ids=None):
     """Most recently updated mapping in this org whose customer phone matches."""
     if organization is None or not last_10:
         return None
+    mappings = RetailerCustomerMapping.objects.filter(retailer__organization=organization)
+    if location_ids is not None:
+        mappings = mappings.filter(retailer_id__in=location_ids)
     return (
-        RetailerCustomerMapping.objects.filter(retailer__organization=organization)
+        mappings
         .filter(
             Q(customer__phone_number__endswith=last_10)
             | Q(customer__username__endswith=last_10)
@@ -93,7 +96,7 @@ def find_org_customer_mapping(organization, last_10):
     )
 
 
-def org_customer_orders_qs(organization, customer=None, last_10=''):
+def org_customer_orders_qs(organization, customer=None, last_10='', location_ids=None):
     """
     POS + app orders for this phone inside the org.
 
@@ -110,7 +113,10 @@ def org_customer_orders_qs(organization, customer=None, last_10=''):
     if not parts:
         return Order.objects.none()
 
-    return Order.objects.filter(retailer__organization=organization).filter(parts)
+    orders = Order.objects.filter(retailer__organization=organization)
+    if location_ids is not None:
+        orders = orders.filter(retailer_id__in=location_ids)
+    return orders.filter(parts)
 
 
 def annotated_history_qs(orders_qs):
