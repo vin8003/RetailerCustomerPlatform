@@ -29,6 +29,11 @@ class OfferSerializer(serializers.ModelSerializer):
         if eligible_customers:
             offer.eligible_customers.set(eligible_customers)
             
+        # The engine applies an offer only to items its targets match, so an
+        # offer saved without targets would silently discount nothing.
+        if not targets_data:
+            targets_data = [{'target_type': 'all_products'}]
+
         for target_data in targets_data:
             OfferTarget.objects.create(offer=offer, **target_data)
             

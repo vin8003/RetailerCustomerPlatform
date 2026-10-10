@@ -32,6 +32,28 @@ class TestOfferSerializer:
         assert offer.targets.count() == 1
         assert offer.targets.first().category == category
 
+    def test_create_offer_without_targets_defaults_to_all_products(self, retailer_user, retailer):
+        factory = APIRequestFactory()
+        request = factory.post('/')
+        request.user = retailer_user
+
+        data = {
+            "name": "Rs 50 off on 499+",
+            "offer_type": "cart_value",
+            "value_type": "amount",
+            "value": "50.00",
+            "min_order_value": "499.00",
+        }
+
+        serializer = OfferSerializer(data=data, context={'request': request})
+        assert serializer.is_valid(), serializer.errors
+        offer = serializer.save()
+
+        assert offer.targets.count() == 1
+        target = offer.targets.first()
+        assert target.target_type == "all_products"
+        assert target.is_excluded is False
+
     def test_update_offer_replace_targets(self, retailer_user, retailer, product):
         factory = APIRequestFactory()
         request = factory.put('/')
