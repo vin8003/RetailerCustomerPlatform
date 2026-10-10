@@ -547,3 +547,48 @@ class TestPartnerQueryBudget:
         with django_assert_num_queries(5):
             response = api_client.get(url)
         assert response.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.django_db
+class TestApiKeyScopedToPartnerRoutes:
+    """Review fix: an API key is not a credential on the app/JWT endpoints."""
+
+    def test_api_key_rejected_on_app_endpoints(self, api_client):
+        owner, profile = _make_retailer("scope_owner", "Scope Shop")
+        _key, raw = create_org_api_key(
+            organization=profile.organization,
+            name="erp",
+            scopes=["partner.org.read"],
+            created_by=owner,
+        )
+        api_client.credentials(HTTP_AUTHORIZATION=f"Api-Key {raw}")
+        for url in (
+            reverse("organization_me"),
+            reverse("get_retailer_profile"),
+        ):
+            resp = api_client.get(url)
+            assert resp.status_code in (401, 403), url
+
+    def test_api_key_still_works_on_partner_route(self, api_client):
+        owner, profile = _make_retailer("scope_owner2", "Scope Shop 2")
+        _key, raw = create_org_api_key(
+            organization=profile.organization,
+            name="erp",
+            scopes=["partner.org.read"],
+            created_by=owner,
+        )
+        api_client.credentials(HTTP_AUTHORIZATION=f"Api-Key {raw}")
+        assert api_client.get(reverse("partner_v1_org")).status_code == 200
+
+    def test_last_used_written_at_most_once_a_minute(self):
+        from retailers.api_keys import touch_api_key_last_used
+        from retailers.models import OrgApiKey
+
+        owner, profile = _make_retailer("scope_owner3", "Scope Shop 3")
+        key, _raw = create_org_api_key(
+            organization=profile.organization, name="k", scopes=[], created_by=owner
+        )
+        touch_api_key_last_used(key)
+        first = OrgApiKey.objects.get(pk=key.pk).last_used_at
+        touch_api_key_last_used(key)
+        assert OrgApiKey.objects.get(pk=key.pk).last_used_at == first
