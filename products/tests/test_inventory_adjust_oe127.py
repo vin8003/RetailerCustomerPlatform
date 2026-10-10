@@ -534,7 +534,8 @@ class TestInventoryAdjustGate:
 
         # Owner path: profile+org JOIN, select_for_update product, inventory
         # log insert, offer prefetch, and ProductDetailSerializer reads.
-        with django_assert_num_queries(20):
+        # +2: catalog module-flag check on product writes (OE-101).
+        with django_assert_num_queries(22):
             response = api_client.patch(
                 reverse("update_product", args=[product.id]),
                 {"quantity": 51},
@@ -551,3 +552,33 @@ class TestInventoryLogAdminReadonly:
         assert admin.has_add_permission(request) is False
         assert admin.has_change_permission(request) is False
         assert admin.has_delete_permission(request) is False
+
+
+@pytest.mark.django_db
+class TestGateFailsClosed:
+    def test_unparseable_batches_value_counts_as_quantity_write(self):
+        assert payload_sets_on_hand_quantity({"batches": "{not json"}) is True
+        assert payload_sets_on_hand_quantity({"batches": "oops"}) is True
+        assert payload_sets_on_hand_quantity({"batches": ""}) is False
+        assert payload_sets_on_hand_quantity({"batches": []}) is False
+
+    def test_unparseable_batches_differs_from_stored(self):
+        from products.inventory_adjust import submitted_on_hand_differs
+
+        owner, profile = _make_retailer("oe127_fc", "FC Shop")
+        product = _make_product(profile)
+        assert submitted_on_hand_differs(product, {"batches": "{not json"}) is True
+
+    def test_bulk_update_does_not_create_a_profile(self, api_client):
+        user = User.objects.create_user(
+            username="oe127_noprof", email="np@test.com", password="TestPass123!",
+            user_type="retailer", is_active=True,
+        )
+        api_client.force_authenticate(user=user)
+        resp = api_client.patch(
+            reverse("bulk_update_products"),
+            {"items": [{"id": 1, "price": "5.00"}]},
+            format="json",
+        )
+        assert resp.status_code == 404
+        assert not RetailerProfile.objects.filter(user=user).exists()
