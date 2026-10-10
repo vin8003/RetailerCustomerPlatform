@@ -284,6 +284,18 @@ class OrgApiKeyAudit(models.Model):
         return f"{self.action} {self.key_prefix} @ {self.organization_id}"
 
 
+class ImmutableAuditError(Exception):
+    """Raised when code tries to change or delete an append-only audit row."""
+
+
+class AppendOnlyQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise ImmutableAuditError('Audit rows cannot be updated')
+
+    def delete(self):
+        raise ImmutableAuditError('Audit rows cannot be deleted')
+
+
 class OrgAuditLog(models.Model):
     """
     Immutable org-scoped audit row for sensitive shop mutations (OE-99 / F-0003).
@@ -313,6 +325,8 @@ class OrgAuditLog(models.Model):
     OBJECT_CHANNEL_PRICE = 'channel_price'
     OBJECT_PRODUCT_IMAGE = 'product_image'
     OBJECT_SUPPLIER = 'supplier'
+    OBJECT_CUSTOMER_LOOKUP = 'customer_lookup'
+    OBJECT_STOCK_WRITE_OFF = 'stock_write_off'
 
     organization = models.ForeignKey(
         Organization,
@@ -349,6 +363,16 @@ class OrgAuditLog(models.Model):
             models.Index(fields=['organization', 'object_type', 'object_id']),
         ]
         ordering = ['-created_at']
+
+    objects = AppendOnlyQuerySet.as_manager()
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None and not self._state.adding:
+            raise ImmutableAuditError('Audit rows cannot be changed')
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ImmutableAuditError('Audit rows cannot be deleted')
 
     def __str__(self):
         return (
@@ -881,6 +905,7 @@ class Supplier(models.Model):
         ]
 
     def save(self, *args, **kwargs):
+        before = (self.organization_id, self.gst_number, self.payment_terms)
         if self.retailer_id:
             retailer = getattr(self, 'retailer', None)
             org_id = (
@@ -906,9 +931,16 @@ class Supplier(models.Model):
             self.payment_terms = str(self.payment_terms).strip()
         update_fields = kwargs.get('update_fields')
         if update_fields is not None:
-            kwargs['update_fields'] = list(
-                set(update_fields) | {'organization', 'gst_number', 'payment_terms'}
-            )
+            # Only add the columns this save() actually normalised, so a narrow
+            # update_fields save does not rewrite unrelated values.
+            touched = set(update_fields)
+            if self.organization_id != before[0]:
+                touched.add('organization')
+            if self.gst_number != before[1]:
+                touched.add('gst_number')
+            if self.payment_terms != before[2]:
+                touched.add('payment_terms')
+            kwargs['update_fields'] = list(touched)
         return super().save(*args, **kwargs)
 
     def __str__(self):

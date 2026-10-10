@@ -82,7 +82,9 @@ def payload_sets_on_hand_quantity(data):
         return True
     batches = _parse_batches(data)
     if batches is None:
-        return False
+        # Fail closed: a non-empty `batches` value we cannot parse is treated as a quantity
+        # write, so a payload shape this helper does not understand cannot skip the gate.
+        return data.get('batches') not in (None, '', [], {})
     return any(
         isinstance(batch, dict) and 'quantity' in batch
         for batch in batches
@@ -96,6 +98,8 @@ def submitted_on_hand_differs(product, data):
     if 'quantity' in data and _qty_differs(data['quantity'], product.quantity):
         return True
     batches = _parse_batches(data)
+    if batches is None and data.get('batches') not in (None, '', [], {}):
+        return True
     if not batches:
         return False
     batch_ids = [
@@ -146,13 +150,21 @@ def bulk_items_would_change_on_hand(items, products_by_id):
 
 
 def _as_bool(raw):
+    """Parse like DRF's BooleanField. Returns None for values it would reject."""
+    from rest_framework.fields import BooleanField
+
     if isinstance(raw, bool):
         return raw
-    if raw in (1, '1', 'true', 'True', 'TRUE'):
-        return True
-    if raw in (0, '0', 'false', 'False', 'FALSE'):
-        return False
-    return bool(raw)
+    if isinstance(raw, str):
+        raw = raw.strip().lower()
+    try:
+        if raw in BooleanField.TRUE_VALUES:
+            return True
+        if raw in BooleanField.FALSE_VALUES:
+            return False
+    except TypeError:  # unhashable value
+        return None
+    return None
 
 
 def _factor_differs(raw, current):
@@ -195,6 +207,7 @@ def submitted_pack_link_differs(product, data):
     if 'is_parent_bulk' in data and _as_bool(data['is_parent_bulk']) != bool(
         product.is_parent_bulk
     ):
+        # None (unparseable) never equals a bool, so it counts as a change.
         return True
     if 'parent_bulk_product' in data and _parent_id_differs(
         data['parent_bulk_product'], product.parent_bulk_product_id
@@ -211,7 +224,7 @@ def create_payload_sets_pack_link(data):
         return True
     if 'parent_bulk_product' in data and data['parent_bulk_product'] not in (None, ''):
         return True
-    if 'is_parent_bulk' in data and _as_bool(data['is_parent_bulk']):
+    if 'is_parent_bulk' in data and _as_bool(data['is_parent_bulk']) in (True, None):
         return True
     return False
 

@@ -514,7 +514,8 @@ class TestPackLinkRbacAndTenancy:
         parent, child = _make_parent_child(shop, category, prefix="Query")
         api_client.force_authenticate(user=owner)
 
-        with django_assert_num_queries(23):
+        # +2: cycle recheck under row lock when a parent is set.
+        with django_assert_num_queries(25):
             response = api_client.patch(
                 reverse("update_product", args=[child.id]),
                 {"conversion_factor": "0.2000"},
@@ -633,3 +634,39 @@ class TestChildSaleAdjustsParent:
         assert parent.quantity == Decimal("10.000")
         assert not Order.objects.filter(retailer=shop_a, source="pos").exists()
         assert not Order.objects.filter(retailer=shop_b, source="pos").exists()
+
+
+class TestPackLinkBooleanParsing:
+    """Review fix: parse like DRF so 'no' is not treated as true; unknown values need the permission."""
+
+    def test_drf_style_values(self):
+        from products.inventory_adjust import _as_bool
+
+        for truthy in (True, 1, "1", "true", "True", "yes", "on", "y"):
+            assert _as_bool(truthy) is True, truthy
+        for falsy in (False, 0, "0", "false", "False", "no", "off", "n"):
+            assert _as_bool(falsy) is False, falsy
+        assert _as_bool("maybe") is None
+        assert _as_bool([]) is None
+
+    def test_no_means_not_a_pack_link_on_create(self):
+        from products.inventory_adjust import create_payload_sets_pack_link
+
+        assert create_payload_sets_pack_link({"is_parent_bulk": "no"}) is False
+        assert create_payload_sets_pack_link({"is_parent_bulk": "yes"}) is True
+        assert create_payload_sets_pack_link({"is_parent_bulk": "garbage"}) is True
+
+
+@pytest.mark.django_db
+class TestCycleRecheckUnderLock:
+    def test_recheck_rejects_a_cycle_created_after_validation(self):
+        from products.serializers import lock_parent_chain_and_recheck
+
+        owner, shop = _make_retailer("oe103_cyc", "Cycle Shop")
+        category = _make_category(shop, "Cat")
+        parent, child = _make_parent_child(shop, category, prefix="Cyc")
+        # parent is later pointed at child by a concurrent request; the child -> parent
+        # update must now be refused.
+        Product.objects.filter(pk=parent.pk).update(parent_bulk_product=child)
+        with pytest.raises(DRFValidationError):
+            lock_parent_chain_and_recheck(child.pk, Product.objects.get(pk=parent.pk))
