@@ -1,8 +1,8 @@
 """
 Khata credit limit + due-days lock (OE-143 / F-0052).
 
-Evaluated on POS credit finalize. Override reuses ``orders.update``
-(no new finance / credit-override catalog code). Payment paths are
+Evaluated on POS credit finalize. Override needs ``credit.override``
+(owner and Admin role only by default). Payment paths are
 not locked.
 """
 from decimal import Decimal
@@ -14,13 +14,13 @@ from retailers.models import OrgAuditLog
 from retailers.organization import get_organization_for_user, user_has_org_permission
 
 # Reuse existing catalog code (no finance / credit-override invent).
-PERM_CREDIT_OVERRIDE = 'orders.update'
+PERM_CREDIT_OVERRIDE = 'credit.override'
 REASON_CREDIT_LIMIT = 'credit_limit'
 REASON_CREDIT_OVERDUE = 'credit_overdue'
 
 
 class CreditOverrideDenied(Exception):
-    """Caller requested a credit override without ``orders.update``."""
+    """Caller requested a credit override without ``credit.override``."""
 
 
 def is_credit_override_requested(data):

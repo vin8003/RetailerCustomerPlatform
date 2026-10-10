@@ -51,6 +51,8 @@ from products.inventory_adjust import (
     submitted_pack_link_differs,
 )
 
+from retailers.module_flags import module_required
+
 logger = logging.getLogger(__name__)
 
 
@@ -505,6 +507,7 @@ def search_products(request):
 
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('catalog')
 def create_product(request):
     """
     Create a new product for authenticated retailer
@@ -630,6 +633,7 @@ def get_product_detail(request, product_id):
 
 @api_view(['PUT', 'PATCH'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('catalog')
 def update_product(request, product_id):
     """
     Update product for authenticated retailer
@@ -749,6 +753,7 @@ def update_product(request, product_id):
 
 @api_view(['DELETE'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('catalog')
 def delete_product(request, product_id):
     """
     Delete product for authenticated retailer
@@ -791,6 +796,7 @@ def delete_product(request, product_id):
 
 @api_view(['PATCH'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('catalog')
 def bulk_update_products(request):
     """
     Update multiple products efficiently for authenticated retailer
@@ -810,18 +816,20 @@ def bulk_update_products(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        if bulk_items_set_on_hand_quantity(items):
-            try:
-                retailer = RetailerProfile.objects.select_related('organization').get(
-                    user=request.user
-                )
-            except RetailerProfile.DoesNotExist:
+        try:
+            retailer = RetailerProfile.objects.select_related('organization').get(
+                user=request.user
+            )
+        except RetailerProfile.DoesNotExist:
+            # Never create a shop profile as a side effect of a bulk edit.
+            if bulk_items_set_on_hand_quantity(items):
                 adjust_err = require_inventory_adjust(request.user)
                 if adjust_err is not None:
                     return adjust_err
-                retailer, _ = RetailerProfile.objects.get_or_create(user=request.user)
-        else:
-            retailer, _ = RetailerProfile.objects.get_or_create(user=request.user)
+            return Response(
+                {'error': 'Retailer profile not found'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
 
         product_ids = [item.get('id') for item in items if item.get('id')]
         if not product_ids:
@@ -1450,6 +1458,7 @@ def get_product_detail_public(request, retailer_id, product_id):
 
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('catalog')
 def upload_products_excel(request):
     """
     Upload products via Excel file for authenticated retailer

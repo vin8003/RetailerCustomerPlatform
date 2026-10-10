@@ -39,6 +39,8 @@ from .crm import (
 
 User = get_user_model()
 
+from retailers.module_flags import module_required
+
 logger = logging.getLogger(__name__)
 
 
@@ -1264,6 +1266,7 @@ def toggle_blacklist(request):
 
 @api_view(['PATCH'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('customers')
 def update_retailer_customer(request, customer_id):
     """
     Update retailer-specific customer mapping (nickname and notes)
@@ -1306,6 +1309,7 @@ def update_retailer_customer(request, customer_id):
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('customers')
 def get_customer_ledger(request, customer_id):
     """
     Get full ledger (Khata) for a customer
@@ -1337,6 +1341,7 @@ def get_customer_ledger(request, customer_id):
 
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('customers')
 def record_customer_payment(request):
     """
     Record a manual payment from a customer (Credit to Ledger)
@@ -1385,6 +1390,7 @@ def record_customer_payment(request):
 
 @api_view(['PATCH'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('customers')
 def update_customer_credit_limit(request, customer_id):
     """
     Update credit limit and/or credit due days for a customer.
@@ -1393,6 +1399,17 @@ def update_customer_credit_limit(request, customer_id):
         if request.user.user_type != 'retailer':
             return Response({'error': 'Only retailers can manage credit limits'}, status=status.HTTP_403_FORBIDDEN)
             
+        from retailers.organization import get_organization_for_user, user_has_org_permission
+
+        credit_org = get_organization_for_user(request.user)
+        if credit_org is None or not user_has_org_permission(
+            request.user, credit_org, 'credit.manage'
+        ):
+            return Response(
+                {'error': 'Credit limit permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         has_limit = 'credit_limit' in request.data
         has_due_days = 'credit_due_days' in request.data
         if not has_limit and not has_due_days:
@@ -1408,6 +1425,8 @@ def update_customer_credit_limit(request, customer_id):
             credit_limit = request.data.get('credit_limit')
             try:
                 credit_limit = Decimal(str(credit_limit))
+                if not credit_limit.is_finite():
+                    return Response({'error': 'Invalid credit limit'}, status=status.HTTP_400_BAD_REQUEST)
                 if credit_limit < 0:
                     return Response({'error': 'Credit limit cannot be negative'}, status=status.HTTP_400_BAD_REQUEST)
             except Exception:
