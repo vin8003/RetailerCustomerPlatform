@@ -29,7 +29,7 @@ See `retailers/permissions_catalog.py` (`PERMISSION_CATALOG_VERSION`).
 | `roles.manage` | Create / edit named roles |
 | `staff.manage` | Assign / change / revoke staff seats |
 | `api_keys.manage` | Create / list / revoke org partner API keys (OE-182) |
-| `inventory.adjust` | Hand-set on-hand quantity on product update / bulk (OE-127). Also required to change parent-child pack link fields on product create / update (OE-103) and batch `expiry_date` on product update (OE-136). Admin bootstrap includes it; cashier does not. |
+| `inventory.adjust` | Hand-set on-hand quantity on product update / bulk (OE-127). Also required to change parent-child pack link fields on product create / update (OE-103), batch `expiry_date` on product update (OE-136), and damage / expiry / spoilage write-off (OE-141). Admin bootstrap includes it; cashier does not. |
 | `orders.update` | Retailer-side order status mutations (OE-131). Also required to grant an explicit POS `credit_override` when khata limit / due-days would lock the sale (OE-143). No separate finance catalog code. |
 | `orders.read` | View orders (OE-131). Also required to export a customer’s **full** order history (`GET /api/customer/retailer/lookup/?export=1`, OE-212). Catalog has no `crm.*` / `customers.read`. Recent phone lookup (20 rows) uses the `customers` module only. |
 

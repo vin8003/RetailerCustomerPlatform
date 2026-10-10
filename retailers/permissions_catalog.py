@@ -21,7 +21,7 @@ PERMISSION_DEFINITIONS = {
     'orders.create': 'Create orders from POS and staff APIs',
     'orders.update': 'Update order status and retailer-side order mutations',
     'fulfillment.manage': 'Configure fulfillment slot capacity for shop locations',
-    'inventory.adjust': 'Hand-set on-hand quantity on product update or bulk update; change parent-child pack links on product create or update; set or change ProductBatch expiry_date on product update',
+    'inventory.adjust': 'Hand-set on-hand quantity on product update or bulk update; change parent-child pack links on product create or update; set or change ProductBatch expiry_date on product update; post damage / expiry / spoilage write-off',
     'credit.manage': 'Change a customer credit limit or credit due days',
     'credit.override': 'Complete a POS credit sale that is blocked by the credit limit or overdue lock',
 }

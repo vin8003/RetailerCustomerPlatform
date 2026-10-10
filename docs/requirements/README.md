@@ -21,6 +21,7 @@ Ticket snapshots (acceptance context, ship notes) stay in [`../tickets/`](../tic
 | [inventory-adjust-permission.md](inventory-adjust-permission.md) | OE-127 |
 | [parent-child-pack-skus.md](parent-child-pack-skus.md) | OE-103 |
 | [product-batch-expiry.md](product-batch-expiry.md) | OE-136 |
+| [damage-expiry-write-off.md](damage-expiry-write-off.md) | OE-141 |
 | [khata-credit-lock.md](khata-credit-lock.md) | OE-143 |
 | [customer-profile-order-history.md](customer-profile-order-history.md) | OE-212 |
 | [shop-rewards-otp-redeem.md](shop-rewards-otp-redeem.md) | OE-220 |

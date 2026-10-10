@@ -20,6 +20,7 @@ urlpatterns = [
     path('create/', views.create_product, name='create_product'),
     path('<int:product_id>/', views.get_product_detail, name='get_product_detail'),
     path('<int:product_id>/update/', views.update_product, name='update_product'),
+    path('<int:product_id>/write-off/', views.write_off_product, name='write_off_product'),
     path('<int:product_id>/delete/', views.delete_product, name='delete_product'),
     path('bulk-update/', views.bulk_update_products, name='bulk_update_products'),
     path('upload/', views.upload_products_excel, name='upload_products_excel'),

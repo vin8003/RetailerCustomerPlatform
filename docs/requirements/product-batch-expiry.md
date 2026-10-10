@@ -28,7 +28,7 @@ Eligible batch: `is_active`, and (`expiry_date` is null **or** `expiry_date >= t
 
 Sort: `expiry_date ASC NULLS LAST`, then `created_at ASC`.
 
-`Product.quantity` still sums all **active** batches (expired qty can remain on the product total until written off — E16 / OE-141). `Product.saleable_quantity()` / `can_order_quantity` exclude expired lots. Customer `place_order` and cart stock checks use saleable qty; a failed `reduce_quantity` aborts the order. Purchase returns pass `forbid_expired=False` so expired lots can still be sent back to the supplier.
+`Product.quantity` still sums all **active** batches (expired qty remains on the product total until written off — [OE-141](damage-expiry-write-off.md)). `Product.saleable_quantity()` / `can_order_quantity` exclude expired lots. Customer `place_order` and cart stock checks use saleable qty; a failed `reduce_quantity` aborts the order. Purchase returns pass `forbid_expired=False` so expired lots can still be sent back to the supplier.
 
 ## API
 
