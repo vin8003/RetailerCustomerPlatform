@@ -65,7 +65,9 @@ def payload_sets_on_hand_quantity(data):
         return True
     batches = _parse_batches(data)
     if batches is None:
-        return False
+        # Fail closed: a non-empty `batches` value we cannot parse is treated as a quantity
+        # write, so a payload shape this helper does not understand cannot skip the gate.
+        return data.get('batches') not in (None, '', [], {})
     return any(
         isinstance(batch, dict) and 'quantity' in batch
         for batch in batches
@@ -79,6 +81,8 @@ def submitted_on_hand_differs(product, data):
     if 'quantity' in data and _qty_differs(data['quantity'], product.quantity):
         return True
     batches = _parse_batches(data)
+    if batches is None and data.get('batches') not in (None, '', [], {}):
+        return True
     if not batches:
         return False
     batch_ids = [
