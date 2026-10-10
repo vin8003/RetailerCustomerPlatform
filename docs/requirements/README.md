@@ -29,5 +29,6 @@ Ticket snapshots (acceptance context, ship notes) stay in [`../tickets/`](../tic
 | [shop-rewards-otp-redeem.md](shop-rewards-otp-redeem.md) | OE-220 |
 | [suppliers.md](suppliers.md) | OE-100 |
 | [block-negative-stock.md](block-negative-stock.md) | OE-146 |
+| [additional-barcodes-lookup.md](additional-barcodes-lookup.md) | OE-170 |
 | [retailer-web-mobile.md](retailer-web-mobile.md) | KAN-11 |
 | [customer-retailer-city-map.md](customer-retailer-city-map.md) | KAN-69 |

@@ -18,7 +18,7 @@ from datetime import datetime
 
 from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser
-from django.db import transaction
+from django.db import DatabaseError, transaction
 from decimal import Decimal, InvalidOperation
 
 from .models import (
@@ -164,6 +164,18 @@ def log_search_telemetry(query, result_count, retailer=None, user=None):
         logger.error(f"Failed to log search telemetry: {str(e)}")
 
 
+def annotate_additional_barcodes_text(queryset):
+    """Cast JSON additional_barcodes so search can use the same icontains as barcode."""
+    return queryset.annotate(
+        additional_barcodes_text=Cast('additional_barcodes', TextField()),
+    )
+
+
+def product_barcode_q(query):
+    """Primary barcode and additional_barcodes share icontains match (OE-170)."""
+    return Q(barcode__icontains=query) | Q(additional_barcodes_text__icontains=query)
+
+
 def smart_product_search(queryset, search_query):
     """
     Hybrid Smart Search optimized for grocery data.
@@ -190,6 +202,9 @@ def smart_product_search(queryset, search_query):
     if not query:
         return queryset
 
+    queryset = annotate_additional_barcodes_text(queryset)
+    barcode_q = product_barcode_q(query)
+
     # STEP 2 & 3: Primary Search (FTS) & Exact Match Boost
     # Define Weighted Search Vector
     vector = (
@@ -207,7 +222,7 @@ def smart_product_search(queryset, search_query):
         rank_score=SearchRank(vector, search_query_obj),
         trigram_score=TrigramSimilarity('name', query),
         is_barcode=Case(
-            When(barcode__icontains=query, then=Value(1)),
+            When(barcode_q, then=Value(1)),
             default=Value(0),
             output_field=IntegerField(),
         ),
@@ -247,25 +262,30 @@ def smart_product_search(queryset, search_query):
         'name'
     )
 
-    # STEP 6: Fallback logic if FTS/Trigram yields nothing
-    if not qs_smart.exists():
-        # Fallback to original icontains logic
-        return queryset.annotate(
-            in_stock=Case(
-                When(quantity__gt=0, then=Value(1)),
-                default=Value(0),
-                output_field=IntegerField(),
-            )
-        ).filter(
-            Q(name__icontains=query) |
-            Q(description__icontains=query) |
-            Q(tags__icontains=query) |
-            Q(category__name__icontains=query) |
-            Q(product_group__icontains=query) |
-            Q(barcode__icontains=query)
-        ).order_by('-in_stock', '-discount_percentage', 'name')
-    
-    return qs_smart
+    # STEP 6: Fallback logic if FTS/Trigram yields nothing (or is unavailable)
+    try:
+        # A savepoint keeps a failing FTS/trigram query from aborting an outer transaction
+        # (PostgreSQL would reject the fallback query otherwise).
+        with transaction.atomic():
+            if qs_smart.exists():
+                return qs_smart
+    except DatabaseError:
+        logger.warning('Smart product search failed; using the basic search', exc_info=True)
+
+    return queryset.annotate(
+        in_stock=Case(
+            When(quantity__gt=0, then=Value(1)),
+            default=Value(0),
+            output_field=IntegerField(),
+        )
+    ).filter(
+        Q(name__icontains=query) |
+        Q(description__icontains=query) |
+        Q(tags__icontains=query) |
+        Q(category__name__icontains=query) |
+        Q(product_group__icontains=query) |
+        barcode_q
+    ).order_by('-in_stock', '-discount_percentage', 'name')
 
 
 class ProductPagination(PageNumberPagination):

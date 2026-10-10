@@ -53,6 +53,7 @@ They are **not** automatically durable knowledge. Many pages are builder briefs,
 | [OE-220.md](OE-220.md) | durable | [shop-rewards-otp-redeem](../requirements/shop-rewards-otp-redeem.md) |
 | [OE-100.md](OE-100.md) | durable | [suppliers](../requirements/suppliers.md) |
 | [OE-146.md](OE-146.md) | durable | [block-negative-stock](../requirements/block-negative-stock.md) |
+| [OE-170.md](OE-170.md) | durable | [additional-barcodes-lookup](../requirements/additional-barcodes-lookup.md) |
 
 Skipped (no Confluence page at migration time): KAN-48, KAN-49, KAN-52, KAN-57, KAN-63.
 
