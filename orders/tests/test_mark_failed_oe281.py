@@ -223,7 +223,7 @@ class TestMarkFailedInboxAction:
         order = _delivery_ofd_order(customer, profile, product)
 
         api_client.force_authenticate(user=owner)
-        with django_assert_num_queries(41):
+        with django_assert_num_queries(43):  # +2: transaction savepoint
             resp = api_client.post(
                 reverse("retailer_inbox_action", args=[order.id]),
                 {
@@ -477,3 +477,27 @@ class TestDeliveredPathUnchanged:
         assert ok.status_code == status.HTTP_200_OK
         order.refresh_from_db()
         assert order.status == "delivered"
+
+
+@pytest.mark.django_db
+class TestMarkFailedAtomic:
+    def test_failure_midway_rolls_back_status(self, api_client):
+        owner, profile = _make_retailer("oe281_atomic", "Atomic Shop")
+        customer = _make_customer("oe281_atomic_cust")
+        product = _product(profile)
+        order = _delivery_ofd_order(customer, profile, product)
+        api_client.force_authenticate(user=owner)
+
+        with patch(
+            "orders.inventory.restore_order_inventory", side_effect=RuntimeError("stock down")
+        ):
+            try:
+                api_client.post(
+                    reverse("retailer_inbox_action", args=[order.id]),
+                    {"action": "mark_failed", "reason": "customer unreachable"},
+                    format="json",
+                )
+            except RuntimeError:
+                pass
+        order.refresh_from_db()
+        assert order.status == "out_for_delivery"
