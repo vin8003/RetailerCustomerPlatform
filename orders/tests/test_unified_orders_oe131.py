@@ -472,7 +472,7 @@ class TestUnifiedOrdersQueryBudget:
         product = _product(profile)
         order = _pending_order(customer, profile, product)
         api_client.force_authenticate(user=owner)
-        with django_assert_num_queries(32):
+        with django_assert_num_queries(34):  # +2: atomic status update savepoint
             resp = api_client.patch(
                 reverse("update_order_status", args=[order.id]),
                 {"status": "confirmed"},
