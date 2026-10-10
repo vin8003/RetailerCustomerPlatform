@@ -5,7 +5,7 @@ Deny-by-default: only codes listed here may be stored on a role.
 Org owner always has every permission (implicit admin) until they delegate.
 """
 
-PERMISSION_CATALOG_VERSION = 5
+PERMISSION_CATALOG_VERSION = 6
 
 # code -> human description
 PERMISSION_DEFINITIONS = {
@@ -20,6 +20,7 @@ PERMISSION_DEFINITIONS = {
     'orders.read': 'View orders for this organization',
     'orders.create': 'Create orders from POS and staff APIs',
     'orders.update': 'Update order status and retailer-side order mutations',
+    'fulfillment.manage': 'Configure fulfillment slot capacity for shop locations',
 }
 
 ALL_PERMISSION_CODES = frozenset(PERMISSION_DEFINITIONS.keys())
