@@ -658,6 +658,12 @@ class Product(models.Model):
                 qs = self.batches.filter(is_active=True, quantity__gt=0)
                 if forbid_expired:
                     qs = qs.filter(ProductBatch.saleable_q())
+                from django.db import connection
+
+                if connection.in_atomic_block:
+                    # Lock the candidate batches so concurrent sales cannot both subtract
+                    # from the same in-memory quantity (lost update).
+                    qs = qs.select_for_update()
                 batches = list(qs.order_by(*ProductBatch.fifo_sale_order()))
 
                 if not allow_negative:
@@ -692,11 +698,16 @@ class Product(models.Model):
                             touched.append(latest_batch)
                         remaining = 0
 
+                if remaining > 0:
+                    # No eligible batch could absorb the rest: change nothing, so product and
+                    # batch totals stay in step.
+                    return False
+
                 if touched:
                     ProductBatch.objects.bulk_update(touched, ['quantity'])
 
                 self.sync_inventory_from_batches()
-                return remaining <= 0
+                return True
         else:
             if allow_negative or self.quantity >= quantity:
                 self.quantity -= quantity
