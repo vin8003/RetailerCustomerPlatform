@@ -42,6 +42,9 @@ from .organization import (
     ensure_org_rbac_bootstrap,
     user_is_org_staff_admin,
     user_has_org_permission,
+    can_grant_permissions,
+    is_org_owner,
+    get_active_staff_membership,
     user_belongs_to_organization,
     would_remove_last_owner,
     record_staff_role_audit,
@@ -1098,6 +1101,14 @@ def organization_roles(request, org_id):
         if not ser.is_valid():
             return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
 
+        if not can_grant_permissions(
+            request.user, org, ser.validated_data.get('permissions') or []
+        ):
+            return Response(
+                {'error': 'You cannot grant permissions you do not hold'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         slug = ser.validated_data['slug']
         if OrgRole.objects.filter(organization=org, slug=slug).exists():
             return Response(
@@ -1166,6 +1177,21 @@ def organization_role_detail(request, org_id, role_id):
         ser = OrgRoleUpdateSerializer(data=request.data, partial=True)
         if not ser.is_valid():
             return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        if not is_org_owner(request.user, org):
+            own = get_active_staff_membership(request.user, org)
+            if own is not None and own.role_id == role.id:
+                return Response(
+                    {'error': 'You cannot edit the role you hold'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            if 'permissions' in ser.validated_data:
+                added = set(ser.validated_data['permissions']) - set(role.permissions or [])
+                if not can_grant_permissions(request.user, org, added):
+                    return Response(
+                        {'error': 'You cannot grant permissions you do not hold'},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
 
         # System admin role must retain full catalog (owner bootstrap)
         if role.slug == ROLE_SLUG_ADMIN and 'permissions' in ser.validated_data:
@@ -1236,6 +1262,9 @@ def organization_staff(request, org_id):
                 .filter(organization=org)
                 .order_by('id')
             )
+            if not user_has_org_permission(request.user, org, 'staff.manage'):
+                # Members without staff.manage see only their own seat (no other staff emails).
+                memberships = memberships.filter(user=request.user)
             paginator = OrgStaffPagination()
             page = paginator.paginate_queryset(memberships, request)
             if page is not None:
@@ -1268,21 +1297,31 @@ def organization_staff(request, org_id):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        if not can_grant_permissions(request.user, org, role.permissions):
+            return Response(
+                {'error': 'You cannot assign a role with permissions you do not hold'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         with transaction.atomic():
             user_id = ser.validated_data.get('user_id')
             if user_id:
-                try:
-                    staff_user = User.objects.get(pk=user_id)
-                except User.DoesNotExist:
-                    return Response(
-                        {'error': 'User not found'},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-                if staff_user.user_type != 'retailer':
-                    return Response(
-                        {'error': 'Staff users must be retailer-type AUTH_USER_MODEL rows'},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
+                cannot_assign = Response(
+                    {'error': 'This user cannot be assigned'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+                staff_user = User.objects.filter(pk=user_id).first()
+                if (
+                    staff_user is None
+                    or staff_user.user_type != 'retailer'
+                    or staff_user.id == request.user.id
+                    or staff_user.owned_organizations.exclude(pk=org.pk).exists()
+                    or RetailerProfile.objects.filter(user=staff_user)
+                    .exclude(organization=org)
+                    .exists()
+                ):
+                    # One message for every refusal so ids cannot be probed.
+                    return cannot_assign
             else:
                 username = ser.validated_data['username']
                 if User.objects.filter(username=username).exists():
@@ -1397,6 +1436,20 @@ def organization_staff_detail(request, org_id, membership_id):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        if not is_org_owner(request.user, org):
+            if membership.user_id == request.user.id:
+                return Response(
+                    {'error': 'You cannot change your own membership'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            if not can_grant_permissions(
+                request.user, org, membership.role.permissions
+            ):
+                return Response(
+                    {'error': 'You cannot modify a member with permissions you do not hold'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
         if request.method == 'DELETE':
             if would_remove_last_owner(
                 org, target_user=membership.user, deactivate=True
@@ -1436,6 +1489,12 @@ def organization_staff_detail(request, org_id, membership_id):
                     {'error': 'Role not found in this organization'},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+
+        if not can_grant_permissions(request.user, org, new_role.permissions):
+            return Response(
+                {'error': 'You cannot assign a role with permissions you do not hold'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         deactivate = (
             'is_active' in ser.validated_data
@@ -1776,12 +1835,15 @@ def organization_module_flags(request, org_id):
         if not update_ser.is_valid():
             return Response(update_ser.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        summary_before = module_flags_dict_from_row(row)
         incoming = update_ser.validated_data['flags']
-        merged = dict(summary_before)
-        merged.update(incoming)
-        row.flags = merged
-        row.save(update_fields=['flags', 'updated_at'])
+        with transaction.atomic():
+            # Lock the row so two concurrent PATCHes merge instead of overwriting each other.
+            row = OrgModuleFlags.objects.select_for_update().get(pk=row.pk)
+            summary_before = module_flags_dict_from_row(row)
+            merged = dict(summary_before)
+            merged.update(incoming)
+            row.flags = merged
+            row.save(update_fields=['flags', 'updated_at'])
 
         record_org_audit_event(
             organization=org,

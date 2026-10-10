@@ -8,10 +8,22 @@ GPS, POD, or separate delivery app.
 """
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from orders.models import Order
+
+
+_INDIAN_MOBILE = re.compile(r'^(?:\+?91)?[6-9]\d{9}$')
+
+
+def normalize_courier_phone(raw) -> str | None:
+    """Return a 10-digit Indian mobile number, or None when it is not valid."""
+    digits = re.sub(r'[\s\-()]', '', str(raw or ''))
+    if not _INDIAN_MOBILE.match(digits):
+        return None
+    return digits[-10:]
 
 
 def validate_courier_assign(*, delivery_mode: str, new_status: str, name, phone) -> None:
@@ -27,6 +39,8 @@ def validate_courier_assign(*, delivery_mode: str, new_status: str, name, phone)
         raise ValueError('delivery_person_name is required when dispatching a delivery order')
     if not (phone and str(phone).strip()):
         raise ValueError('delivery_person_phone is required when dispatching a delivery order')
+    if normalize_courier_phone(phone) is None:
+        raise ValueError('delivery_person_phone must be a valid 10-digit mobile number')
 
 
 def upsert_order_delivery(
@@ -41,7 +55,8 @@ def upsert_order_delivery(
 
     defaults = {
         'delivery_person_name': str(delivery_person_name).strip(),
-        'delivery_person_phone': str(delivery_person_phone).strip(),
+        'delivery_person_phone': normalize_courier_phone(delivery_person_phone)
+        or str(delivery_person_phone).strip(),
         'delivery_status': 'assigned',
     }
     if estimated_delivery_time is not None:
