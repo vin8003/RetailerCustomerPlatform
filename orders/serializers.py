@@ -306,9 +306,20 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'cancelled_at', 'unread_messages_count',
             'has_customer_feedback', 'has_retailer_rating', 'feedback',
             'preparation_time_minutes', 'estimated_ready_time', 'expected_processing_start', 'customer_average_rating', 'source',
-            'retailer_delivery_charge', 'retailer_free_delivery_threshold'
+            'retailer_delivery_charge', 'retailer_free_delivery_threshold',
+            'pickup_code', 'pickup_ready_at',
         ]
     
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # The pickup code is the customer's proof of collection; the shop that verifies it
+        # must not be able to read it from the API.
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if getattr(user, 'id', None) is None or user.id != instance.customer_id:
+            data.pop('pickup_code', None)
+        return data
+
     def get_customer_name(self, obj):
         """Get unified customer name based on priority"""
         from retailers.models import RetailerCustomerMapping
@@ -720,6 +731,12 @@ class OrderCreateSerializer(serializers.Serializer):
                 )
             
             order = Order.objects.create(**order_data)
+
+            if validated_data['delivery_mode'] == 'pickup':
+                from .pickup import generate_pickup_code
+
+                order.pickup_code = generate_pickup_code()
+                order.save(update_fields=['pickup_code'])
             
             # Create Offer Redemptions
             from offers.models import OfferRedemption
@@ -828,7 +845,28 @@ class OrderStatusUpdateSerializer(serializers.Serializer):
     status = serializers.ChoiceField(choices=Order.ORDER_STATUS_CHOICES)
     notes = serializers.CharField(required=False, allow_blank=True)
     preparation_time_minutes = serializers.IntegerField(required=False, min_value=0, allow_null=True)
+    pickup_code = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    customer_id = serializers.IntegerField(required=False, allow_null=True)
     
+    def validate(self, attrs):
+        order = self.context['order']
+        new_status = attrs.get('status', order.status)
+        if (
+            new_status == 'delivered'
+            and order.delivery_mode == 'pickup'
+        ):
+            from .pickup import verify_pickup_collection
+
+            try:
+                verify_pickup_collection(
+                    order,
+                    attrs.get('pickup_code'),
+                    customer_id=attrs.get('customer_id'),
+                )
+            except ValueError as exc:
+                raise serializers.ValidationError({'pickup_code': [str(exc)]}) from exc
+        return attrs
+
     def validate_status(self, value):
         """Validate status transition"""
         order = self.context['order']
@@ -855,6 +893,12 @@ class OrderStatusUpdateSerializer(serializers.Serializer):
             from django.utils import timezone
             instance.estimated_ready_time = timezone.now() + timedelta(minutes=preparation_time_minutes)
             instance.save()
+
+        if new_status == 'packed' and instance.delivery_mode == 'pickup' and not instance.pickup_ready_at:
+            from django.utils import timezone
+
+            instance.pickup_ready_at = timezone.now()
+            instance.save(update_fields=['pickup_ready_at'])
         
         # Refresh status to observe concurrent updates before final transition guard
         instance.refresh_from_db(fields=['status'])
@@ -1216,6 +1260,8 @@ class OrderInboxActionSerializer(serializers.Serializer):
     preparation_time_minutes = serializers.IntegerField(
         required=False, min_value=0, allow_null=True
     )
+    pickup_code = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    customer_id = serializers.IntegerField(required=False, allow_null=True)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1229,9 +1275,28 @@ class OrderInboxActionSerializer(serializers.Serializer):
 
         action = attrs['action']
         try:
-            attrs['target_status'] = validate_inbox_action(order.status, action)
+            attrs['target_status'] = validate_inbox_action(
+                order.status,
+                action,
+                delivery_mode=order.delivery_mode,
+            )
         except ValueError as exc:
             raise serializers.ValidationError({'action': [str(exc)]}) from exc
+
+        if (
+            action == 'mark_delivered'
+            and order.delivery_mode == 'pickup'
+        ):
+            from .pickup import verify_pickup_collection
+
+            try:
+                verify_pickup_collection(
+                    order,
+                    attrs.get('pickup_code'),
+                    customer_id=attrs.get('customer_id'),
+                )
+            except ValueError as exc:
+                raise serializers.ValidationError({'pickup_code': [str(exc)]}) from exc
         return attrs
 
     def save(self, **kwargs):
@@ -1242,13 +1307,19 @@ class OrderInboxActionSerializer(serializers.Serializer):
         notes = self.validated_data.get('notes', '')
         preparation_time_minutes = self.validated_data.get('preparation_time_minutes')
 
+        status_data = {
+            'status': target_status,
+            'notes': notes,
+            'preparation_time_minutes': preparation_time_minutes,
+        }
+        if 'pickup_code' in self.validated_data:
+            status_data['pickup_code'] = self.validated_data.get('pickup_code')
+        if 'customer_id' in self.validated_data:
+            status_data['customer_id'] = self.validated_data.get('customer_id')
+
         status_serializer = OrderStatusUpdateSerializer(
             order,
-            data={
-                'status': target_status,
-                'notes': notes,
-                'preparation_time_minutes': preparation_time_minutes,
-            },
+            data=status_data,
             context={'order': order, 'user': user},
         )
         status_serializer.is_valid(raise_exception=True)

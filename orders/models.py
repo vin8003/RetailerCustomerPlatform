@@ -39,6 +39,7 @@ class Order(models.Model):
     CANCELLED_BY_CHOICES = [
         ('customer', 'Customer'),
         ('retailer', 'Retailer'),
+        ('system', 'System'),
     ]
 
     PAYMENT_STATUS_CHOICES = [
@@ -143,6 +144,10 @@ class Order(models.Model):
     payment_status = models.CharField(max_length=50, choices=PAYMENT_STATUS_CHOICES, default='pending_payment')
     payment_edit_count = models.IntegerField(default=0)
     is_payment_locked = models.BooleanField(default=False)
+
+    # Shop pickup (OE-152) — verification + uncollected window anchor on unified Order
+    pickup_code = models.CharField(max_length=6, blank=True, default='')
+    pickup_ready_at = models.DateTimeField(null=True, blank=True)
     
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
