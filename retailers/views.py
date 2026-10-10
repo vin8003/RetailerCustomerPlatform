@@ -1822,12 +1822,15 @@ def organization_module_flags(request, org_id):
         if not update_ser.is_valid():
             return Response(update_ser.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        summary_before = module_flags_dict_from_row(row)
         incoming = update_ser.validated_data['flags']
-        merged = dict(summary_before)
-        merged.update(incoming)
-        row.flags = merged
-        row.save(update_fields=['flags', 'updated_at'])
+        with transaction.atomic():
+            # Lock the row so two concurrent PATCHes merge instead of overwriting each other.
+            row = OrgModuleFlags.objects.select_for_update().get(pk=row.pk)
+            summary_before = module_flags_dict_from_row(row)
+            merged = dict(summary_before)
+            merged.update(incoming)
+            row.flags = merged
+            row.save(update_fields=['flags', 'updated_at'])
 
         record_org_audit_event(
             organization=org,
