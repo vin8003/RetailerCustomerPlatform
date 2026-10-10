@@ -264,10 +264,13 @@ def smart_product_search(queryset, search_query):
 
     # STEP 6: Fallback logic if FTS/Trigram yields nothing (or is unavailable)
     try:
-        if qs_smart.exists():
-            return qs_smart
+        # A savepoint keeps a failing FTS/trigram query from aborting an outer transaction
+        # (PostgreSQL would reject the fallback query otherwise).
+        with transaction.atomic():
+            if qs_smart.exists():
+                return qs_smart
     except DatabaseError:
-        pass
+        logger.warning('Smart product search failed; using the basic search', exc_info=True)
 
     return queryset.annotate(
         in_stock=Case(
