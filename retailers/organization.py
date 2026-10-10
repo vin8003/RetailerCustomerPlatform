@@ -234,6 +234,16 @@ def user_is_org_staff_admin(user, organization):
     return user_has_org_permission(user, organization, 'staff.manage')
 
 
+def can_grant_permissions(user, organization, codes):
+    """
+    A caller may only hand out permissions they hold themselves.
+    The org owner holds the full catalog, so is never limited.
+    """
+    if not user or organization is None:
+        return False
+    return set(codes or []).issubset(user_permission_codes(user, organization))
+
+
 def is_org_owner(user, organization):
     return bool(
         user
