@@ -128,9 +128,17 @@ def create_pos_order(request):
     }
     """
     try:
-        retailer = RetailerProfile.objects.get(user=request.user)
-    except RetailerProfile.DoesNotExist:
-        return Response({'error': 'Only retailers can use POS.'}, status=status.HTTP_403_FORBIDDEN)
+        from orders.access import resolve_pos_retailer_location
+
+        retailer, access_err = resolve_pos_retailer_location(
+            request.user,
+            request.data.get('location_id'),
+        )
+        if access_err is not None:
+            return access_err
+    except (RetailerProfile.DoesNotExist, ValueError, TypeError):
+        # Bad location_id or no shop profile; real errors should surface, not look like a 403.
+        return Response({'error': 'Invalid location or not a retailer.'}, status=status.HTTP_403_FORBIDDEN)
 
     data = request.data
     items_data = data.get('items', [])
@@ -433,9 +441,14 @@ def create_pos_order(request):
                         reason=f'POS Sale: Order #{order.order_number}'
                     )
 
+        from orders.access import order_detail_queryset
+
         response_data = {
             'message': 'POS Order created successfully!',
-            'order': OrderDetailSerializer(order, context={'request': request}).data
+            'order': OrderDetailSerializer(
+                order_detail_queryset().get(pk=order.pk),
+                context={'request': request},
+            ).data
         }
         return Response(response_data, status=status.HTTP_201_CREATED)
 

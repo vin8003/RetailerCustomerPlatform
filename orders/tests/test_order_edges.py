@@ -26,7 +26,7 @@ class TestOrderViewEdges:
             payment_mode='upi'
         )
         
-        with patch('orders.views.get_object_or_404') as mock_get:
+        with patch('orders.views.get_order_for_retailer') as mock_get:
             mock_get.side_effect = Exception("Payment failure")
             url = reverse('verify_payment', kwargs={'order_id': order.id})
             # Action is required to avoid 400
