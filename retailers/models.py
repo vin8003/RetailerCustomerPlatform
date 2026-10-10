@@ -178,6 +178,104 @@ class OrgStaffRoleAudit(models.Model):
         return f"{self.action} {self.target_user_id} @ {self.organization_id}"
 
 
+class OrgApiKey(models.Model):
+    """
+    Org-scoped partner API key (OE-182 / F-0006).
+
+    Only the hashed secret is stored. Revocation sets is_active=False and is
+    enforced on the next authenticated request (live DB check).
+    """
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='api_keys',
+    )
+    name = models.CharField(max_length=100)
+    prefix = models.CharField(
+        max_length=16,
+        unique=True,
+        help_text='Public key prefix used for lookup (not secret).',
+    )
+    key_hash = models.CharField(max_length=64)
+    scopes = models.JSONField(
+        default=list,
+        help_text='List of partner API scope codes granted to this key.',
+    )
+    is_active = models.BooleanField(default=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='org_api_keys_created',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'org_api_key'
+        indexes = [
+            models.Index(fields=['organization', 'is_active']),
+            models.Index(fields=['prefix']),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.prefix})"
+
+    def has_scope(self, scope_code):
+        return scope_code in (self.scopes or [])
+
+
+class OrgApiKeyAudit(models.Model):
+    """
+    Audit row for every partner API key grant / revoke / change (OE-182).
+    """
+    ACTION_GRANT = 'grant'
+    ACTION_REVOKE = 'revoke'
+    ACTION_CHANGE = 'change'
+    ACTION_CHOICES = [
+        (ACTION_GRANT, 'Grant'),
+        (ACTION_REVOKE, 'Revoke'),
+        (ACTION_CHANGE, 'Change'),
+    ]
+
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='api_key_audits',
+    )
+    api_key = models.ForeignKey(
+        OrgApiKey,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='audits',
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='org_api_key_audits_made',
+    )
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    key_prefix = models.CharField(max_length=16, blank=True)
+    scopes_before = models.JSONField(default=list, blank=True)
+    scopes_after = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'org_api_key_audit'
+        indexes = [
+            models.Index(fields=['organization', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.action} {self.key_prefix} @ {self.organization_id}"
+
+
 class RetailerProfile(models.Model):
     """
     Extended profile for retailer users (operational shop / location record).

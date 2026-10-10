@@ -39,6 +39,22 @@ urlpatterns = [
         views.organization_staff_detail,
         name='organization_staff_detail',
     ),
+    # Partner API keys (OE-182 / F-0006) — JWT management; partners call /api/v1/partner/
+    path(
+        'org/<int:org_id>/api-scopes/',
+        views.organization_api_scope_catalog,
+        name='organization_api_scope_catalog',
+    ),
+    path(
+        'org/<int:org_id>/api-keys/',
+        views.organization_api_keys,
+        name='organization_api_keys',
+    ),
+    path(
+        'org/<int:org_id>/api-keys/<int:key_id>/',
+        views.organization_api_key_detail,
+        name='organization_api_key_detail',
+    ),
 
     # Public retailer endpoints
     path('', views.list_retailers, name='list_retailers'),

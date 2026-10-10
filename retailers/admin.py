@@ -3,7 +3,7 @@ from .models import (
     Organization, RetailerProfile, RetailerOperatingHours, RetailerCategory,
     RetailerCategoryMapping, RetailerReview, RetailerRewardConfig,
     RetailerBlacklist, Supplier, RetailerCustomerMapping, CustomerLedger,
-    OrgRole, OrgStaffMembership, OrgStaffRoleAudit,
+    OrgRole, OrgStaffMembership, OrgStaffRoleAudit, OrgApiKey, OrgApiKeyAudit,
 )
 
 
@@ -46,6 +46,33 @@ class OrgStaffRoleAuditAdmin(admin.ModelAdmin):
     readonly_fields = [
         'organization', 'actor', 'target_user', 'action',
         'from_role', 'to_role', 'created_at',
+    ]
+
+
+@admin.register(OrgApiKey)
+class OrgApiKeyAdmin(admin.ModelAdmin):
+    list_display = [
+        'name', 'prefix', 'organization', 'is_active',
+        'created_at', 'revoked_at', 'last_used_at',
+    ]
+    list_filter = ['is_active']
+    search_fields = ['name', 'prefix', 'organization__name']
+    readonly_fields = [
+        'prefix', 'key_hash', 'created_at', 'updated_at',
+        'last_used_at', 'revoked_at',
+    ]
+
+
+@admin.register(OrgApiKeyAudit)
+class OrgApiKeyAuditAdmin(admin.ModelAdmin):
+    list_display = [
+        'organization', 'action', 'key_prefix', 'actor', 'created_at',
+    ]
+    list_filter = ['action']
+    search_fields = ['organization__name', 'key_prefix', 'actor__username']
+    readonly_fields = [
+        'organization', 'api_key', 'actor', 'action', 'key_prefix',
+        'scopes_before', 'scopes_after', 'created_at',
     ]
 
 
