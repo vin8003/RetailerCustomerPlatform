@@ -155,9 +155,8 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # REST Framework settings
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        # JWT first for retailer/customer apps; API-key for partner /api/v1/partner/*
+        # Partner API keys are NOT a default: /api/v1/partner/* sets OrgApiKeyAuthentication per view.
         'rest_framework_simplejwt.authentication.JWTAuthentication',
-        'common.authentication.OrgApiKeyAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
@@ -179,6 +178,7 @@ REST_FRAMEWORK = {
         'login': '5/minute',
         'otp': '3/minute',
         'geo_estimate': '20/hour',
+        'fulfillment_slots': '120/hour',
         # Partner org API keys (OE-182 / F-0006)
         'api_key': '600/hour',
     }
@@ -424,13 +424,13 @@ if 'test' in sys.argv or 'pytest' in sys.modules:
     REST_FRAMEWORK = {
         'DEFAULT_AUTHENTICATION_CLASSES': [
             'rest_framework_simplejwt.authentication.JWTAuthentication',
-            'common.authentication.OrgApiKeyAuthentication',
         ],
         'DEFAULT_PERMISSION_CLASSES': [
             'rest_framework.permissions.IsAuthenticated',
         ],
         'DEFAULT_THROTTLE_CLASSES': [],
         'DEFAULT_THROTTLE_RATES': {
+            'fulfillment_slots': '10000/minute',
             'login': '10000/minute',
             'otp': '10000/minute',
             'anon': '10000/minute',
