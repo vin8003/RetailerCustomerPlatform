@@ -614,7 +614,8 @@ class TestSupplierQueryBudget:
     def test_create_query_count(self, api_client, django_assert_num_queries):
         owner, _shop = _make_retailer("sup_q_create", "Query Create Shop")
         api_client.force_authenticate(user=owner)
-        with django_assert_num_queries(8):
+        # +2: supplier-management permission check (org + role lookup).
+        with django_assert_num_queries(10):
             resp = api_client.post(
                 reverse("erp-supplier-list"),
                 {"company_name": "Budget Vendor", "gst_number": GSTIN_A},
@@ -657,3 +658,19 @@ class TestSupplierWritePermission:
         supplier = Supplier.objects.create(retailer=shop, company_name="Fresh Vendor")
         api_client.force_authenticate(user=owner)
         assert api_client.delete(reverse("erp-supplier-detail", args=[supplier.id])).status_code == status.HTTP_204_NO_CONTENT
+
+
+@pytest.mark.django_db
+class TestSupplierSaveUpdateFields:
+    def test_narrow_update_fields_does_not_rewrite_other_columns(self):
+        owner, shop = _make_retailer("sv_owner", "SV Shop")
+        supplier = Supplier.objects.create(
+            retailer=shop, company_name="SV Vendor", gst_number=GSTIN_A, payment_terms="Net 30"
+        )
+        stale = Supplier.objects.get(pk=supplier.pk)
+        Supplier.objects.filter(pk=supplier.pk).update(payment_terms="Net 7")
+        stale.is_active = False
+        stale.save(update_fields=["is_active"])
+        supplier.refresh_from_db()
+        assert supplier.is_active is False
+        assert supplier.payment_terms == "Net 7"
