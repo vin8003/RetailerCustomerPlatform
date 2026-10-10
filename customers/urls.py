@@ -32,6 +32,7 @@ urlpatterns = [
     
     # Retailer Customer Management
     path('retailer/list/', views.get_retailer_customers, name='get_retailer_customers'),
+    path('retailer/lookup/', views.lookup_retailer_customer, name='lookup_retailer_customer'),
     path('retailer/details/<int:customer_id>/', views.get_customer_details_for_retailer, name='get_customer_details_for_retailer'),
     path('retailer/update/<int:customer_id>/', views.update_retailer_customer, name='update_retailer_customer'),
     path('retailer/blacklist/toggle/', views.toggle_blacklist, name='toggle_blacklist'),

@@ -11,7 +11,7 @@ Open **Customers** to see:
 - Credit balance (if any)
 - Notes or flags (e.g. blacklist)
 
-Search by name or phone when billing at POS or reviewing accounts.
+Search by name or phone when billing at POS or reviewing accounts. A phone lookup shows the same person and their recent counter and app orders together. Full history export is limited to roles that can read orders.
 
 ## Adding customers
 
@@ -57,7 +57,7 @@ Payments happen **offline** (cash/UPI to you) — OrderEasy tracks the ledger, n
 
 From a customer profile you can see:
 
-- Order history
+- Order history (POS and app on one list)
 - Credit ledger entries
 - Contact info
 - Nickname (how staff know them)

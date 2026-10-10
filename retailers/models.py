@@ -322,6 +322,7 @@ class OrgAuditLog(models.Model):
     OBJECT_MODULE_FLAGS = 'module_flags'
     OBJECT_NOTIFICATION_CONFIG = 'notification_config'
     OBJECT_CREDIT_OVERRIDE = 'credit_override'
+    OBJECT_CUSTOMER_LOOKUP = 'customer_lookup'
 
     organization = models.ForeignKey(
         Organization,
