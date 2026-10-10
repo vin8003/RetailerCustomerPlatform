@@ -143,13 +143,21 @@ def bulk_items_would_change_on_hand(items, products_by_id):
 
 
 def _as_bool(raw):
+    """Parse like DRF's BooleanField. Returns None for values it would reject."""
+    from rest_framework.fields import BooleanField
+
     if isinstance(raw, bool):
         return raw
-    if raw in (1, '1', 'true', 'True', 'TRUE'):
-        return True
-    if raw in (0, '0', 'false', 'False', 'FALSE'):
-        return False
-    return bool(raw)
+    if isinstance(raw, str):
+        raw = raw.strip().lower()
+    try:
+        if raw in BooleanField.TRUE_VALUES:
+            return True
+        if raw in BooleanField.FALSE_VALUES:
+            return False
+    except TypeError:  # unhashable value
+        return None
+    return None
 
 
 def _factor_differs(raw, current):
@@ -192,6 +200,7 @@ def submitted_pack_link_differs(product, data):
     if 'is_parent_bulk' in data and _as_bool(data['is_parent_bulk']) != bool(
         product.is_parent_bulk
     ):
+        # None (unparseable) never equals a bool, so it counts as a change.
         return True
     if 'parent_bulk_product' in data and _parent_id_differs(
         data['parent_bulk_product'], product.parent_bulk_product_id
@@ -208,7 +217,7 @@ def create_payload_sets_pack_link(data):
         return True
     if 'parent_bulk_product' in data and data['parent_bulk_product'] not in (None, ''):
         return True
-    if 'is_parent_bulk' in data and _as_bool(data['is_parent_bulk']):
+    if 'is_parent_bulk' in data and _as_bool(data['is_parent_bulk']) in (True, None):
         return True
     return False
 
