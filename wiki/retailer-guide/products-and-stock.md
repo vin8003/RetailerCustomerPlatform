@@ -65,7 +65,7 @@ Some items sell both wholesale and retail:
 - **Parent:** Carton of 24 bottles
 - **Child:** Single bottle
 
-Linking them keeps stock in sync when you break a case.
+Linking them keeps stock in sync when you break a case. Selling the child reduces parent stock by the conversion factor (it cannot be zero). Cashiers cannot change the factor or the parent link; owners and staff with inventory-adjust permission can.
 
 ## Adding many products at once
 

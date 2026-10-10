@@ -13,6 +13,58 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
+def parent_bulk_cycle_exists(child_pk, parent_product):
+    """True when parent_bulk_product would loop back to child_pk or itself."""
+    if parent_product is None:
+        return False
+
+    if child_pk is not None and parent_product.pk == child_pk:
+        return True
+    seen = {parent_product.pk}
+    if child_pk is not None:
+        seen.add(child_pk)
+    ancestor_id = parent_product.parent_bulk_product_id
+    while ancestor_id is not None:
+        if ancestor_id in seen:
+            return True
+        seen.add(ancestor_id)
+        ancestor_id = (
+            Product.objects.filter(pk=ancestor_id)
+            .values_list('parent_bulk_product_id', flat=True)
+            .first()
+        )
+    return False
+
+
+
+def lock_parent_chain_and_recheck(child_pk, parent_product):
+    """
+    Re-run the cycle check under row locks on the parent chain so two concurrent updates
+    (A under B, B under A) cannot both pass. Locks only apply inside a transaction.
+    """
+    from django.db import connection
+
+    if parent_product is None:
+        return
+    chain, seen, current = [], set(), parent_product.pk
+    while current is not None and current not in seen:
+        seen.add(current)
+        chain.append(current)
+        current = (
+            Product.objects.filter(pk=current)
+            .values_list('parent_bulk_product_id', flat=True)
+            .first()
+        )
+    if connection.in_atomic_block:
+        list(Product.objects.select_for_update().filter(pk__in=chain).order_by('pk'))
+    fresh_parent = Product.objects.get(pk=parent_product.pk)
+    if parent_bulk_cycle_exists(child_pk, fresh_parent):
+        raise serializers.ValidationError(
+            {'parent_bulk_product': 'Parent bulk product pointers cannot form a cycle.'}
+        )
+
+
 class ProductCategorySerializer(serializers.ModelSerializer):
     """
     Serializer for product categories
@@ -642,6 +694,13 @@ class ProductCreateSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError("A product with this barcode already exists.")
         return value
 
+    def validate_conversion_factor(self, value):
+        if value is not None and value <= 0:
+            raise serializers.ValidationError(
+                "Conversion factor must be greater than zero."
+            )
+        return value
+
     def validate(self, data):
         """Validate product data"""
         if data.get('original_price') and data.get('price'):
@@ -665,6 +724,10 @@ class ProductCreateSerializer(serializers.ModelSerializer):
             retailer = self.context.get('retailer')
             if retailer and parent_product.retailer != retailer:
                 raise serializers.ValidationError("Parent bulk product must belong to the same retailer.")
+            if parent_bulk_cycle_exists(None, parent_product):
+                raise serializers.ValidationError(
+                    "Parent bulk product pointers cannot form a cycle."
+                )
         
         quantity = data.get('quantity', 0)
         min_order_qty = data.get('minimum_order_quantity', 1)
@@ -719,9 +782,18 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError("A product with this barcode already exists.")
         return value
 
+    def validate_conversion_factor(self, value):
+        if value is not None and value <= 0:
+            raise serializers.ValidationError(
+                "Conversion factor must be greater than zero."
+            )
+        return value
+
     def update(self, instance, validated_data):
         """Handle product update and sync batches if provided"""
         import json
+        if validated_data.get('parent_bulk_product') is not None:
+            lock_parent_chain_and_recheck(instance.pk, validated_data['parent_bulk_product'])
         batches_data = self.initial_data.get('batches')
         link_barcode = self.initial_data.get('link_barcode') # Flag for automated batch creation
         
@@ -856,6 +928,11 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
                 retailer = self.instance.retailer
             if retailer and parent_product.retailer != retailer:
                 raise serializers.ValidationError("Parent bulk product must belong to the same retailer.")
+            child_pk = self.instance.pk if self.instance else None
+            if parent_bulk_cycle_exists(child_pk, parent_product):
+                raise serializers.ValidationError(
+                    "Parent bulk product pointers cannot form a cycle."
+                )
             
             # User requested that existing stock should not block linking,
             # and the child stock should simply be calculated from the parent.
