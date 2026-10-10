@@ -900,9 +900,9 @@ def _parse_expiry_window_days(raw):
             {'error': 'days must be a non-negative integer'},
             status=status.HTTP_400_BAD_REQUEST,
         )
-    if days < 0:
+    if days < 0 or days > 365:
         return None, Response(
-            {'error': 'days must be a non-negative integer'},
+            {'error': 'days must be between 0 and 365'},
             status=status.HTTP_400_BAD_REQUEST,
         )
     return days, None
@@ -921,13 +921,38 @@ def get_expiring_batches(request):
             {'error': 'Only retailers can view expiring batches.'},
             status=status.HTTP_403_FORBIDDEN,
         )
+    from orders.access import staff_served_location_ids
+
     org = get_organization_for_user(request.user)
-    shop = resolve_supplier_home_retailer(request.user)
-    if org is None or shop is None:
+    if org is None:
         return Response(
             {'error': 'Shop not found or access denied'},
             status=status.HTTP_404_NOT_FOUND,
         )
+    # Stock quantities are inventory data: need order or inventory access.
+    if not (
+        user_has_org_permission(request.user, org, 'orders.read')
+        or user_has_org_permission(request.user, org, 'inventory.adjust')
+    ):
+        return Response(
+            {'error': 'Inventory access required'}, status=status.HTTP_403_FORBIDDEN
+        )
+
+    served = staff_served_location_ids(request.user, org)
+    location_id = request.query_params.get('location_id')
+    if location_id not in (None, ''):
+        try:
+            location_id = int(location_id)
+        except (TypeError, ValueError):
+            return Response(
+                {'error': 'location_id must be an integer'}, status=status.HTTP_400_BAD_REQUEST
+            )
+        if location_id not in served:
+            return Response(
+                {'error': 'Location not found or access denied'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        served = [location_id]
 
     days, invalid = _parse_expiry_window_days(request.query_params.get('days'))
     if invalid is not None:
@@ -936,7 +961,7 @@ def get_expiring_batches(request):
     cutoff = timezone.localdate() + timedelta(days=days)
     batches = (
         ProductBatch.objects.filter(
-            retailer=shop,
+            retailer_id__in=served,
             retailer__organization=org,
             is_active=True,
             quantity__gt=0,
@@ -946,7 +971,12 @@ def get_expiring_batches(request):
         .select_related('product')
         .order_by('expiry_date', 'id')
     )
-    return Response(ExpiringBatchListSerializer(batches, many=True).data)
+    include_costs = user_has_org_permission(request.user, org, 'purchasing.costs.read')
+    return Response(
+        ExpiringBatchListSerializer(
+            batches, many=True, context={'include_costs': include_costs}
+        ).data
+    )
 
 
 @api_view(['GET'])

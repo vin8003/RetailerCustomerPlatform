@@ -113,16 +113,27 @@ class ProductBatchSerializer(serializers.ModelSerializer):
 
 
 class ExpiringBatchListSerializer(ProductBatchSerializer):
-    """Shop expiry list (OE-210). Same batch fields plus product identity."""
+    """Shop expiry list (OE-210). Batch fields plus product identity; no cost data by default."""
 
     product_id = serializers.IntegerField(read_only=True)
     product_name = serializers.CharField(source='product.name', read_only=True)
 
     class Meta(ProductBatchSerializer.Meta):
-        fields = list(ProductBatchSerializer.Meta.fields) + [
+        fields = [
+            name for name in ProductBatchSerializer.Meta.fields if name != 'purchase_price'
+        ] + [
             'product_id',
             'product_name',
         ]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Purchase price is margin information; only callers with purchasing.costs.read get it.
+        if self.context.get('include_costs'):
+            data['purchase_price'] = (
+                str(instance.purchase_price) if instance.purchase_price is not None else None
+            )
+        return data
 
 
 class ProductBrandSerializer(serializers.ModelSerializer):
