@@ -625,8 +625,7 @@ class TestSupplierQueryBudget:
     def test_create_query_count(self, api_client, django_assert_num_queries):
         owner, _shop = _make_retailer("sup_q_create", "Query Create Shop")
         api_client.force_authenticate(user=owner)
-        # +2: supplier-management permission check (org + role lookup).
-        with django_assert_num_queries(8):
+        with django_assert_num_queries(6):
             resp = api_client.post(
                 reverse("erp-supplier-list"),
                 {"company_name": "Budget Vendor", "gst_number": GSTIN_A},
@@ -732,6 +731,14 @@ class TestSupplierOrgDenormReads:
         )
         Supplier.objects.create(
             retailer=shop, company_name="Vendor HQ", gst_number=GSTIN_A
+        )
+        # Branch staff manage suppliers through a role (purchasing.suppliers), not by profile alone.
+        branch_role = OrgRole.objects.create(
+            organization=org, slug="branch_buyer", name="Branch buyer",
+            permissions=["purchasing.suppliers"], is_system=False,
+        )
+        OrgStaffMembership.objects.create(
+            organization=org, user=branch_user, role=branch_role, is_active=True
         )
 
         api_client.force_authenticate(user=branch_user)
