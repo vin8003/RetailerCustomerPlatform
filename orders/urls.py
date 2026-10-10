@@ -4,6 +4,12 @@ from . import views
 urlpatterns = [
     # Order management
     path('place/', views.place_order, name='place_order'),
+    path('inbox/', views.list_retailer_inbox, name='list_retailer_inbox'),
+    path(
+        'inbox/<int:order_id>/actions/',
+        views.retailer_inbox_action,
+        name='retailer_inbox_action',
+    ),
     path('current/', views.get_current_orders, name='get_current_orders'),
     path('history/', views.get_order_history, name='get_order_history'),
     path('<int:order_id>/', views.get_order_detail, name='get_order_detail'),
