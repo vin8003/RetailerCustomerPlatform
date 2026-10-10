@@ -27,6 +27,9 @@ ERR_OTP_INVALID = 'Invalid or expired OTP'
 ERR_OTP_USED = 'This OTP has already been used'
 ERR_NO_MOBILE = 'Customer has no registered mobile'
 ERR_SEND_FAILED = 'Failed to send OTP'
+ERR_TOO_MANY_CODES = 'Too many codes requested. Try again in an hour.'
+REDEEM_OTP_MAX_ISSUES_PER_WINDOW = 3
+REDEEM_OTP_WINDOW_SECONDS = 3600
 ERR_NO_POINTS = 'No redeemable points'
 ERR_ORDER_CLOSED = 'Order is not open for redeem'
 ERR_ALREADY = 'Points already redeemed on this order'
@@ -168,11 +171,19 @@ def issue_redeem_otp(customer, retailer):
     phone = (getattr(customer, 'phone_number', None) or '').strip()
     if not phone:
         return None, ERR_NO_MOBILE
+    window_start = timezone.now() - timedelta(seconds=REDEEM_OTP_WINDOW_SECONDS)
+    issued_recently = LoyaltyRedeemOTP.objects.filter(
+        customer=customer, retailer=retailer, created_at__gte=window_start
+    ).count()
+    if issued_recently >= REDEEM_OTP_MAX_ISSUES_PER_WINDOW:
+        # Re-issuing resets the wrong-attempt counter, so cap how many codes can be sent.
+        return None, ERR_TOO_MANY_CODES
     otp_code, _secret = generate_otp()
     expires_at = timezone.now() + timedelta(seconds=settings.OTP_EXPIRY_TIME)
+    # Invalidate (do not delete) earlier codes so the issue history stays countable.
     LoyaltyRedeemOTP.objects.filter(
         customer=customer, retailer=retailer, is_used=False
-    ).delete()
+    ).update(is_used=True)
     row = LoyaltyRedeemOTP.objects.create(
         customer=customer,
         retailer=retailer,
@@ -181,6 +192,7 @@ def issue_redeem_otp(customer, retailer):
     )
     sent = send_sms_otp(phone, otp_code)
     if not sent and not settings.DEBUG:
+        # A code that never reached the customer should not count against the limit.
         row.delete()
         return None, ERR_SEND_FAILED
     return row, None
@@ -242,7 +254,9 @@ def apply_pending_order_redeem(order, otp_code=None, requested_points=None):
             customer=locked.customer,
             retailer=locked.retailer,
         )
-        total_before = locked.subtotal + locked.delivery_fee - locked.discount_amount
+        # Base the discount on the order's actual total (tax, packing and other charges
+        # included) instead of rebuilding it from a subset of components.
+        total_before = old_total
         points, discount = redeem_points_and_discount(
             total_before, config, loyalty.points, requested=requested
         )

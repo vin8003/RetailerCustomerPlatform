@@ -2,6 +2,7 @@ from rest_framework import status, permissions
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle, AnonRateThrottle
+from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from django.contrib.auth import authenticate
@@ -36,17 +37,26 @@ class OrgAwareTokenRefreshView(TokenRefreshView):
         if refresh_value:
             try:
                 token = RefreshToken(refresh_value)
-                user = User.objects.filter(pk=token.get('user_id')).first()
-                if user is not None:
-                    from retailers.organization import organization_is_session_blocked
-                    if organization_is_session_blocked(user):
-                        return Response(
-                            {'error': 'Organization is disabled'},
-                            status=status.HTTP_403_FORBIDDEN,
-                        )
-            except Exception:
-                # Invalid refresh is handled by the parent view.
-                pass
+            except TokenError:
+                # An invalid or expired refresh token is rejected by the parent view.
+                token = None
+            if token is not None:
+                try:
+                    user = User.objects.filter(pk=token.get('user_id')).first()
+                    if user is not None:
+                        from retailers.organization import organization_is_session_blocked
+                        if organization_is_session_blocked(user):
+                            return Response(
+                                {'error': 'Organization is disabled'},
+                                status=status.HTTP_403_FORBIDDEN,
+                            )
+                except Exception:
+                    # Fail closed: if the tenant check itself breaks, do not mint a token.
+                    logger.exception('Organization check failed during token refresh')
+                    return Response(
+                        {'error': 'Could not verify organization status'},
+                        status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    )
         return super().post(request, *args, **kwargs)
 
 
