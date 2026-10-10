@@ -770,24 +770,25 @@ def write_off_product(request, product_id):
             status=status.HTTP_403_FORBIDDEN,
         )
 
-    try:
-        retailer = RetailerProfile.objects.select_related('organization').get(
-            user=request.user
-        )
-    except RetailerProfile.DoesNotExist:
-        adjust_err = require_inventory_adjust(request.user)
-        if adjust_err is not None:
-            return adjust_err
-        return Response(
-            {'error': 'Retailer profile not found'},
-            status=status.HTTP_404_NOT_FOUND,
-        )
+    from orders.access import staff_served_location_ids
+    from retailers.organization import get_organization_for_user
 
-    adjust_err = require_inventory_adjust(
-        request.user, organization=retailer.organization
-    )
+    org = get_organization_for_user(request.user)
+    adjust_err = require_inventory_adjust(request.user, organization=org)
     if adjust_err is not None:
         return adjust_err
+
+    # The shop is taken from the product, limited to the locations this user serves, so staff
+    # without their own shop profile can write off stock too.
+    served_ids = staff_served_location_ids(request.user, org)
+    target = (
+        Product.objects.filter(pk=product_id, retailer_id__in=served_ids)
+        .select_related('retailer')
+        .first()
+    )
+    if target is None:
+        return Response({'error': 'Product not found'}, status=status.HTTP_404_NOT_FOUND)
+    retailer = target.retailer
 
     data = request.data if isinstance(request.data, dict) else {}
     quantity = parse_write_off_quantity(data.get('quantity'))
@@ -814,6 +815,25 @@ def write_off_product(request, product_id):
         )
     except WriteOffError as exc:
         return Response({'error': exc.message}, status=exc.status_code)
+
+    from retailers.audit_log import record_org_audit_event
+    from retailers.models import OrgAuditLog
+
+    record_org_audit_event(
+        organization=org,
+        actor=request.user,
+        action=OrgAuditLog.ACTION_UPDATE,
+        object_type=OrgAuditLog.OBJECT_STOCK_WRITE_OFF,
+        object_id=log.id,
+        location=retailer,
+        summary_before={'product_id': log.product_id, 'quantity': str(log.previous_quantity)},
+        summary_after={
+            'quantity': str(log.new_quantity),
+            'written_off': str(log.quantity_change),
+            'reason': log.reason,
+            'batch_id': log.batch_id,
+        },
+    )
 
     return Response(
         {
