@@ -12,6 +12,11 @@ urlpatterns = [
     path('erp/verify-pos-customer/', api_erp_views.verify_pos_customer, name='verify_pos_customer'),
     path('erp/search-pos-customers/', api_erp_views.search_pos_customers, name='search_pos_customers'),
     path('erp/inventory-ledger/', api_erp_views.get_inventory_ledger, name='get_inventory_ledger'),
+    path(
+        'erp/products/<int:product_id>/last-supplier-costs/',
+        api_erp_views.sku_last_supplier_costs,
+        name='erp-sku-last-supplier-costs',
+    ),
     path('erp/daily-sales-summary/', api_erp_views.get_daily_sales_summary, name='get_daily_sales_summary'),
     path('erp/dashboard/summary/', api_erp_views.erp_dashboard_summary, name='erp_dashboard_summary'),
     # Retailer product management
