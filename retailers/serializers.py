@@ -3,7 +3,7 @@ from django.contrib.auth import get_user_model
 from .models import (
     Organization, RetailerProfile, RetailerOperatingHours, RetailerCategory,
     RetailerCategoryMapping, RetailerReview, RetailerRewardConfig,
-    Supplier, OrgRole, OrgStaffMembership, OrgApiKey,
+    Supplier, OrgRole, OrgStaffMembership, OrgApiKey, OrgAuditLog,
 )
 from .permissions_catalog import (
     validate_permission_codes,
@@ -216,6 +216,25 @@ class OrgApiKeyUpdateSerializer(serializers.Serializer):
                 f'Unknown API scope codes: {unknown}'
             )
         return known
+
+
+class OrgAuditLogSerializer(serializers.ModelSerializer):
+    """Read-only audit log row for staff with ``audit.read``."""
+    actor_username = serializers.SerializerMethodField()
+
+    class Meta:
+        model = OrgAuditLog
+        fields = [
+            'id', 'organization', 'location', 'actor', 'actor_username',
+            'action', 'object_type', 'object_id',
+            'summary_before', 'summary_after', 'created_at',
+        ]
+        read_only_fields = fields
+
+    def get_actor_username(self, obj):
+        if obj.actor_id is None:
+            return None
+        return obj.actor.get_username()
 
 
 class PartnerOrganizationSerializer(serializers.ModelSerializer):
