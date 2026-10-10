@@ -90,6 +90,7 @@ def ensure_org_rbac_bootstrap(organization):
     if (
         admin_role is not None
         and ROLE_SLUG_CASHIER in system_roles
+        and (system_roles[ROLE_SLUG_CASHIER].permissions or [])
         and set(admin_role.permissions or []) == set(ALL_PERMISSION_CODES)
         and OrgStaffMembership.objects.filter(
             organization=organization,
@@ -122,6 +123,11 @@ def ensure_org_rbac_bootstrap(organization):
                 if sorted(role.permissions or []) != desired:
                     role.permissions = desired
                     role.save(update_fields=['permissions', 'updated_at'])
+            if role.slug == ROLE_SLUG_CASHIER and not (role.permissions or []):
+                # Roles created before orders.* existed have an empty list; give the
+                # system cashier its default order access. Use a custom role for "no access".
+                role.permissions = list(spec['permissions'])
+                role.save(update_fields=['permissions', 'updated_at'])
             roles_by_slug[role.slug] = role
 
         admin_role = roles_by_slug[ROLE_SLUG_ADMIN]
