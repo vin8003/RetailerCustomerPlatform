@@ -23,6 +23,8 @@ PERMISSION_DEFINITIONS = {
     'fulfillment.manage': 'Configure fulfillment slot capacity for shop locations',
     'inventory.adjust': 'Hand-set on-hand quantity on product update or bulk update; change parent-child pack links on product create or update; set or change ProductBatch expiry_date on product update; post damage / expiry / spoilage write-off',
     'catalog.price': 'Set or clear Product.app_price (owned-app list). Store price stays on existing product update. Echoing the current app_price does not require this permission.',
+    'credit.manage': 'Change a customer credit limit or credit due days',
+    'credit.override': 'Complete a POS credit sale that is blocked by the credit limit or overdue lock',
 }
 
 ALL_PERMISSION_CODES = frozenset(PERMISSION_DEFINITIONS.keys())
@@ -41,7 +43,9 @@ BOOTSTRAP_ROLES = (
     {
         'slug': ROLE_SLUG_CASHIER,
         'name': 'Cashier',
-        'permissions': [],
+        # Order access (OE-131) is required for POS and the inbox; without it every
+        # existing cashier would be locked out when the orders permissions ship.
+        'permissions': ['orders.create', 'orders.read'],
         'is_system': True,
     },
 )
