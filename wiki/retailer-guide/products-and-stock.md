@@ -52,6 +52,7 @@ For items bought at different costs or expiry dates:
 - Each **batch** has its own quantity, purchase price, and optional expiry date
 - Sales consume stock FIFO (earliest expiry first; batches without expiry stay valid and sell after dated lots)
 - Expired batches cannot be sold. Cashiers cannot set expiry; owners and staff with inventory-adjust permission can
+- Owners and staff can list this shop’s on-hand batches that expire within a chosen number of days (default 30), including expired lots still on the shelf
 - Owners (and staff with inventory-adjust) can **write off** damage, spoilage, or expired lots so the qty leaves on-hand. An expiry write-off only works on a batch that is already expired. The product ledger can filter those rows by reason (`damage`, `expiry`, `spoilage`)
 - Useful for groceries with expiry or varying wholesale rates
 

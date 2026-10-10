@@ -41,4 +41,4 @@ Echoing the current expiry (including null) does not require the perm. Cashiers 
 
 ## Not in this change
 
-LIFO or MRP selection engines, org-level FIFO/expired policy flags, `mfg_date`, receiving/POS picker UI, `StockMovement` documents, reservation-hold redesign, E16 expiry reports, live `*.ordereasy.win`.
+LIFO or MRP selection engines, org-level FIFO/expired policy flags, `mfg_date`, receiving/POS picker UI, `StockMovement` documents, reservation-hold redesign, full E16 MIS. Shop expiry **list** read is [expiry-batch-list.md](expiry-batch-list.md) (OE-210). Live `*.ordereasy.win`.
