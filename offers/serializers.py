@@ -60,5 +60,10 @@ class OfferSerializer(serializers.ModelSerializer):
                instance.targets.all().delete()
                for target_data in targets_data:
                    OfferTarget.objects.create(offer=instance, **target_data)
+
+        # Offers saved before targets defaulted to all products have none and
+        # never apply; give them the same default when they are edited.
+        if not instance.targets.exists():
+            OfferTarget.objects.create(offer=instance, target_type='all_products')
                    
         return instance

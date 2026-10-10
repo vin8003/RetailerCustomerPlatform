@@ -54,6 +54,20 @@ class TestOfferSerializer:
         assert target.target_type == "all_products"
         assert target.is_excluded is False
 
+    def test_update_offer_without_targets_gets_all_products(self, retailer_user, retailer):
+        offer = Offer.objects.create(retailer=retailer, name="Old offer", offer_type="cart_value", value_type="amount", value="50.00")
+        assert offer.targets.count() == 0
+
+        factory = APIRequestFactory()
+        request = factory.patch('/')
+        request.user = retailer_user
+
+        serializer = OfferSerializer(offer, data={"min_order_value": "499.00"}, partial=True, context={'request': request})
+        assert serializer.is_valid(), serializer.errors
+        updated = serializer.save()
+
+        assert list(updated.targets.values_list('target_type', flat=True)) == ["all_products"]
+
     def test_update_offer_replace_targets(self, retailer_user, retailer, product):
         factory = APIRequestFactory()
         request = factory.put('/')
