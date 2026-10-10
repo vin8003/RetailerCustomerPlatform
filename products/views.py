@@ -45,6 +45,8 @@ from products.inventory_adjust import (
     submitted_on_hand_differs,
 )
 
+from retailers.module_flags import module_required
+
 logger = logging.getLogger(__name__)
 
 
@@ -499,6 +501,7 @@ def search_products(request):
 
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('catalog')
 def create_product(request):
     """
     Create a new product for authenticated retailer
@@ -615,6 +618,7 @@ def get_product_detail(request, product_id):
 
 @api_view(['PUT', 'PATCH'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('catalog')
 def update_product(request, product_id):
     """
     Update product for authenticated retailer
@@ -717,6 +721,7 @@ def update_product(request, product_id):
 
 @api_view(['DELETE'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('catalog')
 def delete_product(request, product_id):
     """
     Delete product for authenticated retailer
@@ -759,6 +764,7 @@ def delete_product(request, product_id):
 
 @api_view(['PATCH'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('catalog')
 def bulk_update_products(request):
     """
     Update multiple products efficiently for authenticated retailer
@@ -1418,6 +1424,7 @@ def get_product_detail_public(request, retailer_id, product_id):
 
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('catalog')
 def upload_products_excel(request):
     """
     Upload products via Excel file for authenticated retailer
