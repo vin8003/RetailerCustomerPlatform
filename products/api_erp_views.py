@@ -266,8 +266,9 @@ def create_pos_order(request):
         )
         if access_err is not None:
             return access_err
-    except Exception:
-        return Response({'error': 'Only retailers can use POS.'}, status=status.HTTP_403_FORBIDDEN)
+    except (RetailerProfile.DoesNotExist, ValueError, TypeError):
+        # Bad location_id or no shop profile; real errors should surface, not look like a 403.
+        return Response({'error': 'Invalid location or not a retailer.'}, status=status.HTTP_403_FORBIDDEN)
 
     data = request.data
     items_data = data.get('items', [])

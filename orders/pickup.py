@@ -11,14 +11,24 @@ import secrets
 from typing import TYPE_CHECKING
 
 from django.conf import settings
+from django.core.cache import cache
+from django.db import transaction
 from django.utils import timezone
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from authentication.models import User
     from orders.models import Order
 
-# Reuse OTP length convention from auth settings.
-DEFAULT_PICKUP_CODE_LENGTH = getattr(settings, 'OTP_LENGTH', 6)
+# Own setting so changing the OTP policy does not silently change pickup codes.
+DEFAULT_PICKUP_CODE_LENGTH = getattr(settings, 'PICKUP_CODE_LENGTH', 6)
+
+# Failed collection attempts per order before the shop must wait.
+PICKUP_MAX_FAILED_ATTEMPTS = 5
+PICKUP_LOCKOUT_SECONDS = 15 * 60
 
 # Statuses where a packed pickup order is awaiting customer collection.
 UNCOLLECTED_PICKUP_STATUSES = frozenset({'packed'})
@@ -54,9 +64,19 @@ def verify_pickup_collection(
     if not pickup_code or not str(pickup_code).strip():
         raise ValueError('pickup_code is required to complete shop pickup collection')
 
+    attempts_key = f'pickup_verify_failures:{order.pk}'
+    if cache.get(attempts_key, 0) >= PICKUP_MAX_FAILED_ATTEMPTS:
+        raise ValueError('Too many wrong codes. Try again in a few minutes.')
+
     stored = order.pickup_code or ''
     if not stored or not secrets.compare_digest(str(stored), str(pickup_code).strip()):
+        try:
+            cache.add(attempts_key, 0, PICKUP_LOCKOUT_SECONDS)
+            cache.incr(attempts_key)
+        except ValueError:
+            cache.set(attempts_key, 1, PICKUP_LOCKOUT_SECONDS)
         raise ValueError('Invalid pickup verification code')
+    cache.delete(attempts_key)
 
     if customer_id is not None and order.customer_id is not None:
         if int(customer_id) != int(order.customer_id):
@@ -102,16 +122,26 @@ def expire_uncollected_pickup_orders(*, now=None, retailer_id=None, actor=None):
             if now < deadline:
                 continue
 
-            previous_status = order.status
-            reason = (
-                f'Uncollected shop pickup expired after {policy_hours} hours '
-                f'(order #{order.order_number})'
-            )
-            order.update_status('cancelled', actor)
-            order.cancellation_reason = reason
-            order.cancelled_by = 'system'
-            order.save(update_fields=['cancellation_reason', 'cancelled_by'])
-            restore_order_inventory(order, actor, reason=reason)
+            try:
+                with transaction.atomic():
+                    # Lock and re-check so two overlapping runs cannot both expire (and
+                    # both restore stock for) the same order.
+                    locked = Order.objects.select_for_update().get(pk=order.pk)
+                    if locked.status not in UNCOLLECTED_PICKUP_STATUSES:
+                        continue
+                    previous_status = locked.status
+                    reason = (
+                        f'Uncollected shop pickup expired after {policy_hours} hours '
+                        f'(order #{locked.order_number})'
+                    )
+                    locked.update_status('cancelled', actor)
+                    locked.cancellation_reason = reason
+                    locked.cancelled_by = 'system'
+                    locked.save(update_fields=['cancellation_reason', 'cancelled_by'])
+                    restore_order_inventory(order, actor, reason=reason)
+            except Exception:
+                logger.exception('Could not expire pickup order %s', order.pk)
+                continue
 
             expired.append(
                 {

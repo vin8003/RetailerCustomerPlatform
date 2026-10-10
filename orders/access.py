@@ -187,6 +187,13 @@ def resolve_pos_retailer_location(user, location_id=None):
         return None, err
 
     if location_id is not None:
+        try:
+            location_id = int(location_id)
+        except (TypeError, ValueError):
+            return None, Response(
+                {'error': 'location_id must be an integer'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         retailer = locations.filter(id=location_id).first()
         if retailer is None:
             return None, Response(
