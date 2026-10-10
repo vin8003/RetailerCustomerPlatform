@@ -7,4 +7,4 @@ A credit bill must show **remaining credit balance** on that screen, not only th
 
 API already exposes `credit_limit` and `current_balance` on retailer–customer mapping. Remaining is limit minus used — **verify field math in code**, do not guess.
 
-See also [../07-KEY-FLOWS/credit-khata.md](../07-KEY-FLOWS/credit-khata.md).
+See also [../07-KEY-FLOWS/credit-khata.md](../07-KEY-FLOWS/credit-khata.md) and [khata-credit-lock.md](khata-credit-lock.md).

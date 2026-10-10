@@ -45,6 +45,7 @@ They are **not** automatically durable knowledge. Many pages are builder briefs,
 | [OE-127.md](OE-127.md) | durable | [inventory-adjust-permission](../requirements/inventory-adjust-permission.md) |
 | [OE-103.md](OE-103.md) | durable | [parent-child-pack-skus](../requirements/parent-child-pack-skus.md) |
 | [OE-136.md](OE-136.md) | durable | [product-batch-expiry](../requirements/product-batch-expiry.md) |
+| [OE-143.md](OE-143.md) | durable | [khata-credit-lock](../requirements/khata-credit-lock.md) |
 
 Skipped (no Confluence page at migration time): KAN-48, KAN-49, KAN-52, KAN-57, KAN-63.
 
