@@ -14,6 +14,7 @@ MODULE_DEFINITIONS = {
     'orders': 'Order processing and fulfillment',
     'customers': 'Customer CRM and credit (khata)',
     'rewards': 'Loyalty and referral rewards configuration',
+    'notifications': 'Order status notifications and customer alerts',
 }
 
 ALL_MODULE_CODES = frozenset(MODULE_DEFINITIONS.keys())
