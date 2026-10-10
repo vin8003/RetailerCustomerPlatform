@@ -91,3 +91,26 @@ def require_module_enabled(user, module_code):
     if not is_module_enabled(org, module_code):
         return None, module_disabled_response(module_code)
     return org, None
+
+
+def module_required(module_code):
+    """
+    View decorator (place directly above ``def``, below ``@api_view``): retailer
+    callers get the standard 403 ``module_disabled`` response when the module is
+    off for their organization. Other user types pass through unchanged.
+    """
+    import functools
+
+    def decorator(view):
+        @functools.wraps(view)
+        def wrapper(request, *args, **kwargs):
+            user = getattr(request, 'user', None)
+            if user is not None and getattr(user, 'user_type', None) == 'retailer':
+                _org, err = require_module_enabled(user, module_code)
+                if err is not None:
+                    return err
+            return view(request, *args, **kwargs)
+
+        return wrapper
+
+    return decorator

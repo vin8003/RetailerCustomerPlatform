@@ -145,7 +145,7 @@ class TestAssignCourierDispatch:
         eta = timezone.now() + timezone.timedelta(hours=1)
         staff = _make_staff(org, "oe275_dispatch_staff", ["orders.read", "orders.update"])
         api_client.force_authenticate(user=staff)
-        with django_assert_num_queries(45):
+        with django_assert_num_queries(47):  # +2: atomic status update savepoint
             resp = api_client.post(
                 reverse("retailer_inbox_action", args=[order.id]),
                 {
@@ -344,3 +344,32 @@ class TestAssignCourierCrossTenant:
         order.refresh_from_db()
         assert order.status == "packed"
         assert not OrderDelivery.objects.filter(order=order).exists()
+
+
+class TestCourierPhoneValidation:
+    def test_normalises_common_formats(self):
+        from orders.delivery import normalize_courier_phone
+
+        assert normalize_courier_phone("98765 43210") == "9876543210"
+        assert normalize_courier_phone("+91 98765-43210") == "9876543210"
+        assert normalize_courier_phone("919876543210") == "9876543210"
+
+    def test_rejects_bad_numbers(self):
+        from orders.delivery import normalize_courier_phone
+
+        for bad in ("abc", "12345", "5876543210", "98765432101", "9876;ext=1", ""):
+            assert normalize_courier_phone(bad) is None, bad
+
+    def test_validate_courier_assign_raises(self):
+        import pytest as _pytest
+        from orders.delivery import validate_courier_assign
+
+        with _pytest.raises(ValueError):
+            validate_courier_assign(
+                delivery_mode="delivery", new_status="out_for_delivery",
+                name="Ravi", phone="not-a-phone",
+            )
+        validate_courier_assign(
+            delivery_mode="delivery", new_status="out_for_delivery",
+            name="Ravi", phone="+91 98765 43210",
+        )
