@@ -145,7 +145,7 @@ class TestAssignCourierDispatch:
         eta = timezone.now() + timezone.timedelta(hours=1)
         staff = _make_staff(org, "oe275_dispatch_staff", ["orders.read", "orders.update"])
         api_client.force_authenticate(user=staff)
-        with django_assert_num_queries(45):
+        with django_assert_num_queries(47):  # +2: atomic status update savepoint
             resp = api_client.post(
                 reverse("retailer_inbox_action", args=[order.id]),
                 {
