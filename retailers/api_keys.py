@@ -59,9 +59,12 @@ def create_org_api_key(*, organization, name, scopes, created_by=None):
 
     with transaction.atomic():
         raw, prefix, key_hash = generate_raw_api_key()
-        # Extremely unlikely collision; regenerate once.
-        if OrgApiKey.objects.filter(prefix=prefix).exists():
+        for _attempt in range(5):
+            if not OrgApiKey.objects.filter(prefix=prefix).exists():
+                break
             raw, prefix, key_hash = generate_raw_api_key()
+        else:
+            raise RuntimeError('Could not allocate a unique API key prefix')
 
         api_key = OrgApiKey.objects.create(
             organization=organization,
@@ -171,8 +174,17 @@ def authenticate_api_key(raw_key: str):
     return api_key
 
 
+LAST_USED_WRITE_INTERVAL_SECONDS = 60
+
+
 def touch_api_key_last_used(api_key):
-    OrgApiKey.objects.filter(pk=api_key.pk).update(last_used_at=timezone.now())
+    """Record last use at most once a minute per key (avoids a write per request)."""
+    now = timezone.now()
+    previous = api_key.last_used_at
+    if previous is not None and (now - previous).total_seconds() < LAST_USED_WRITE_INTERVAL_SECONDS:
+        return
+    OrgApiKey.objects.filter(pk=api_key.pk).update(last_used_at=now)
+    api_key.last_used_at = now
 
 
 def api_key_has_scope(api_key, scope_code: str) -> bool:

@@ -155,9 +155,8 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # REST Framework settings
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        # JWT first for retailer/customer apps; API-key for partner /api/v1/partner/*
+        # Partner API keys are NOT a default: /api/v1/partner/* sets OrgApiKeyAuthentication per view.
         'rest_framework_simplejwt.authentication.JWTAuthentication',
-        'common.authentication.OrgApiKeyAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
@@ -424,7 +423,6 @@ if 'test' in sys.argv or 'pytest' in sys.modules:
     REST_FRAMEWORK = {
         'DEFAULT_AUTHENTICATION_CLASSES': [
             'rest_framework_simplejwt.authentication.JWTAuthentication',
-            'common.authentication.OrgApiKeyAuthentication',
         ],
         'DEFAULT_PERMISSION_CLASSES': [
             'rest_framework.permissions.IsAuthenticated',
