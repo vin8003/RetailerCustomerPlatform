@@ -1,6 +1,6 @@
 from rest_framework import status, permissions
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
-from rest_framework.throttling import AnonRateThrottle
+from rest_framework.throttling import UserRateThrottle
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Count, Sum, Q, Avg, DecimalField, IntegerField, Max, Subquery, OuterRef, F
@@ -40,10 +40,20 @@ from .crm import (
 
 User = get_user_model()
 
+from retailers.module_flags import module_required
 
-class RedeemOTPThrottle(AnonRateThrottle):
+
+def _redeem_otp_error_status(message):
+    from .loyalty_redeem import ERR_TOO_MANY_CODES
+
+    if message == ERR_TOO_MANY_CODES:
+        return status.HTTP_429_TOO_MANY_REQUESTS
+    return status.HTTP_400_BAD_REQUEST
+
+
+class RedeemOTPThrottle(UserRateThrottle):
+    """Per signed-in user (AnonRateThrottle never applies to authenticated staff)."""
     scope = 'otp'
-
 
 logger = logging.getLogger(__name__)
 
@@ -1054,8 +1064,13 @@ def get_retailer_customers(request):
         )
 
 
+class CustomerLookupThrottle(UserRateThrottle):
+    scope = 'customer_lookup'
+
+
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
+@throttle_classes([CustomerLookupThrottle])
 def lookup_retailer_customer(request):
     """
     Phone lookup: org-scoped customer summary + recent POS and app orders.
@@ -1072,15 +1087,32 @@ def lookup_retailer_customer(request):
     if phone_err is not None:
         return phone_err
 
+    # Order history and balances need orders.read for every response, not only exports.
+    read_err = require_history_export_permission(request.user, org)
+    if read_err is not None:
+        return read_err
     export = is_export_requested(request.query_params)
-    if export:
-        export_err = require_history_export_permission(request.user, org)
-        if export_err is not None:
-            return export_err
 
-    mapping = find_org_customer_mapping(org, last_10)
+    from orders.access import staff_served_location_ids
+    from retailers.audit_log import record_org_audit_event
+    from retailers.models import OrgAuditLog
+
+    # Staff only see customers and orders of the locations they serve.
+    served = staff_served_location_ids(request.user, org)
+    record_org_audit_event(
+        organization=org,
+        actor=request.user,
+        action=OrgAuditLog.ACTION_UPDATE,
+        object_type=OrgAuditLog.OBJECT_CUSTOMER_LOOKUP,
+        object_id=last_10[-4:],
+        summary_after={'phone_last4': last_10[-4:], 'export': export},
+    )
+
+    mapping = find_org_customer_mapping(org, last_10, location_ids=served)
     customer = mapping.customer if mapping is not None else None
-    orders_base = org_customer_orders_qs(org, customer=customer, last_10=last_10)
+    orders_base = org_customer_orders_qs(
+        org, customer=customer, last_10=last_10, location_ids=served
+    )
     history_qs = annotated_history_qs(orders_base)
 
     if mapping is None:
@@ -1277,6 +1309,7 @@ def toggle_blacklist(request):
 
 @api_view(['PATCH'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('customers')
 def update_retailer_customer(request, customer_id):
     """
     Update retailer-specific customer mapping (nickname and notes)
@@ -1319,6 +1352,7 @@ def update_retailer_customer(request, customer_id):
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('customers')
 def get_customer_ledger(request, customer_id):
     """
     Get full ledger (Khata) for a customer
@@ -1350,6 +1384,7 @@ def get_customer_ledger(request, customer_id):
 
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('customers')
 def record_customer_payment(request):
     """
     Record a manual payment from a customer (Credit to Ledger)
@@ -1398,6 +1433,7 @@ def record_customer_payment(request):
 
 @api_view(['PATCH'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('customers')
 def update_customer_credit_limit(request, customer_id):
     """
     Update credit limit and/or credit due days for a customer.
@@ -1406,6 +1442,17 @@ def update_customer_credit_limit(request, customer_id):
         if request.user.user_type != 'retailer':
             return Response({'error': 'Only retailers can manage credit limits'}, status=status.HTTP_403_FORBIDDEN)
             
+        from retailers.organization import get_organization_for_user, user_has_org_permission
+
+        credit_org = get_organization_for_user(request.user)
+        if credit_org is None or not user_has_org_permission(
+            request.user, credit_org, 'credit.manage'
+        ):
+            return Response(
+                {'error': 'Credit limit permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         has_limit = 'credit_limit' in request.data
         has_due_days = 'credit_due_days' in request.data
         if not has_limit and not has_due_days:
@@ -1421,6 +1468,8 @@ def update_customer_credit_limit(request, customer_id):
             credit_limit = request.data.get('credit_limit')
             try:
                 credit_limit = Decimal(str(credit_limit))
+                if not credit_limit.is_finite():
+                    return Response({'error': 'Invalid credit limit'}, status=status.HTTP_400_BAD_REQUEST)
                 if credit_limit < 0:
                     return Response({'error': 'Credit limit cannot be negative'}, status=status.HTTP_400_BAD_REQUEST)
             except Exception:
@@ -1491,7 +1540,7 @@ def customer_loyalty_redeem_otp(request):
         return Response({'error': 'No loyalty wallet at this shop'}, status=status.HTTP_400_BAD_REQUEST)
     _row, err = issue_redeem_otp(request.user, retailer)
     if err:
-        return Response({'error': err}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'error': err}, status=_redeem_otp_error_status(err))
     return Response(otp_sent_payload(), status=status.HTTP_200_OK)
 
 
@@ -1507,7 +1556,7 @@ def staff_loyalty_redeem_otp(request):
         return err
     _row, issue_err = issue_redeem_otp(customer, retailer)
     if issue_err:
-        return Response({'error': issue_err}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'error': issue_err}, status=_redeem_otp_error_status(issue_err))
     return Response(otp_sent_payload(), status=status.HTTP_200_OK)
 
 

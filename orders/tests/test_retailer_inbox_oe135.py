@@ -181,11 +181,22 @@ class TestRetailerInboxList:
         product = _product(profile)
         _order(customer, profile, product)
 
-        cashier_role = OrgRole.objects.get(organization=org, slug=ROLE_SLUG_CASHIER)
-        staff = _make_staff(org, "oe135_cashier", cashier_role.permissions)
+        # System cashier now has orders.read by default, so use a role with no permissions.
+        staff = _make_staff(org, "oe135_cashier", [])
         api_client.force_authenticate(user=staff)
         resp = api_client.get(reverse("list_retailer_inbox"))
         assert resp.status_code == status.HTTP_403_FORBIDDEN
+
+    @pytest.mark.parametrize(
+        "query",
+        ["status=nope", "location_id=abc", "start_date=2026-13-40", "end_date=yesterday"],
+    )
+    def test_invalid_filters_return_400(self, api_client, query):
+        owner, profile = _make_retailer("oe135_badf_" + query[:4], "OE135 Bad Filter")
+        api_client.force_authenticate(user=owner)
+        resp = api_client.get(reverse("list_retailer_inbox") + "?" + query)
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        assert "error" in resp.data
 
     def test_customer_jwt_blocked_from_inbox_list(self, api_client):
         _owner, profile = _make_retailer("oe135_cust_block", "OE135 Cust Block")

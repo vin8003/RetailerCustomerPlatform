@@ -203,13 +203,42 @@ class TestExpiringBatchesApi:
             assert resp.status_code == status.HTTP_400_BAD_REQUEST, raw
             assert "days" in resp.data["error"]
 
+    def test_staff_without_any_inventory_permission_gets_403(self, api_client):
+        owner, shop = _make_retailer("oe210_noperm_own", "OE210 NoPerm Shop")
+        _make_batch(
+            _make_product(shop, "OE210 Salt"), "N1", Decimal("2.000"),
+            expiry=_today() + timedelta(days=1),
+        )
+        nobody = _make_staff(shop.organization, "oe210_nobody", [])
+        api_client.force_authenticate(user=nobody)
+        assert api_client.get(_url()).status_code == status.HTTP_403_FORBIDDEN
+
+    def test_purchase_price_hidden_unless_costs_permission(self, api_client):
+        owner, shop = _make_retailer("oe210_cost_own", "OE210 Cost Shop")
+        batch = _make_batch(
+            _make_product(shop, "OE210 Rice"), "C1", Decimal("2.000"),
+            expiry=_today() + timedelta(days=1),
+        )
+        reader = _make_staff(shop.organization, "oe210_reader", ["orders.read"])
+        buyer = _make_staff(shop.organization, "oe210_buyer", ["orders.read", "purchasing.costs.read"])
+        api_client.force_authenticate(user=reader)
+        row = api_client.get(_url()).data[0]
+        assert "purchase_price" not in row
+        api_client.force_authenticate(user=buyer)
+        assert "purchase_price" in api_client.get(_url()).data[0]
+
+    def test_days_is_bounded(self, api_client):
+        owner, _shop = _make_retailer("oe210_days_own", "OE210 Days Shop")
+        api_client.force_authenticate(user=owner)
+        assert api_client.get(_url(), {"days": 100000}).status_code == status.HTTP_400_BAD_REQUEST
+
     def test_staff_without_extra_perm_can_read(self, api_client):
         owner, shop = _make_retailer("oe210_staff_own", "OE210 Staff Shop")
         product = _make_product(shop, "OE210 Ghee")
         batch = _make_batch(
             product, "S1", Decimal("2.000"), expiry=_today() + timedelta(days=1)
         )
-        cashier = _make_staff(shop.organization, "oe210_cashier", [])
+        cashier = _make_staff(shop.organization, "oe210_cashier", ["orders.read"])
 
         api_client.force_authenticate(user=cashier)
         resp = api_client.get(_url())
@@ -266,7 +295,10 @@ class TestExpiringBatchesApi:
         )
 
         api_client.force_authenticate(user=owner_a)
-        resp = api_client.get(_url())
+        # The org owner now sees every location; location_id narrows to one.
+        everything = api_client.get(_url())
+        assert set(_ids(everything.data)) == {batch_a.id, batch_b.id}
+        resp = api_client.get(_url(), {"location_id": shop_a.id})
         assert resp.status_code == status.HTTP_200_OK, resp.data
         assert _ids(resp.data) == [batch_a.id]
         assert batch_b.id not in _ids(resp.data)

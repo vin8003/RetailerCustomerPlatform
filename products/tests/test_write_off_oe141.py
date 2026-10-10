@@ -503,7 +503,8 @@ class TestWriteOffApi:
         api_client.force_authenticate(user=owner)
         # Profile+org JOIN; owner perm is implicit; write_off_stock is 7
         # including savepoints.
-        with django_assert_num_queries(8):
+        # +3: served-location lookup, product/shop lookup and the audit row.
+        with django_assert_num_queries(11):
             response = api_client.post(
                 _write_off_url(product.id),
                 {
@@ -613,3 +614,48 @@ class TestWriteOffLedgerFilter:
         api_client.force_authenticate(user=owner)
         response = api_client.get(_ledger_url())
         assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.django_db
+class TestWriteOffReviewFixes:
+    def test_staff_without_shop_profile_can_write_off(self, api_client):
+        owner, shop = _make_retailer("oe141_rf_owner", "RF Shop")
+        product = _make_product(shop, quantity=10)
+        staff = _make_staff(shop.organization, "oe141_rf_staff", ["inventory.adjust"])
+        api_client.force_authenticate(user=staff)
+        resp = api_client.post(
+            reverse("write_off_product", args=[product.id]),
+            {"quantity": 2, "reason": "damage"},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_201_CREATED
+
+    def test_write_off_is_audited(self, api_client):
+        from retailers.models import OrgAuditLog
+
+        owner, shop = _make_retailer("oe141_rf_aud", "RF Audit")
+        product = _make_product(shop, quantity=10)
+        api_client.force_authenticate(user=owner)
+        resp = api_client.post(
+            reverse("write_off_product", args=[product.id]),
+            {"quantity": 3, "reason": "spoilage"},
+            format="json",
+        )
+        assert resp.status_code == status.HTTP_201_CREATED
+        row = OrgAuditLog.objects.get(
+            organization=shop.organization, object_type=OrgAuditLog.OBJECT_STOCK_WRITE_OFF
+        )
+        assert row.summary_after["written_off"] == "3.00" or row.summary_after["written_off"] == "3"
+        assert row.actor_id == owner.id
+
+    def test_non_finite_quantity_rejected(self, api_client):
+        owner, shop = _make_retailer("oe141_rf_nan", "RF NaN")
+        product = _make_product(shop, quantity=10)
+        api_client.force_authenticate(user=owner)
+        for bad in ("NaN", "Infinity"):
+            resp = api_client.post(
+                reverse("write_off_product", args=[product.id]),
+                {"quantity": bad, "reason": "damage"},
+                format="json",
+            )
+            assert resp.status_code == status.HTTP_400_BAD_REQUEST, bad

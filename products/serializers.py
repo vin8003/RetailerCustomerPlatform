@@ -284,6 +284,7 @@ def parent_bulk_cycle_exists(child_pk, parent_product):
     """True when parent_bulk_product would loop back to child_pk or itself."""
     if parent_product is None:
         return False
+
     if child_pk is not None and parent_product.pk == child_pk:
         return True
     seen = {parent_product.pk}
@@ -300,6 +301,34 @@ def parent_bulk_cycle_exists(child_pk, parent_product):
             .first()
         )
     return False
+
+
+
+def lock_parent_chain_and_recheck(child_pk, parent_product):
+    """
+    Re-run the cycle check under row locks on the parent chain so two concurrent updates
+    (A under B, B under A) cannot both pass. Locks only apply inside a transaction.
+    """
+    from django.db import connection
+
+    if parent_product is None:
+        return
+    chain, seen, current = [], set(), parent_product.pk
+    while current is not None and current not in seen:
+        seen.add(current)
+        chain.append(current)
+        current = (
+            Product.objects.filter(pk=current)
+            .values_list('parent_bulk_product_id', flat=True)
+            .first()
+        )
+    if connection.in_atomic_block:
+        list(Product.objects.select_for_update().filter(pk__in=chain).order_by('pk'))
+    fresh_parent = Product.objects.get(pk=parent_product.pk)
+    if parent_bulk_cycle_exists(child_pk, fresh_parent):
+        raise serializers.ValidationError(
+            {'parent_bulk_product': 'Parent bulk product pointers cannot form a cycle.'}
+        )
 
 
 class ProductCategorySerializer(serializers.ModelSerializer):
@@ -342,16 +371,27 @@ class ProductBatchSerializer(serializers.ModelSerializer):
 
 
 class ExpiringBatchListSerializer(ProductBatchSerializer):
-    """Shop expiry list (OE-210). Same batch fields plus product identity."""
+    """Shop expiry list (OE-210). Batch fields plus product identity; no cost data by default."""
 
     product_id = serializers.IntegerField(read_only=True)
     product_name = serializers.CharField(source='product.name', read_only=True)
 
     class Meta(ProductBatchSerializer.Meta):
-        fields = list(ProductBatchSerializer.Meta.fields) + [
+        fields = [
+            name for name in ProductBatchSerializer.Meta.fields if name != 'purchase_price'
+        ] + [
             'product_id',
             'product_name',
         ]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Purchase price is margin information; only callers with purchasing.costs.read get it.
+        if self.context.get('include_costs'):
+            data['purchase_price'] = (
+                str(instance.purchase_price) if instance.purchase_price is not None else None
+            )
+        return data
 
 
 class ProductBrandSerializer(serializers.ModelSerializer):
@@ -1058,6 +1098,8 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         """Handle product update and sync batches if provided"""
         import json
+        if validated_data.get('parent_bulk_product') is not None:
+            lock_parent_chain_and_recheck(instance.pk, validated_data['parent_bulk_product'])
         batches_data = self.initial_data.get('batches')
         link_barcode = self.initial_data.get('link_barcode') # Flag for automated batch creation
         

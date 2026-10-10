@@ -21,9 +21,9 @@ from retailers.organization import (
     get_organization_for_user,
     user_has_org_permission,
 )
-from retailers.suppliers import PERM_PURCHASING_TERMS
 
-PERM_PURCHASE_ROLE = PERM_PURCHASING_TERMS
+# Seeing what the shop pays suppliers is margin information; it has its own permission.
+PERM_PURCHASE_ROLE = 'purchasing.costs.read'
 
 PURCHASE_ROLE_COST_DENIED = (
     'Supplier costs may only be viewed by a purchase-role user'

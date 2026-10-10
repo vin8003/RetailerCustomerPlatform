@@ -109,3 +109,22 @@ class TestPurchaseInvoiceBillImage:
         assert updated.bill_image
         data = PurchaseInvoiceSerializer(updated, context={"request": request}).data
         assert data.get("bill_image")
+
+
+@pytest.mark.django_db
+class TestPurchaseInvoiceListFilters:
+    def test_ordering_and_search_both_work(self, api_client, retailer_user, retailer, product):
+        supplier = Supplier.objects.create(retailer=retailer, company_name="Order Vendor")
+        api_client.force_authenticate(user=retailer_user)
+        url = reverse("erp-purchase-invoice-list")
+        for number, day in (("INV-A", "2026-08-01"), ("INV-B", "2026-09-01")):
+            payload = _invoice_payload(supplier, product, invoice_number=number)
+            payload["invoice_date"] = day
+            assert api_client.post(url, payload, format="json").status_code == status.HTTP_201_CREATED
+
+        asc = api_client.get(url, {"ordering": "invoice_date"})
+        desc = api_client.get(url, {"ordering": "-invoice_date"})
+        assert [r["invoice_number"] for r in asc.data["results"]] == ["INV-A", "INV-B"]
+        assert [r["invoice_number"] for r in desc.data["results"]] == ["INV-B", "INV-A"]
+        found = api_client.get(url, {"search": "Order Vendor"})
+        assert found.data["count"] == 2
