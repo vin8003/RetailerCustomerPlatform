@@ -100,14 +100,17 @@ class CustomerWishlistSerializer(serializers.ModelSerializer):
     product_image = serializers.CharField(source='product.image_display_url', read_only=True)
     retailer_name = serializers.CharField(source='product.retailer.shop_name', read_only=True)
     retailer_id = serializers.IntegerField(source='product.retailer.id', read_only=True)
+    brand_name = serializers.CharField(
+        source='product.brand.name', read_only=True, allow_null=True, default=None
+    )
     
     class Meta:
         model = CustomerWishlist
         fields = [
-            'id', 'product', 'product_name', 'product_price', 'product_image',
+            'id', 'product', 'product_name', 'brand_name', 'product_price', 'product_image',
             'retailer_name', 'retailer_id', 'created_at'
         ]
-        read_only_fields = ['id', 'product_name', 'product_price', 'product_image', 'retailer_name', 'retailer_id', 'created_at']
+        read_only_fields = ['id', 'product_name', 'brand_name', 'product_price', 'product_image', 'retailer_name', 'retailer_id', 'created_at']
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
