@@ -544,7 +544,8 @@ class TestExpiryRbacAndTenancy:
         batch = _make_batch(product, "B1", 3, expiry=None)
         api_client.force_authenticate(user=owner)
 
-        with django_assert_num_queries(27):
+        # +2: catalog module-flag check on product writes (OE-101).
+        with django_assert_num_queries(29):
             response = api_client.patch(
                 reverse("update_product", args=[product.id]),
                 {
@@ -917,3 +918,19 @@ class TestSaleableHotPathQueryBudget:
         assert _per_product_saleable_sum_sql(ctx.captured_queries) == []
         assert _count_saleable_annotations(ctx.captured_queries) == 1
         assert Order.objects.filter(retailer=shop).count() == 1
+
+
+@pytest.mark.django_db
+class TestReduceQuantityConsistency:
+    def test_allow_negative_with_only_expired_stock_changes_nothing(self, retailer, category):
+        product = _make_batched_product(retailer, category, name="Only Expired")
+        expired = _make_batch(product, "EXP", 5, expiry=_today() - timedelta(days=1))
+        product.sync_inventory_from_batches()
+        before = product.quantity
+
+        assert product.reduce_quantity(Decimal("3"), allow_negative=True) is False
+
+        expired.refresh_from_db()
+        product.refresh_from_db()
+        assert expired.quantity == 5
+        assert product.quantity == before

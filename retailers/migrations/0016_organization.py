@@ -22,6 +22,10 @@ def backfill_organizations(apps, schema_editor):
 
 class Migration(migrations.Migration):
 
+    # Schema changes and the backfill must not share one transaction on PostgreSQL:
+    # updating rows right after adding a deferred FK raises "pending trigger events".
+    atomic = False
+
     dependencies = [
         ('retailers', '0015_retailerprofile_printer_size'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),

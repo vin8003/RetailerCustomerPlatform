@@ -79,7 +79,8 @@ class TestPermissionCatalogAndBootstrap:
         assert "catalog.price" in roles[ROLE_SLUG_ADMIN].permissions
         assert "catalog.image" in roles[ROLE_SLUG_ADMIN].permissions
         assert "purchasing.terms" in roles[ROLE_SLUG_ADMIN].permissions
-        assert roles[ROLE_SLUG_CASHIER].permissions == []
+        # Cashiers get order access by default (OE-131); no org-management permissions.
+        assert set(roles[ROLE_SLUG_CASHIER].permissions) == {'orders.create', 'orders.read'}
         assert "inventory.adjust" not in roles[ROLE_SLUG_CASHIER].permissions
         assert "catalog.price" not in roles[ROLE_SLUG_CASHIER].permissions
         assert "catalog.image" not in roles[ROLE_SLUG_CASHIER].permissions
@@ -166,7 +167,7 @@ class TestStaffRoleAssignment:
         assert resp.status_code == status.HTTP_201_CREATED
         assert resp.data["role_slug"] == ROLE_SLUG_CASHIER
         assert resp.data["username"] == "cashier_one"
-        assert resp.data["permissions"] == []
+        assert set(resp.data["permissions"]) == {"orders.create", "orders.read"}
 
         staff_user = User.objects.get(username="cashier_one")
         assert staff_user.user_type == "retailer"

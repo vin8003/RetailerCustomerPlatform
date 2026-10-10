@@ -48,7 +48,7 @@ def parse_write_off_quantity(raw):
         value = Decimal(str(raw))
     except (InvalidOperation, TypeError, ValueError):
         return None
-    if value <= 0:
+    if not value.is_finite() or value <= 0:
         return None
     return value
 

@@ -1,7 +1,7 @@
 from decimal import Decimal
 from rest_framework import viewsets, permissions, status
 from rest_framework.exceptions import ValidationError
-from rest_framework.filters import SearchFilter
+from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from django.utils import timezone
@@ -13,7 +13,7 @@ from retailers.credit_lock import (
     record_credit_override_audit,
 )
 from retailers.models import Supplier, RetailerProfile, RetailerCustomerMapping
-from retailers.organization import get_organization_for_user
+from retailers.organization import get_organization_for_user, user_has_org_permission
 from retailers.serializers import SupplierSerializer
 from retailers.suppliers import (
     assert_payment_terms_not_whitespace_only,
@@ -63,6 +63,18 @@ class SupplierViewSet(viewsets.ModelViewSet):
             )
         return None
 
+    def _deny_if_cannot_manage_suppliers(self):
+        denied = self._deny_if_not_tenant()
+        if denied is not None:
+            return denied
+        org = self._caller_org()
+        if not user_has_org_permission(self.request.user, org, 'purchasing.suppliers'):
+            return Response(
+                {'error': 'Supplier management permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        return None
+
     def _check_payment_terms_write(self, instance=None):
         denied = self._deny_if_not_tenant()
         if denied is not None:
@@ -97,13 +109,16 @@ class SupplierViewSet(viewsets.ModelViewSet):
         return super().retrieve(request, *args, **kwargs)
 
     def create(self, request, *args, **kwargs):
+        denied = self._deny_if_cannot_manage_suppliers()
+        if denied is not None:
+            return denied
         denied = self._check_payment_terms_write(None)
         if denied is not None:
             return denied
         return super().create(request, *args, **kwargs)
 
     def update(self, request, *args, **kwargs):
-        denied = self._deny_if_not_tenant()
+        denied = self._deny_if_cannot_manage_suppliers()
         if denied is not None:
             return denied
         instance = self.get_object()
@@ -118,7 +133,7 @@ class SupplierViewSet(viewsets.ModelViewSet):
         return super().update(request, *args, **kwargs)
 
     def partial_update(self, request, *args, **kwargs):
-        denied = self._deny_if_not_tenant()
+        denied = self._deny_if_cannot_manage_suppliers()
         if denied is not None:
             return denied
         instance = self.get_object()
@@ -133,9 +148,16 @@ class SupplierViewSet(viewsets.ModelViewSet):
         return super().partial_update(request, *args, **kwargs)
 
     def destroy(self, request, *args, **kwargs):
-        denied = self._deny_if_not_tenant()
+        denied = self._deny_if_cannot_manage_suppliers()
         if denied is not None:
             return denied
+        supplier = self.get_object()
+        if supplier.purchase_invoices.exists() or supplier.ledger_entries.exists():
+            # Deleting would drop ledger rows and unlink invoices; deactivate instead.
+            return Response(
+                {'error': 'This supplier has purchase history. Deactivate it instead of deleting.'},
+                status=status.HTTP_409_CONFLICT,
+            )
         return super().destroy(request, *args, **kwargs)
 
     def perform_create(self, serializer):
@@ -176,7 +198,8 @@ class PurchaseInvoiceViewSet(viewsets.ModelViewSet):
     serializer_class = PurchaseInvoiceSerializer
     permission_classes = [permissions.IsAuthenticated]
     parser_classes = [JSONParser, FormParser, MultiPartParser]
-    filter_backends = [SearchFilter]
+    filter_backends = [SearchFilter, OrderingFilter]
+    ordering_fields = ['invoice_date', 'created_at', 'total_amount']
 
     def _caller_retailer(self):
         return (
@@ -297,8 +320,9 @@ def create_pos_order(request):
         )
         if access_err is not None:
             return access_err
-    except Exception:
-        return Response({'error': 'Only retailers can use POS.'}, status=status.HTTP_403_FORBIDDEN)
+    except (RetailerProfile.DoesNotExist, ValueError, TypeError):
+        # Bad location_id or no shop profile; real errors should surface, not look like a 403.
+        return Response({'error': 'Invalid location or not a retailer.'}, status=status.HTTP_403_FORBIDDEN)
 
     data = request.data
     items_data = data.get('items', [])
@@ -559,8 +583,18 @@ def create_pos_order(request):
 
             # Create Order Items and Reduce Inventory
             item_discounts = offer_results.get('item_discounts', {})
-            # Existing Product.reduce_quantity flag only — no org policy model.
+            # Selling below zero stock is a client request, so it needs its own permission.
             allow_negative = data.get('allow_negative') is True
+            if allow_negative:
+                from retailers.organization import get_organization_for_user, user_has_org_permission
+
+                oversell_org = get_organization_for_user(request.user)
+                if oversell_org is None or not user_has_org_permission(
+                    request.user, oversell_org, 'orders.oversell'
+                ):
+                    raise CreditOverrideDenied(
+                        'Selling more than the stock on hand needs the orders.oversell permission'
+                    )
             # One pk-ASC lock for every sold SKU (+ pack parents). Do not
             # lock child-then-parent ad hoc — that AB-BA deadlocks with
             # place_order / modify lock_for_sale.
