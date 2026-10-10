@@ -677,3 +677,50 @@ class TestSaleDeductLocksBeforeReduce:
         assert lock_calls[0]["locked_pks"] == sorted(
             [parent.pk, child.pk, standalone.pk]
         )
+
+
+def _staff_for(retailer, username, permissions):
+    from authentication.models import User
+    from retailers.models import OrgRole, OrgStaffMembership
+    from retailers.organization import ensure_organization_for_profile
+
+    org = retailer.organization or ensure_organization_for_profile(retailer)
+    user = User.objects.create_user(
+        username=username, email=f"{username}@t.com", password="TestPass123!",
+        user_type="retailer", is_active=True,
+    )
+    role = OrgRole.objects.create(
+        organization=org, slug=f"r_{username}", name=username,
+        permissions=list(permissions), is_system=False,
+    )
+    OrgStaffMembership.objects.create(organization=org, user=user, role=role, is_active=True)
+    return user
+
+
+@pytest.mark.django_db
+class TestOversellPermission:
+    def test_staff_without_permission_cannot_force_negative(self, api_client, retailer, product):
+        product.quantity = Decimal("0")
+        product.save(update_fields=["quantity"])
+        staff = _staff_for(retailer, "oe146_nop", ["orders.create", "orders.read"])
+        api_client.force_authenticate(user=staff)
+        response = api_client.post(
+            reverse("create_pos_order"),
+            {**_pos_payload(product, Decimal("2"), allow_negative=True), "location_id": retailer.id},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+        product.refresh_from_db()
+        assert product.quantity == Decimal("0")
+
+    def test_staff_with_permission_can_oversell(self, api_client, retailer, product):
+        product.quantity = Decimal("0")
+        product.save(update_fields=["quantity"])
+        staff = _staff_for(retailer, "oe146_yes", ["orders.create", "orders.read", "orders.oversell"])
+        api_client.force_authenticate(user=staff)
+        response = api_client.post(
+            reverse("create_pos_order"),
+            {**_pos_payload(product, Decimal("2"), allow_negative=True), "location_id": retailer.id},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_201_CREATED

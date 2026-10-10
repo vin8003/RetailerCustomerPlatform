@@ -20,6 +20,7 @@ PERMISSION_DEFINITIONS = {
     'orders.read': 'View orders for this organization',
     'orders.create': 'Create orders from POS and staff APIs',
     'orders.update': 'Update order status and retailer-side order mutations',
+    'orders.oversell': 'Complete a POS sale that takes stock below zero (allow_negative)',
     'fulfillment.manage': 'Configure fulfillment slot capacity for shop locations',
     'inventory.adjust': 'Hand-set on-hand quantity on product update or bulk update; change parent-child pack links on product create or update; set or change ProductBatch expiry_date on product update; post damage / expiry / spoilage write-off',
     'catalog.price': 'Set or clear Product.app_price (owned-app list). Store price stays on existing product update. Echoing the current app_price does not require this permission.',
