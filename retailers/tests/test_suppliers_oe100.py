@@ -258,7 +258,7 @@ class TestSupplierPaymentTermsGate:
         supplier = Supplier.objects.create(
             retailer=shop, company_name="Echo Vendor", payment_terms="Net 15"
         )
-        cashier = _make_staff(shop.organization, "terms_echo_cashier", [])
+        cashier = _make_staff(shop.organization, "terms_echo_cashier", ["purchasing.suppliers"])
         api_client.force_authenticate(user=cashier)
         echo = api_client.patch(
             reverse("erp-supplier-detail", args=[supplier.id]),
@@ -271,7 +271,7 @@ class TestSupplierPaymentTermsGate:
 
     def test_cashier_cannot_create_with_payment_terms(self, api_client):
         owner, shop = _make_retailer("terms_create_owner", "Create Terms Shop")
-        cashier = _make_staff(shop.organization, "terms_create_cashier", [])
+        cashier = _make_staff(shop.organization, "terms_create_cashier", ["purchasing.suppliers"])
         api_client.force_authenticate(user=cashier)
         resp = api_client.post(
             reverse("erp-supplier-list"),
@@ -287,7 +287,7 @@ class TestSupplierPaymentTermsGate:
             retailer=shop, company_name="Perm Vendor", payment_terms=""
         )
         buyer = _make_staff(
-            shop.organization, "terms_buyer", [PERM_PURCHASING_TERMS]
+            shop.organization, "terms_buyer", [PERM_PURCHASING_TERMS, "purchasing.suppliers"]
         )
         api_client.force_authenticate(user=buyer)
         resp = api_client.patch(
@@ -376,3 +376,38 @@ class TestSupplierTenancy:
         assert resp.status_code == status.HTTP_200_OK
         ids = [row["id"] for row in resp.data["results"]]
         assert ids == [live.id]
+
+
+@pytest.mark.django_db
+class TestSupplierWritePermission:
+    def test_staff_without_supplier_permission_cannot_write(self, api_client):
+        owner, shop = _make_retailer("sp_owner", "SP Shop")
+        supplier = Supplier.objects.create(retailer=shop, company_name="SP Vendor")
+        staff = _make_staff(shop.organization, "sp_staff", ["orders.read"])
+        api_client.force_authenticate(user=staff)
+        detail = reverse("erp-supplier-detail", args=[supplier.id])
+        assert api_client.post(reverse("erp-supplier-list"), {"company_name": "X"}, format="json").status_code == status.HTTP_403_FORBIDDEN
+        assert api_client.patch(detail, {"phone_number": "9000000000"}, format="json").status_code == status.HTTP_403_FORBIDDEN
+        assert api_client.delete(detail).status_code == status.HTTP_403_FORBIDDEN
+        assert Supplier.objects.filter(pk=supplier.pk).exists()
+
+    def test_delete_blocked_when_supplier_has_history(self, api_client):
+        import datetime
+        from products.models import SupplierLedger
+
+        owner, shop = _make_retailer("sp_del_owner", "SP Del Shop")
+        supplier = Supplier.objects.create(retailer=shop, company_name="History Vendor")
+        SupplierLedger.objects.create(
+            supplier=supplier, date=datetime.date.today(), amount=100, transaction_type="CREDIT"
+        )
+        api_client.force_authenticate(user=owner)
+        resp = api_client.delete(reverse("erp-supplier-detail", args=[supplier.id]))
+        assert resp.status_code == status.HTTP_409_CONFLICT
+        assert Supplier.objects.filter(pk=supplier.pk).exists()
+        assert supplier.ledger_entries.count() == 1
+
+    def test_delete_allowed_without_history(self, api_client):
+        owner, shop = _make_retailer("sp_del2_owner", "SP Del2 Shop")
+        supplier = Supplier.objects.create(retailer=shop, company_name="Fresh Vendor")
+        api_client.force_authenticate(user=owner)
+        assert api_client.delete(reverse("erp-supplier-detail", args=[supplier.id])).status_code == status.HTTP_204_NO_CONTENT

@@ -12,7 +12,7 @@ from retailers.credit_lock import (
     record_credit_override_audit,
 )
 from retailers.models import Supplier, RetailerProfile, RetailerCustomerMapping
-from retailers.organization import get_organization_for_user
+from retailers.organization import get_organization_for_user, user_has_org_permission
 from retailers.serializers import SupplierSerializer
 from retailers.suppliers import (
     org_suppliers_queryset,
@@ -52,6 +52,18 @@ class SupplierViewSet(viewsets.ModelViewSet):
             )
         return None
 
+    def _deny_if_cannot_manage_suppliers(self):
+        denied = self._deny_if_not_tenant()
+        if denied is not None:
+            return denied
+        org = self._caller_org()
+        if not user_has_org_permission(self.request.user, org, 'purchasing.suppliers'):
+            return Response(
+                {'error': 'Supplier management permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        return None
+
     def _check_payment_terms_write(self, instance=None):
         denied = self._deny_if_not_tenant()
         if denied is not None:
@@ -85,13 +97,16 @@ class SupplierViewSet(viewsets.ModelViewSet):
         return super().retrieve(request, *args, **kwargs)
 
     def create(self, request, *args, **kwargs):
+        denied = self._deny_if_cannot_manage_suppliers()
+        if denied is not None:
+            return denied
         denied = self._check_payment_terms_write(None)
         if denied is not None:
             return denied
         return super().create(request, *args, **kwargs)
 
     def update(self, request, *args, **kwargs):
-        denied = self._deny_if_not_tenant()
+        denied = self._deny_if_cannot_manage_suppliers()
         if denied is not None:
             return denied
         instance = self.get_object()
@@ -105,7 +120,7 @@ class SupplierViewSet(viewsets.ModelViewSet):
         return super().update(request, *args, **kwargs)
 
     def partial_update(self, request, *args, **kwargs):
-        denied = self._deny_if_not_tenant()
+        denied = self._deny_if_cannot_manage_suppliers()
         if denied is not None:
             return denied
         instance = self.get_object()
@@ -119,9 +134,16 @@ class SupplierViewSet(viewsets.ModelViewSet):
         return super().partial_update(request, *args, **kwargs)
 
     def destroy(self, request, *args, **kwargs):
-        denied = self._deny_if_not_tenant()
+        denied = self._deny_if_cannot_manage_suppliers()
         if denied is not None:
             return denied
+        supplier = self.get_object()
+        if supplier.purchase_invoices.exists() or supplier.ledger_entries.exists():
+            # Deleting would drop ledger rows and unlink invoices; deactivate instead.
+            return Response(
+                {'error': 'This supplier has purchase history. Deactivate it instead of deleting.'},
+                status=status.HTTP_409_CONFLICT,
+            )
         return super().destroy(request, *args, **kwargs)
 
     def perform_create(self, serializer):
