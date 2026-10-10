@@ -345,6 +345,13 @@ class OrgStaffAssignSerializer(serializers.Serializer):
             raise serializers.ValidationError(
                 'password is required when creating a new staff user.'
             )
+        if attrs.get('password') and not attrs.get('user_id'):
+            from django.contrib.auth.password_validation import validate_password
+            from django.core.exceptions import ValidationError as DjangoValidationError
+            try:
+                validate_password(attrs['password'], user=User(username=attrs.get('username', '')))
+            except DjangoValidationError as exc:
+                raise serializers.ValidationError({'password': list(exc.messages)})
         return attrs
 
 

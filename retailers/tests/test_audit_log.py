@@ -341,3 +341,42 @@ class TestAuditLogQueryBudget:
         with django_assert_num_queries(1):
             resp = api_client.get(_audit_url(profile_a.organization_id))
         assert resp.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.django_db
+class TestAuditLogIsAppendOnly:
+    def _row(self, username):
+        owner, profile = _make_retailer(username, f"{username} shop")
+        return record_org_audit_event(
+            organization=profile.organization,
+            actor=owner,
+            action=OrgAuditLog.ACTION_UPDATE,
+            object_type=OrgAuditLog.OBJECT_ORGANIZATION,
+            object_id=profile.organization.id,
+            summary_before={"name": "a"},
+            summary_after={"name": "b"},
+        )
+
+    def test_row_cannot_be_modified(self):
+        from retailers.models import ImmutableAuditError
+
+        row = self._row("immut1")
+        row.summary_after = {"name": "tampered"}
+        with pytest.raises(ImmutableAuditError):
+            row.save()
+
+    def test_row_cannot_be_deleted(self):
+        from retailers.models import ImmutableAuditError
+
+        row = self._row("immut2")
+        with pytest.raises(ImmutableAuditError):
+            row.delete()
+        with pytest.raises(ImmutableAuditError):
+            OrgAuditLog.objects.filter(pk=row.pk).delete()
+        with pytest.raises(ImmutableAuditError):
+            OrgAuditLog.objects.filter(pk=row.pk).update(action="grant")
+
+    def test_new_rows_still_append(self):
+        before = OrgAuditLog.objects.count()
+        self._row("immut3")
+        assert OrgAuditLog.objects.count() == before + 1
