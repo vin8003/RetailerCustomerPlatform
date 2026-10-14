@@ -14,4 +14,13 @@ gitbook: https://app.gitbook.com/s/iu06pIi3CiBqpw30jhyU/kan-20-order-stats-api-p
 
 Work snapshot. Durable: [order-stats-polling.md](../requirements/order-stats-polling.md).
 
-Unbounded `/api/orders/stats/` from dashboard `useEffect` / leaked intervals. Cap at 60s, prefer event-driven refresh, optional ~30s backend cache.
+## Problem
+
+Unbounded `/api/orders/stats/` from dashboard `useEffect` / leaked intervals. Retailer sidebar later used a 60s `setInterval` fallback.
+
+## Fix
+
+- Remove timer-based polling of `orders/stats/`.
+- Fetch once on dashboard mount for the Orders pending badge.
+- Refresh when FCM delivers `new_order` / `order_refresh` (`fcm_order_update`) or when the cashier updates an order locally (`order_stats_refresh`).
+- Show the pending count on desktop Orders nav and mobile bottom Orders tab.

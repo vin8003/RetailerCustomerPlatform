@@ -1550,8 +1550,6 @@ def update_customer_credit_limit(request, customer_id):
     except Exception as e:
         logger.error(f"Error updating credit limit: {str(e)}")
         return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
 @throttle_classes([RedeemOTPThrottle])

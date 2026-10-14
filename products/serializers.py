@@ -7,7 +7,7 @@ from .models import (
     Product, ProductCategory, ProductBrand, ProductImage, 
     ProductReview, ProductUpload, MasterProduct, ProductBatch,
     ProductUploadSession, UploadSessionItem,
-    PurchaseInvoice, PurchaseItem, SupplierLedger
+    PurchaseInvoice, PurchaseItem, SupplierLedger, ProductInventoryLog
 )
 from products.inventory_adjust import UNPARSEABLE_EXPIRY, parse_expiry_date
 from products.channel_price import (
@@ -20,6 +20,20 @@ from products.supplier_last_costs import (
     last_pi_unit_costs_by_product_id,
     selling_margin_percent,
 )
+from products.inventory_service import (
+    apply_stock_decrease,
+    apply_stock_increase,
+    log_inventory_change,
+)
+from products.tax_service import (
+    GST_RATES,
+    clean_hsn_code,
+    quantize_2,
+    resolve_tax_type,
+    round_rupee,
+    split_inclusive_line,
+)
+from .customer_stock import filter_in_stock_for_customer
 import logging
 
 logger = logging.getLogger(__name__)
@@ -449,6 +463,7 @@ class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, 
     margin_percent = serializers.SerializerMethodField()
     minimum_order_quantity = serializers.SerializerMethodField()
     maximum_order_quantity = serializers.SerializerMethodField()
+    gst_rate = serializers.DecimalField(max_digits=5, decimal_places=2)
     class Meta:
         model = Product
         list_serializer_class = GroupVariantsListSerializer
@@ -464,6 +479,7 @@ class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, 
             'active_offer_text', 'is_wishlisted', 'barcode', 'has_batches', 'batches',
             'is_parent_bulk', 'parent_bulk_product', 'conversion_factor',
             'fractional_children', 'group_variants',
+            'hsn_code', 'gst_rate'
         ]
 
     def get_quantity(self, obj):
@@ -626,6 +642,8 @@ class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
 
     class Meta:
         model = Product
+        # barcode + original_price are required by Print Labels (and POS search rows)
+        # so callers do not have to re-fetch product detail after picking a hit.
         list_serializer_class = GroupVariantsListSerializer
         fields = [
             'id', 'name', 'price', 'app_price', 'discounted_price', 'original_price', 'unit', 'image',
@@ -699,6 +717,7 @@ class ProductDetailSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
     maximum_order_quantity = serializers.SerializerMethodField()
     group_variants = serializers.SerializerMethodField()
     margin_percent = serializers.SerializerMethodField()
+    gst_rate = serializers.DecimalField(max_digits=5, decimal_places=2)
     
     class Meta:
         model = Product
@@ -715,7 +734,8 @@ class ProductDetailSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
             'average_rating', 'review_count', 'created_at', 'updated_at',
             'product_group', 'active_offer_text', 'offers', 'is_wishlisted', 'barcode',
             'is_parent_bulk', 'parent_bulk_product', 'conversion_factor',
-            'fractional_children', 'group_variants'
+            'fractional_children', 'group_variants',
+            'hsn_code', 'gst_rate'
         ]
 
     def get_quantity(self, obj):
@@ -927,6 +947,47 @@ class ProductDetailSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
         except Exception:
             return False
 
+    def get_group_variants(self, obj):
+        """Get all other active products in the same group for this retailer, sorting parent/child first"""
+        try:
+            if obj.product_group:
+                siblings = filter_in_stock_for_customer(Product.objects.filter(
+                    retailer=obj.retailer,
+                    product_group=obj.product_group,
+                    is_active=True,
+                    is_available=True
+                )).exclude(id=obj.id).only(
+                    'id', 'name', 'unit', 'price', 'original_price', 
+                    'is_parent_bulk', 'parent_bulk_product'
+                )
+                
+                # Sort: items where is_parent_bulk is True or parent_bulk_product_id is not None come first
+                sorted_siblings = sorted(
+                    list(siblings),
+                    key=lambda s: (0 if (s.is_parent_bulk or s.parent_bulk_product_id is not None) else 1, s.id)
+                )
+                
+                variants = []
+                for s in sorted_siblings:
+                    variants.append({
+                        'id': s.id,
+                        'name': s.name,
+                        'unit': s.unit,
+                        'price': float(s.price),
+                        'original_price': float(s.original_price) if s.original_price else float(s.price),
+                        'image': s.image_display_url,
+                        'minimum_order_quantity': float(s.minimum_order_quantity) if s.minimum_order_quantity else 1,
+                        'maximum_order_quantity': float(s.maximum_order_quantity) if s.maximum_order_quantity else None,
+                        'track_inventory': s.track_inventory,
+                        'quantity': float(s.quantity) if s.quantity else 0
+                    })
+                return variants
+            return []
+        except Exception as e:
+            logger.error(f"Error getting group variants: {e}")
+            return []
+
+
 class MasterProductSerializer(serializers.ModelSerializer):
     """
     Serializer for Master Product
@@ -978,10 +1039,25 @@ class MasterProductSerializer(serializers.ModelSerializer):
 
 
 
-class ProductCreateSerializer(serializers.ModelSerializer):
+class ProductTaxValidationMixin:
+    def validate_gst_rate(self, value):
+        if value not in GST_RATES:
+            raise serializers.ValidationError("Unsupported GST rate.")
+        return value
+
+    def validate_hsn_code(self, value):
+        try:
+            return clean_hsn_code(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+
+
+class ProductCreateSerializer(ProductTaxValidationMixin, serializers.ModelSerializer):
     """
     Serializer for creating products
     """
+    gst_rate = serializers.DecimalField(max_digits=5, decimal_places=2, required=False)
+
     class Meta:
         model = Product
         fields = [
@@ -990,7 +1066,8 @@ class ProductCreateSerializer(serializers.ModelSerializer):
             'minimum_order_quantity', 'maximum_order_quantity', 'image',
             'images', 'specifications', 'tags', 'is_featured', 'is_available',
             'barcode', 'master_product', 'product_group', 'is_active', 'is_seasonal', 'has_batches',
-            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor'
+            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor',
+            'hsn_code', 'gst_rate'
         ]
     
     def validate_barcode(self, value):
@@ -1067,10 +1144,12 @@ class ProductCreateSerializer(serializers.ModelSerializer):
         return product
 
 
-class ProductUpdateSerializer(serializers.ModelSerializer):
+class ProductUpdateSerializer(ProductTaxValidationMixin, serializers.ModelSerializer):
     """
     Serializer for updating products
     """
+    gst_rate = serializers.DecimalField(max_digits=5, decimal_places=2, required=False)
+
     class Meta:
         model = Product
         fields = [
@@ -1079,7 +1158,8 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
             'minimum_order_quantity', 'maximum_order_quantity', 'image',
             'images', 'specifications', 'tags', 'is_featured', 'is_available',
             'barcode', 'master_product', 'product_group', 'is_active', 'is_seasonal', 'has_batches',
-            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor'
+            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor',
+            'hsn_code', 'gst_rate'
         ]
     
     def validate_barcode(self, value):
@@ -1182,6 +1262,11 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
             
             # Sync totals back to product
             instance.sync_inventory_from_batches()
+        
+        elif has_batches and link_barcode and batches_data is None:
+            from products.inventory_service import consolidate_stock_to_initial_batch
+            consolidate_stock_to_initial_batch(instance)
+            instance.refresh_from_db()
         
         elif not has_batches:
             # If multi-batch is OFF, keep one INITIAL-STOCK row in sync.
@@ -1391,10 +1476,14 @@ class PurchaseItemSerializer(serializers.ModelSerializer):
         model = PurchaseItem
         fields = [
             'id', 'product', 'product_name', 'unit', 'quantity', 'purchase_price',
-            'total', 'mrp_updated', 'new_price', 'new_original_price',
+            'total', 'hsn_code', 'gst_rate', 'taxable_value', 'tax_amount',
+            'tax_type', 'mrp_updated', 'new_price', 'new_original_price',
             'returned_quantity', 'net_quantity',
         ]
-        read_only_fields = ['id', 'unit']
+        read_only_fields = [
+            'id', 'unit', 'hsn_code', 'gst_rate', 'taxable_value', 'tax_amount',
+            'tax_type',
+        ]
 
     returned_quantity = serializers.SerializerMethodField()
     net_quantity = serializers.SerializerMethodField()
@@ -1418,10 +1507,14 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
         model = PurchaseInvoice
         fields = [
             'id', 'retailer', 'supplier', 'supplier_name', 'invoice_number',
-            'invoice_date', 'total_amount', 'refund_amount', 'net_amount', 'is_returned', 'paid_amount', 'payment_status',
-            'notes', 'bill_image', 'created_at', 'items'
+            'invoice_date', 'total_amount', 'taxable_amount', 'tax_amount',
+            'refund_amount', 'net_amount', 'is_returned', 'paid_amount',
+            'payment_status', 'notes', 'bill_image', 'created_at', 'items',
         ]
-        read_only_fields = ['id', 'retailer', 'created_at']
+        read_only_fields = [
+            'id', 'retailer', 'created_at', 'total_amount',
+            'taxable_amount', 'tax_amount',
+        ]
         extra_kwargs = {
             'invoice_number': {'required': False, 'allow_blank': True}
         }
@@ -1492,17 +1585,63 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
             assert_supplier_in_org(supplier, retailer)
         return supplier
 
+    def _validate_supplier_active_for_purchase(self, supplier, previous_supplier=None):
+        if supplier is None or supplier.is_active:
+            return
+        if previous_supplier is not None and previous_supplier.id == supplier.id:
+            return
+        raise serializers.ValidationError({
+            'supplier': 'This supplier is inactive and cannot be used for new purchases.'
+        })
+
+    def _apply_tax_snapshots(self, items_data, retailer, supplier):
+        tax_type = resolve_tax_type(
+            retailer.gst_number,
+            supplier.gst_number if supplier else '',
+        )
+        taxable_amount = Decimal('0.00')
+        tax_amount = Decimal('0.00')
+        line_total_amount = Decimal('0.00')
+
+        for item_data in items_data:
+            product = item_data.get('product')
+            line_total = quantize_2(
+                Decimal(str(item_data['quantity']))
+                * Decimal(str(item_data['purchase_price']))
+            )
+            gst_rate = product.gst_rate if product else Decimal('0.00')
+            split = split_inclusive_line(line_total, gst_rate)
+
+            item_data.update({
+                'total': line_total,
+                'taxable_value': split['taxable_value'],
+                'tax_amount': split['tax_amount'],
+                'gst_rate': gst_rate,
+                'hsn_code': product.hsn_code if product else '',
+                'tax_type': tax_type,
+            })
+            taxable_amount += split['taxable_value']
+            tax_amount += split['tax_amount']
+            line_total_amount += line_total
+
+        return {
+            'taxable_amount': quantize_2(taxable_amount),
+            'tax_amount': quantize_2(tax_amount),
+            'total_amount': round_rupee(line_total_amount),
+        }
+
     def create(self, validated_data):
         items_data = validated_data.pop('items', [])
         retailer = validated_data.get('retailer')
         supplier = validated_data.get('supplier')
-        from products.models import ProductInventoryLog
 
         self._validate_invoice_products_for_retailer(items_data, retailer)
+        self._validate_supplier_active_for_purchase(supplier)
         
         with transaction.atomic():
-            # Calculate total from items to ensure accuracy
-            calculated_total = sum(Decimal(str(item['quantity'])) * Decimal(str(item['purchase_price'])) for item in items_data)
+            validated_data.update(
+                self._apply_tax_snapshots(items_data, retailer, supplier)
+            )
             
             # Auto-generate invoice_number if missing
             invoice_num = validated_data.get('invoice_number', '') or ''
@@ -1512,8 +1651,7 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
                 hasher = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
                 validated_data['invoice_number'] = f"INV-{now().strftime('%y%m%d')}-{hasher}"
 
-            # 1. Create Invoice (overwrite total_amount with calculated value)
-            validated_data['total_amount'] = calculated_total
+            # 1. Create Invoice with authoritative tax and total calculations
             invoice = PurchaseInvoice.objects.create(**validated_data)
             
             for item_data in items_data:
@@ -1524,14 +1662,15 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
                 # 2. Create PurchaseItem
                 item = PurchaseItem.objects.create(invoice=invoice, **item_data)
                 
-                # 3. Update Product Stock & Prices (Atomically)
-                Product.objects.filter(id=item.product.id, retailer=retailer).update(
-                    quantity=F('quantity') + item.quantity,
+                # 3. Update Product Stock & Prices (batch-aware)
+                product = Product.objects.select_for_update().get(
+                    id=item.product.id, retailer=retailer
+                )
+                prev_qty = product.quantity
+                apply_stock_increase(product, item.quantity)
+                Product.objects.filter(id=product.id).update(
                     purchase_price=item.purchase_price
                 )
-                
-                # Refresh product for logs and price updates
-                product = item.product
                 product.refresh_from_db()
                 
                 if new_price:
@@ -1541,14 +1680,14 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
                 product.save()
                 
                 # 4. Log Inventory Change
-                ProductInventoryLog.objects.create(
+                log_inventory_change(
                     product=product,
                     created_by=self.context['request'].user,
                     quantity_change=item.quantity,
-                    previous_quantity=product.quantity - item.quantity,
+                    previous_quantity=prev_qty,
                     new_quantity=product.quantity,
                     log_type='added',
-                    reason=f'Purchase Inward: Invoice #{invoice.invoice_number}'
+                    reason=f'Purchase Inward: Invoice #{invoice.invoice_number}',
                 )
 
             # (Balance updates are now handled strictly by Django Signals mathematically on Ledger)
@@ -1579,6 +1718,10 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
         # PATCH with only scalar fields (e.g. bill_image) must not reverse stock
         # or delete line items. Only rebuild lines when items is present.
         if 'items' not in validated_data:
+            new_supplier = validated_data.get('supplier', instance.supplier)
+            self._validate_supplier_active_for_purchase(
+                new_supplier, previous_supplier=instance.supplier
+            )
             for attr, value in validated_data.items():
                 setattr(instance, attr, value)
             instance.save()
@@ -1588,9 +1731,10 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
         new_supplier = validated_data.get('supplier', instance.supplier)
         retailer = instance.retailer
         
-        from products.models import ProductInventoryLog
-
         self._validate_invoice_products_for_retailer(items_data, retailer)
+        self._validate_supplier_active_for_purchase(
+            new_supplier, previous_supplier=instance.supplier
+        )
         
         with transaction.atomic():
             # --- 1. REVERSE OLD IMPACTS ---
@@ -1598,21 +1742,17 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
             # Reverse Stock (Convert to list for safety)
             old_items = list(instance.items.all())
             for old_item in old_items:
-                product = old_item.product
-                Product.objects.filter(id=product.id).update(
-                    quantity=F('quantity') - old_item.quantity
-                )
-                
-                # Log stock reversal
-                product.refresh_from_db()
-                ProductInventoryLog.objects.create(
+                product = Product.objects.select_for_update().get(id=old_item.product.id)
+                prev_qty = product.quantity
+                apply_stock_decrease(product, old_item.quantity, allow_negative=True)
+                log_inventory_change(
                     product=product,
                     created_by=self.context['request'].user,
                     quantity_change=-old_item.quantity,
-                    previous_quantity=product.quantity + old_item.quantity,
+                    previous_quantity=prev_qty,
                     new_quantity=product.quantity,
                     log_type='removed',
-                    reason=f'Purchase Edit (Reversal): Invoice #{instance.invoice_number}'
+                    reason=f'Purchase Edit (Reversal): Invoice #{instance.invoice_number}',
                 )
 
             # (Reversal balance updates are now handled strictly by Django Signals via cascade deletes)
@@ -1622,9 +1762,10 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
 
             # --- 2. APPLY NEW CHANGES ---
             
-            # Recalculate New Total
-            new_total = sum(Decimal(str(item['quantity'])) * Decimal(str(item['purchase_price'])) for item in items_data)
-            validated_data['total_amount'] = new_total
+            # Recalculate tax snapshots and authoritative totals
+            validated_data.update(
+                self._apply_tax_snapshots(items_data, retailer, new_supplier)
+            )
             
             # Update Invoice Instance
             for attr, value in validated_data.items():
@@ -1638,13 +1779,14 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
                 
                 item = PurchaseItem.objects.create(invoice=instance, **item_data)
                 
-                # Atomic update
-                Product.objects.filter(id=item.product.id, retailer=retailer).update(
-                    quantity=F('quantity') + item.quantity,
+                product = Product.objects.select_for_update().get(
+                    id=item.product.id, retailer=retailer
+                )
+                prev_qty = product.quantity
+                apply_stock_increase(product, item.quantity)
+                Product.objects.filter(id=product.id).update(
                     purchase_price=item.purchase_price
                 )
-                
-                product = item.product
                 product.refresh_from_db()
                 
                 if new_price:
@@ -1653,14 +1795,14 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
                     product.original_price = new_orig_price
                 product.save()
                 
-                ProductInventoryLog.objects.create(
+                log_inventory_change(
                     product=product,
                     created_by=self.context['request'].user,
                     quantity_change=item.quantity,
-                    previous_quantity=product.quantity - item.quantity,
+                    previous_quantity=prev_qty,
                     new_quantity=product.quantity,
                     log_type='added',
-                    reason=f'Purchase Updated: Invoice #{instance.invoice_number}'
+                    reason=f'Purchase Updated: Invoice #{instance.invoice_number}',
                 )
 
             # (New balance updates are now handled strictly by Django Signals on Ledger creation)                
@@ -1699,7 +1841,6 @@ class SupplierLedgerSerializer(serializers.ModelSerializer):
 
     def get_reference_invoice_number(self, obj):
         return obj.reference_invoice.invoice_number if obj.reference_invoice else None
-
 
 class SkuSupplierLastCostSerializer(serializers.Serializer):
     """One supplier's latest PI unit cost for a SKU (OE-112)."""
