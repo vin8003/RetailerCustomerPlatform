@@ -125,8 +125,12 @@ class OfferEngine:
         active_offers = list(automatic_offers)
         if coupon_offer:
             active_offers.append(coupon_offer)
-            # Re-sort by priority
-            active_offers.sort(key=lambda o: o.priority, reverse=True)
+            
+        # Re-sort: Discount offers first (so net item price is reduced), then credit_points (cashback) on discounted items
+        active_offers.sort(
+            key=lambda o: (0 if getattr(o, 'benefit_type', 'discount') == 'credit_points' else 1, o.priority),
+            reverse=True
+        )
         
         # 2. Prepare calculation context
         # We need a mutable structure to track price changes and applied rules
@@ -180,10 +184,11 @@ class OfferEngine:
                         # Points on current price
                         p = item['current_price'] * item['quantity'] * percentage
                         points += p
-                        item['savings'] += Decimal(0) # Points don't reduce price
                         item['applied_offers'].append(offer.name)
                         if not offer.is_stackable:
                              item['is_exclusive'] = True
+                    if offer.max_discount_amount and points > offer.max_discount_amount:
+                        points = offer.max_discount_amount
 
                 elif offer.offer_type == 'flat_amount':
                     # Flat points per item
@@ -193,6 +198,8 @@ class OfferEngine:
                         item['applied_offers'].append(offer.name)
                         if not offer.is_stackable:
                              item['is_exclusive'] = True
+                    if offer.max_discount_amount and points > offer.max_discount_amount:
+                        points = offer.max_discount_amount
 
                 elif offer.offer_type == 'cart_value':
                      current_cart_total = sum(x['current_price'] * x['quantity'] for x in item_context)
@@ -214,17 +221,20 @@ class OfferEngine:
                                  item_context[idx]['applied_offers'].append(offer.name)
                 
                 if points > 0:
-                     total_points_earned += points
-                     applied_offers_summary.append({
+                    points = points.quantize(Decimal("0.01"))
+                    total_points_earned += points
+                    applied_offers_summary.append({
                         'offer_id': offer.id,
                         'name': offer.name,
                         'description': offer.description,
-                        'savings': points, # reuse field or new? frontend expects savings for display usually.
+                        'savings': points,
+                        'discount': Decimal(0),
+                        'points': points,
                         'benefit_type': 'credit_points',
                         'type': offer.get_offer_type_display(),
                         'is_coupon': bool(offer.coupon_code),
                         'coupon_code': offer.coupon_code if offer.coupon_code else None
-                     })
+                    })
                 
                 continue 
 
@@ -274,11 +284,15 @@ class OfferEngine:
         applied_coupon = None
         for app in applied_offers_summary:
             if app.get('is_coupon') and app.get('coupon_code'):
+                savings_val = float(app['savings'])
+                is_points = app.get('benefit_type') == 'credit_points'
                 applied_coupon = {
                     'code': app['coupon_code'],
                     'offer_id': app['offer_id'],
                     'name': app['name'],
-                    'savings': float(app['savings']),
+                    'savings': savings_val,
+                    'discount': 0.0 if is_points else savings_val,
+                    'points': savings_val if is_points else 0.0,
                     'benefit_type': app.get('benefit_type', 'discount'),
                     'type': app.get('type')
                 }
@@ -373,6 +387,9 @@ class OfferEngine:
             
             total_savings += (savings * item_data['quantity'])
             
+        if offer.max_discount_amount and total_savings > offer.max_discount_amount:
+            total_savings = offer.max_discount_amount
+
         return total_savings
 
     def _apply_bxgy(self, offer, item_context, eligible_indices):
