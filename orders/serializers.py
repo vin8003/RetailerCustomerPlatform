@@ -315,6 +315,8 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     card_amount = serializers.SerializerMethodField()
     credit_amount = serializers.SerializerMethodField()
     delivery_info = serializers.SerializerMethodField()
+    taxable_amount = serializers.SerializerMethodField()
+    tax_amount = serializers.SerializerMethodField()
     
     class Meta:
         model = Order
@@ -360,6 +362,14 @@ class OrderDetailSerializer(serializers.ModelSerializer):
         except ObjectDoesNotExist:
             pass
         return None
+
+    def get_taxable_amount(self, obj):
+        val = getattr(obj, 'taxable_amount', None)
+        return str(val) if val is not None else None
+
+    def get_tax_amount(self, obj):
+        val = getattr(obj, 'tax_amount', None)
+        return str(val) if val is not None else None
     
     def to_representation(self, instance):
         data = super().to_representation(instance)
