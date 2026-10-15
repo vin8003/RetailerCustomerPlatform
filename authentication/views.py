@@ -62,6 +62,7 @@ def retailer_signup(request):
                 state='',
                 pincode='000000',
                 contact_phone=user.phone_number or '',
+                contact_email=user.email or '',
                 is_verified=False,
                 verification_status='pending',
                 is_active=False,  # Not live to customers until Admin approves
@@ -416,6 +417,7 @@ def verify_otp(request):
                                     'state': '',
                                     'pincode': '000000',
                                     'contact_phone': user.phone_number or '',
+                                    'contact_email': user.email or '',
                                     'is_active': False,
                                 }
                             )
@@ -513,6 +515,7 @@ def verify_otp(request):
                             'state': '',
                             'pincode': '000000',
                             'contact_phone': user.phone_number or '',
+                            'contact_email': user.email or '',
                             'is_active': False,
                         }
                     )

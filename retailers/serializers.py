@@ -69,6 +69,13 @@ class RetailerProfileSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'is_verified', 'verification_status', 'rejection_reason', 'average_rating', 'total_ratings', 'created_at', 'updated_at']
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Autofill contact_email from user.email if empty
+        if not data.get('contact_email') and instance.user and instance.user.email:
+            data['contact_email'] = instance.user.email
+        return data
+
     def get_is_currently_open(self, obj):
         from common.utils import get_retailer_status
         status = get_retailer_status(obj)

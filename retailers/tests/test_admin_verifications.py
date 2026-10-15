@@ -53,6 +53,13 @@ class RetailerVerificationTests(TestCase):
         self.assertEqual(new_profile.verification_status, 'pending')
         self.assertFalse(new_profile.is_verified)
         self.assertFalse(new_profile.is_active)
+        self.assertEqual(new_profile.contact_email, 'newretailer@shop.com')
+
+        # Check Retailer Profile endpoint returns autofilled contact_email
+        self.client.force_authenticate(user=new_profile.user)
+        profile_res = self.client.get('/api/retailer/profile/')
+        self.assertEqual(profile_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(profile_res.data['contact_email'], 'newretailer@shop.com')
 
     @override_settings(ADMIN_EMAILS=['admin@ordereasy.in'])
     def test_user_profile_admin_flag(self):
