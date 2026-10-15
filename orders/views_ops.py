@@ -193,6 +193,7 @@ def modify_order(request, order_id):
                                 logger.info(f"Points adjusted for order {order.order_number}: Refunded {points_to_refund} points")
                     except (RetailerRewardConfig.DoesNotExist, CustomerLoyalty.DoesNotExist):
                         pass
+                order.refresh_from_db()
                 detail_serializer = OrderDetailSerializer(order)
                 return Response(detail_serializer.data)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
