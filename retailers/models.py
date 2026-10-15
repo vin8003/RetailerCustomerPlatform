@@ -67,6 +67,17 @@ class RetailerProfile(models.Model):
     free_delivery_threshold = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     
     # Status and ratings
+    VERIFICATION_STATUS_CHOICES = [
+        ('pending', 'Pending Verification'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+    verification_status = models.CharField(
+        max_length=20,
+        choices=VERIFICATION_STATUS_CHOICES,
+        default='pending'
+    )
+    rejection_reason = models.TextField(blank=True, null=True)
     is_verified = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
     average_rating = models.DecimalField(max_digits=3, decimal_places=2, default=0)
@@ -85,6 +96,14 @@ class RetailerProfile(models.Model):
         choices=[('80mm', '80mm (Standard)'), ('58mm', '58mm (Compact)')],
         default='80mm',
         help_text="Paper size for thermal receipts"
+    )
+    pickup_uncollected_hours = models.PositiveIntegerField(
+        default=48,
+        help_text='Hours after pickup-ready before uncollected orders expire and ATP is restored',
+    )
+    fulfillment_slot_capacity = models.PositiveIntegerField(
+        default=5,
+        help_text='Max orders per 30-minute pickup/delivery slot at this location',
     )
     
     # Timestamps

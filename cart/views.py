@@ -38,7 +38,12 @@ def get_cart(request):
         
         if retailer_id:
             try:
-                retailer = RetailerProfile.objects.get(id=retailer_id, is_active=True)
+                retailer = RetailerProfile.objects.get(
+                    id=retailer_id,
+                    is_active=True,
+                    is_verified=True,
+                    verification_status='approved'
+                )
                 cart, created = Cart.objects.get_or_create(
                     customer=request.user,
                     retailer=retailer

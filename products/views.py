@@ -961,7 +961,13 @@ def get_retailer_products_public(request, retailer_id):
     Get products for a specific retailer (public endpoint)
     """
     try:
-        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        retailer = get_object_or_404(
+            RetailerProfile,
+            id=retailer_id,
+            is_active=True,
+            is_verified=True,
+            verification_status='approved'
+        )
 
         products = Product.objects.select_related(
             'retailer', 'category', 'brand', 'master_product'
@@ -1111,7 +1117,13 @@ def search_products_public(request, retailer_id):
     Search products for a specific retailer (public endpoint) with minimal data
     """
     try:
-        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        retailer = get_object_or_404(
+            RetailerProfile,
+            id=retailer_id,
+            is_active=True,
+            is_verified=True,
+            verification_status='approved'
+        )
 
         products = Product.objects.filter(
             retailer=retailer, 
@@ -1178,7 +1190,13 @@ def get_retailer_categories(request, retailer_id):
     Includes recursive product counts.
     """
     try:
-        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        retailer = get_object_or_404(
+            RetailerProfile,
+            id=retailer_id,
+            is_active=True,
+            is_verified=True,
+            verification_status='approved'
+        )
         requested_parent_id = request.query_params.get('parent_id')
         if requested_parent_id == 'null' or requested_parent_id == '':
             requested_parent_id = None
@@ -1263,7 +1281,13 @@ def get_retailer_product_groups_by_category(request, retailer_id, category_id):
     Get all unique product groups for a specific retailer and category (public endpoint).
     """
     try:
-        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        retailer = get_object_or_404(
+            RetailerProfile,
+            id=retailer_id,
+            is_active=True,
+            is_verified=True,
+            verification_status='approved'
+        )
         category_ids = get_all_category_ids(category_id)
         
         groups = Product.objects.filter(
@@ -1292,7 +1316,13 @@ def get_retailer_featured_products(request, retailer_id):
     Returns at most 10 featured products, optimized for home page display.
     """
     try:
-        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        retailer = get_object_or_404(
+            RetailerProfile,
+            id=retailer_id,
+            is_active=True,
+            is_verified=True,
+            verification_status='approved'
+        )
 
         products = Product.objects.select_related(
             'retailer', 'category', 'brand', 'master_product'
@@ -1351,7 +1381,13 @@ def get_product_detail_public(request, retailer_id, product_id):
     Get product detail (public endpoint)
     """
     try:
-        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        retailer = get_object_or_404(
+            RetailerProfile,
+            id=retailer_id,
+            is_active=True,
+            is_verified=True,
+            verification_status='approved'
+        )
         
         # Optimize query with select_related and prefetch_related
         queryset = Product.objects.select_related(
