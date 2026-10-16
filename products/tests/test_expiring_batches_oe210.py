@@ -12,17 +12,16 @@ import pytest
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
-from django.utils import timezone
 from rest_framework import status
 
 from authentication.models import User
-from products.models import Product, ProductBatch, ProductCategory
+from products.models import Product, ProductBatch, ProductCategory, shop_today
 from retailers.models import OrgRole, OrgStaffMembership, RetailerProfile
 from retailers.organization import ensure_organization_for_profile
 
 
 def _today():
-    return timezone.localdate()
+    return shop_today()
 
 
 def _make_retailer(username, shop_name):

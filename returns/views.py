@@ -2,7 +2,7 @@ from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
-from django.db.models import Q, Sum
+from django.db.models import Prefetch, Q, Sum
 from decimal import Decimal
 from .models import SalesReturn, PurchaseReturn, SalesReturnItem, PurchaseReturnItem
 from .serializers import SalesReturnSerializer, PurchaseReturnSerializer
@@ -17,7 +17,12 @@ class SalesReturnViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         retailer = RetailerProfile.objects.get(user=self.request.user)
-        return SalesReturn.objects.filter(retailer=retailer)
+        return SalesReturn.objects.filter(retailer=retailer).prefetch_related(
+            Prefetch(
+                'items',
+                queryset=SalesReturnItem.objects.select_related('product', 'batch'),
+            )
+        )
 
     @action(detail=False, methods=['get'])
     def search_order(self, request):
@@ -37,16 +42,24 @@ class SalesReturnViewSet(viewsets.ModelViewSet):
             retailer=retailer,
             status='delivered'
         ).prefetch_related('items__product').order_by('-created_at')[:20] # Limit to 20 results
+        orders = list(orders)
         
-        if not orders.exists():
+        if not orders:
             return Response({'error': 'No matching orders found'}, status=404)
+
+        returned_by_item = dict(
+            SalesReturnItem.objects.filter(order_item__order__in=orders)
+            .values('order_item_id')
+            .annotate(total=Sum('quantity'))
+            .values_list('order_item_id', 'total')
+        )
             
         results = []
         for order in orders:
             items_data = []
             for item in order.items.all():
                 # Calculate how much already returned for this specific row
-                returned_qty = SalesReturnItem.objects.filter(order_item=item).aggregate(total=Sum('quantity'))['total'] or 0
+                returned_qty = returned_by_item.get(item.id) or 0
                 items_data.append({
                     'id': item.id,
                     'product_id': item.product.id,
@@ -56,6 +69,11 @@ class SalesReturnViewSet(viewsets.ModelViewSet):
                     'available_qty': max(0, item.quantity - returned_qty),
                     'unit_price': item.unit_price,
                     'batch_id': item.batch_id,
+                    'unit': item.product.unit,
+                    'hsn_code': item.hsn_code,
+                    'gst_rate': item.gst_rate,
+                    'product_gst_rate': item.product.gst_rate,
+                    'tax_type': item.tax_type,
                 })
 
             results.append({
@@ -159,6 +177,10 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
                 'available_qty': max(0, item.quantity - returned_qty),
                 'purchase_price': item.purchase_price,
                 'batch_id': item.batch_id if hasattr(item, 'batch_id') else None,
+                'hsn_code': item.hsn_code,
+                'gst_rate': item.gst_rate,
+                'product_gst_rate': item.product.gst_rate if item.product else None,
+                'tax_type': item.tax_type,
             })
             
         return Response(items_data)

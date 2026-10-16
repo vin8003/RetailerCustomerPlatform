@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from decimal import Decimal
 from django.db import transaction
+from django.db.models import Prefetch, prefetch_related_objects
 from .models import Cart, CartItem, CartHistory
 from products.models import Product
 from products.channel_price import CHANNEL_APP, resolve_channel_price
@@ -12,6 +13,9 @@ class CartItemSerializer(serializers.ModelSerializer):
     Serializer for cart items
     """
     product_name = serializers.CharField(source='product.name', read_only=True)
+    brand_name = serializers.CharField(
+        source='product.brand.name', read_only=True, allow_null=True, default=None
+    )
     product_image = serializers.CharField(source='product.image_display_url', read_only=True)
     product_price = serializers.SerializerMethodField()
     product_unit = serializers.CharField(source='product.unit', read_only=True)
@@ -26,7 +30,7 @@ class CartItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = CartItem
         fields = [
-            'id', 'product', 'product_name', 'product_image', 'product_price',
+            'id', 'product', 'product_name', 'brand_name', 'product_image', 'product_price',
             'product_unit', 'batch', 'batch_number', 'quantity', 'unit_price', 'total_price', 'is_available',
             'stock_quantity', 'minimum_order_quantity', 'maximum_order_quantity',
             'added_at', 'updated_at'
@@ -104,6 +108,14 @@ class CartItemSerializer(serializers.ModelSerializer):
         return data
 
 
+def cart_items_prefetch():
+    """Cart items with product and brand joined. Views and CartSerializer share it."""
+    return Prefetch(
+        'items',
+        queryset=CartItem.objects.select_related('product', 'product__brand'),
+    )
+
+
 class CartSerializer(serializers.ModelSerializer):
     """
     Serializer for shopping cart
@@ -122,7 +134,7 @@ class CartSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'customer', 'retailer', 'retailer_name', 'retailer_address',
             'retailer_phone', 'items', 'total_items', 'total_amount', 'is_empty',
-            'minimum_order_amount', 'created_at', 'updated_at'
+            'minimum_order_amount', 'applied_coupon_code', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'customer', 'created_at', 'updated_at']
 
@@ -137,6 +149,8 @@ class CartSerializer(serializers.ModelSerializer):
         return float(obj.retailer.minimum_order_amount)
 
     def to_representation(self, instance):
+        # No-op when the view already used cart_items_prefetch().
+        prefetch_related_objects([instance], cart_items_prefetch())
         items = instance.items.all()
         Product.cache_saleable_quantities([item.product for item in items])
         return super().to_representation(instance)
@@ -337,6 +351,8 @@ class CartSummarySerializer(serializers.Serializer):
     """
     total_items = serializers.IntegerField()
     total_amount = serializers.DecimalField(max_digits=10, decimal_places=2)
+    taxable_amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    tax_amount = serializers.DecimalField(max_digits=12, decimal_places=2)
     retailer_name = serializers.CharField()
     retailer_id = serializers.IntegerField()
     minimum_order_amount = serializers.DecimalField(max_digits=10, decimal_places=2)

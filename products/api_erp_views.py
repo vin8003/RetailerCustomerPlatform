@@ -25,18 +25,33 @@ from retailers.suppliers import (
     require_purchasing_terms,
     resolve_supplier_home_retailer,
 )
-from products.models import PurchaseInvoice, PurchaseItem, SupplierLedger, Product, ProductBatch, ProductInventoryLog
+from products.models import PurchaseInvoice, PurchaseItem, SupplierLedger, Product, ProductBatch, ProductInventoryLog, shop_today
+from products.inventory_service import (
+    apply_stock_decrease,
+    apply_stock_increase,
+    log_inventory_change,
+    product_level_log_balances,
+)
+from products.tax_service import (
+    allocate_order_discount,
+    resolve_tax_type,
+    round_rupee,
+    split_inclusive_line,
+)
 from orders.models import Order, OrderItem
 from django.db.models import Sum, Q, Count, F, Case, When, DecimalField
 from products.serializers import (
     ExpiringBatchListSerializer,
     PurchaseInvoiceSerializer,
     SkuLastSupplierCostsSerializer,
+    SkuMarginPreviewSerializer,
     SupplierLedgerSerializer,
 )
 from products.supplier_last_costs import (
+    draft_or_last_pi_cost,
     last_supplier_cost_rows_for_product,
     require_purchase_role,
+    selling_margin_percent,
 )
 from orders.serializers import OrderDetailSerializer
 from common.permissions import IsRetailerOwner
@@ -46,6 +61,8 @@ from customers.models import CustomerProfile
 class SupplierViewSet(viewsets.ModelViewSet):
     serializer_class = SupplierSerializer
     permission_classes = [permissions.IsAuthenticated]
+    filter_backends = [SearchFilter]
+    search_fields = ['company_name', 'contact_person', 'phone_number']
 
     search_fields = ['company_name', 'contact_person', 'phone_number']
 
@@ -203,6 +220,19 @@ class SupplierViewSet(viewsets.ModelViewSet):
             organization=self._caller_org(),
         )
 
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if (
+            instance.purchase_invoices.exists()
+            or instance.ledger_entries.exists()
+            or instance.purchase_returns.exists()
+        ):
+            raise ValidationError(
+                "Cannot delete a supplier linked to purchases, payments, ledger, or returns. "
+                "Deactivate instead."
+            )
+        return super().destroy(request, *args, **kwargs)
+
 
 class PurchaseInvoiceViewSet(viewsets.ModelViewSet):
     serializer_class = PurchaseInvoiceSerializer
@@ -260,18 +290,21 @@ class PurchaseInvoiceViewSet(viewsets.ModelViewSet):
             for old_item in old_items:
                 product = old_item.product
                 if product:
-                    Product.objects.filter(id=product.id, retailer=retailer).update(
-                        quantity=F('quantity') - old_item.quantity
+                    product = Product.objects.select_for_update().get(id=product.id, retailer=retailer)
+                    prev_qty = product.quantity
+                    apply_stock_decrease(
+                        product,
+                        old_item.quantity,
+                        allow_negative=True,
                     )
-                    product.refresh_from_db()
-                    ProductInventoryLog.objects.create(
+                    log_inventory_change(
                         product=product,
-                        created_by=self.request.user,
-                        quantity_change=-old_item.quantity,
-                        previous_quantity=product.quantity + old_item.quantity,
-                        new_quantity=product.quantity,
                         log_type='removed',
-                        reason=f'Purchase Invoice Deleted: #{instance.invoice_number}'
+                        quantity_change=-old_item.quantity,
+                        previous_quantity=prev_qty,
+                        new_quantity=product.quantity,
+                        reason=f'Purchase Invoice Deleted: #{instance.invoice_number}',
+                        created_by=self.request.user,
                     )
             
             # 2. Delete invoice 
@@ -309,6 +342,42 @@ def sku_last_supplier_costs(request, product_id):
         'suppliers': last_supplier_cost_rows_for_product(product),
     }
     return Response(SkuLastSupplierCostsSerializer(payload).data)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def sku_margin_preview(request, product_id):
+    """
+    Margin % for a SKU from selling price vs draft-or-last PI cost.
+
+    Purchase-role only. Missing cost is null, not zero.
+    """
+    if getattr(request.user, 'user_type', None) != 'retailer':
+        return Response(
+            {'error': 'Only retailers can view purchase margin.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    org = get_organization_for_user(request.user)
+    denied = require_purchase_role(request.user, organization=org)
+    if denied is not None:
+        return denied
+    product = (
+        Product.objects.filter(pk=product_id, retailer__organization=org).first()
+    )
+    if product is None:
+        return Response(
+            {'error': 'Product not found'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    cost, cost_source = draft_or_last_pi_cost(product)
+    payload = {
+        'product_id': product.id,
+        'selling_price': product.price,
+        'cost': cost,
+        'cost_source': cost_source,
+        'margin_percent': selling_margin_percent(product.price, cost),
+    }
+    return Response(SkuMarginPreviewSerializer(payload).data)
 
 
 class SupplierLedgerViewSet(viewsets.ModelViewSet):
@@ -480,13 +549,71 @@ def create_pos_order(request):
         # Support cashier's manual discount in addition/override to automated offers
         raw_discount = Decimal(str(data.get('discount_amount', 0)))
         final_discount = max(automated_discount, raw_discount)
-        total_amount = subtotal - final_discount
 
         with transaction.atomic():
-            # Round amounts to nearest whole rupee as requested
-            rounded_subtotal = subtotal.quantize(Decimal('1'), rounding='ROUND_HALF_UP')
-            rounded_discount = final_discount.quantize(Decimal('1'), rounding='ROUND_HALF_UP')
-            rounded_total = total_amount.quantize(Decimal('1'), rounding='ROUND_HALF_UP')
+            # Prepare the exact post-offer lines once so inventory, order items,
+            # and tax snapshots all use the same quantities and prices.
+            item_discounts = offer_results.get('item_discounts', {})
+            sale_lines = []
+            raw_lines = []
+            offered_lines = []
+            for i, item in enumerate(items_data):
+                product = Product.objects.select_for_update().get(
+                    id=item['product_id'], retailer=retailer
+                )
+                batch_id = item.get('batch_id')
+                batch = None
+                if batch_id:
+                    batch = ProductBatch.objects.select_for_update().get(
+                        id=batch_id, product=product
+                    )
+
+                requested_qty = Decimal(str(item['quantity']))
+                catalog_price = Decimal(str(batch.price if batch else product.price))
+                qty = requested_qty
+                unit_price = catalog_price
+                unique_key = f"pos_{i}"
+                if unique_key in item_discounts:
+                    info = item_discounts[unique_key]
+                    unit_price = Decimal(str(info['final_price']))
+                    qty = Decimal(str(info.get('total_display_quantity', qty)))
+
+                raw_lines.append(requested_qty * catalog_price)
+                offered_lines.append(qty * unit_price)
+                sale_lines.append({
+                    'product': product,
+                    'batch': batch,
+                    'quantity': qty,
+                    'unit_price': unit_price,
+                })
+
+            offer_discount = max(
+                Decimal('0.00'),
+                sum(raw_lines, Decimal('0.00')) - sum(offered_lines, Decimal('0.00')),
+            )
+            extra_discount = max(Decimal('0.00'), final_discount - offer_discount)
+            taxable_bases = allocate_order_discount(offered_lines, extra_discount)
+            tax_type = resolve_tax_type(retailer.gst_number, '')
+            taxable_amount = Decimal('0.00')
+            tax_amount = Decimal('0.00')
+
+            for sale_line, taxable_base in zip(sale_lines, taxable_bases):
+                product = sale_line['product']
+                split = split_inclusive_line(taxable_base, product.gst_rate)
+                sale_line.update({
+                    'hsn_code': product.hsn_code,
+                    'gst_rate': product.gst_rate,
+                    'taxable_value': split['taxable_value'],
+                    'tax_amount': split['tax_amount'],
+                    'tax_type': tax_type,
+                })
+                taxable_amount += split['taxable_value']
+                tax_amount += split['tax_amount']
+
+            # Keep POS bill totals at nearest-rupee precision.
+            rounded_subtotal = round_rupee(subtotal)
+            rounded_discount = round_rupee(final_discount)
+            rounded_total = round_rupee(sum(taxable_bases, Decimal('0.00')))
 
             # Payment Breakdown Logic (Initialized to 0 to avoid NULL constraints)
             cash_amount = Decimal('0')
@@ -566,6 +693,8 @@ def create_pos_order(request):
                 delivery_fee=0,
                 discount_amount=rounded_discount,
                 total_amount=rounded_total,
+                taxable_amount=taxable_amount,
+                tax_amount=tax_amount,
                 cash_amount=cash_amount,
                 upi_amount=upi_amount,
                 card_amount=card_amount,
@@ -624,56 +753,38 @@ def create_pos_order(request):
                     mapping.save()
 
             # Create Order Items and Reduce Inventory
-            item_discounts = offer_results.get('item_discounts', {})
-            # Selling below zero stock is a client request, so it needs its own permission.
-            allow_negative = data.get('allow_negative') is True
-            if allow_negative:
-                from retailers.organization import get_organization_for_user, user_has_org_permission
+            for sale_line in sale_lines:
+                product = sale_line['product']
+                batch = sale_line['batch']
+                qty = sale_line['quantity']
+                unit_price = sale_line['unit_price']
+                
+                # Always log product-level balances (batch_id is audit-only)
+                prev_qty = product.quantity
 
-                oversell_org = get_organization_for_user(request.user)
-                if oversell_org is None or not user_has_org_permission(
-                    request.user, oversell_org, 'orders.oversell'
+                # If POS scanned an empty/stale barcode batch but other batches
+                # still hold stock, deduct FIFO instead of driving that batch
+                # negative and snapping product.quantity to the bad sum.
+                stock_batch = batch
+                if (
+                    batch is not None
+                    and product.has_batches
+                    and product.track_inventory
+                    and batch.quantity < qty
                 ):
-                    raise CreditOverrideDenied(
-                        'Selling more than the stock on hand needs the orders.oversell permission'
+                    available_elsewhere = (
+                        product.batches.filter(is_active=True)
+                        .exclude(pk=batch.pk)
+                        .aggregate(total=Sum('quantity'))['total']
+                        or Decimal('0')
                     )
-            # One pk-ASC lock for every sold SKU (+ pack parents). Do not
-            # lock child-then-parent ad hoc — that AB-BA deadlocks with
-            # place_order / modify lock_for_sale.
-            locked_products = Product.lock_for_sale(
-                retailer,
-                [pos_item.product for pos_item in pos_items],
-            )
-            for i, item in enumerate(items_data):
-                product = locked_products[item['product_id']]
-                batch_id = item.get('batch_id')
-                batch = None
-                if batch_id:
-                    batch = ProductBatch.objects.select_for_update().get(id=batch_id, product=product)
-                
-                qty = Decimal(str(item['quantity']))
-                unit_price = Decimal(str(batch.price if batch else product.price))
-                
-                # Apply discounts/free items dynamically calculated by the engine using unique key
-                unique_key = f"pos_{i}"
-                if unique_key in item_discounts:
-                    info = item_discounts[unique_key]
-                    unit_price = info['final_price']
-                    qty = info.get('total_display_quantity', qty)
-                
-                # Calculate previous quantity for logging
-                prev_qty = batch.quantity if (batch and product.track_inventory) else product.quantity
-                
-                # Sale deduct blocks when on-hand would go negative unless
-                # the caller already passed the existing allow_negative flag.
-                if not product.reduce_quantity(
-                    qty, batch=batch, allow_negative=allow_negative
-                ):
-                    raise ValueError(
-                        f"Not enough saleable stock for {product.name}"
-                    )
-                
-                new_qty = batch.quantity if (batch and product.track_inventory) else product.quantity
+                    if available_elsewhere >= qty:
+                        stock_batch = None
+
+                # POS allows negative stock (allow_negative=True)
+                new_qty = apply_stock_decrease(
+                    product, qty, batch=stock_batch, allow_negative=True
+                )
 
                 OrderItem.objects.create(
                     order=order,
@@ -684,12 +795,16 @@ def create_pos_order(request):
                     product_unit=product.unit,
                     quantity=qty,
                     unit_price=unit_price,
-                    total_price=qty * unit_price
+                    total_price=qty * unit_price,
+                    hsn_code=sale_line['hsn_code'],
+                    gst_rate=sale_line['gst_rate'],
+                    taxable_value=sale_line['taxable_value'],
+                    tax_amount=sale_line['tax_amount'],
+                    tax_type=sale_line['tax_type'],
                 )
 
                 if product.track_inventory:
-                    # Log inventory
-                    ProductInventoryLog.objects.create(
+                    log_inventory_change(
                         product=product,
                         batch=batch,
                         created_by=request.user,
@@ -697,7 +812,7 @@ def create_pos_order(request):
                         previous_quantity=prev_qty,
                         new_quantity=new_qty,
                         log_type='sold',
-                        reason=f'POS Sale: Order #{order.order_number}'
+                        reason=f'POS Sale: Order #{order.order_number}',
                     )
 
         from orders.access import order_detail_queryset
@@ -818,6 +933,38 @@ def search_pos_customers(request):
         })
         seen_mobiles.add(mobile)
 
+    # Online/app customers who previously shopped here but may not have a mapping yet.
+    if len(suggestions) < 8:
+        order_customer_filter = (
+            Q(customer__username__endswith=last_10) |
+            Q(customer__phone_number__endswith=last_10)
+        ) if len(query) >= 10 and last_10 else (
+            Q(customer__username__icontains=query) |
+            Q(customer__phone_number__icontains=query) |
+            Q(customer__first_name__icontains=query) |
+            Q(customer__last_name__icontains=query)
+        )
+        app_orders = (
+            Order.objects.filter(retailer=retailer, customer__isnull=False)
+            .filter(order_customer_filter)
+            .select_related('customer')
+            .order_by('-created_at')[:30]
+        )
+        for order in app_orders:
+            u = order.customer
+            mobile = normalize_phone_number(u.username) or normalize_phone_number(u.phone_number or '')
+            if not mobile or mobile in seen_mobiles:
+                continue
+            name = (u.get_full_name() or '').strip() or u.username
+            suggestions.append({
+                'mobile': mobile,
+                'name': name,
+                'status': 'verified' if u.registration_status == 'registered' else 'shadow'
+            })
+            seen_mobiles.add(mobile)
+            if len(suggestions) >= 8:
+                break
+
     # This retailer's walk-in guests (may not have a mapping yet)
     guest_orders = Order.objects.filter(
         retailer=retailer,
@@ -857,27 +1004,40 @@ def get_inventory_ledger(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    logs = ProductInventoryLog.objects.filter(
-        product__retailer=retailer
-    ).select_related('created_by')
+    product = None
     if product_id:
         try:
             product = Product.objects.get(id=product_id, retailer=retailer)
         except Product.DoesNotExist:
             return Response({'error': 'Product not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    logs = ProductInventoryLog.objects.filter(
+        product__retailer=retailer
+    ).select_related('product', 'created_by')
+    if product:
         logs = logs.filter(product=product)
     if reason:
-        logs = logs.filter(reason=reason)
+        # Comma-separated: the write-off list asks for every reason in one call.
+        logs = logs.filter(reason__in=[r.strip() for r in reason.split(',') if r.strip()])
+
+    logs = logs.order_by('-created_at')[:100]
+    balances = product_level_log_balances(product) if product else {}
 
     data = []
-    for log in logs.order_by('-created_at')[:100]:
+    for log in logs:
+        prev_qty, new_qty = balances.get(
+            log.pk, (log.previous_quantity, log.new_quantity)
+        )
         data.append({
             'id': log.id,
+            'product_id': log.product_id,
+            'product_name': log.product.name,
+            'barcode': log.product.barcode,
             'log_type': log.log_type,
             'batch_id': log.batch_id,
             'quantity_change': log.quantity_change,
-            'previous_quantity': log.previous_quantity,
-            'new_quantity': log.new_quantity,
+            'previous_quantity': prev_qty,
+            'new_quantity': new_qty,
             'reason': log.reason,
             'created_at': log.created_at,
             'created_by': log.created_by.get_full_name() if log.created_by else 'System'
@@ -887,6 +1047,8 @@ def get_inventory_ledger(request):
 
 
 DEFAULT_EXPIRY_WINDOW_DAYS = 30
+# shortcut: no pagination, the soonest-expiring 500 rows only; paginate if shops outgrow it.
+EXPIRING_BATCHES_LIMIT = 500
 
 
 def _parse_expiry_window_days(raw):
@@ -958,7 +1120,7 @@ def get_expiring_batches(request):
     if invalid is not None:
         return invalid
 
-    cutoff = timezone.localdate() + timedelta(days=days)
+    cutoff = shop_today() + timedelta(days=days)
     batches = (
         ProductBatch.objects.filter(
             retailer_id__in=served,
@@ -969,7 +1131,7 @@ def get_expiring_batches(request):
             expiry_date__lte=cutoff,
         )
         .select_related('product')
-        .order_by('expiry_date', 'id')
+        .order_by('expiry_date', 'id')[:EXPIRING_BATCHES_LIMIT]
     )
     include_costs = user_has_org_permission(request.user, org, 'purchasing.costs.read')
     return Response(

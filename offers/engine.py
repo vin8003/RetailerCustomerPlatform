@@ -1,11 +1,69 @@
 from decimal import Decimal
 from django.utils import timezone
+from django.db import models
 from .models import Offer
 
 class OfferEngine:
     """
     Core engine to calculate applicable offers for a cart
     """
+
+    def validate_coupon(self, coupon_code, retailer, customer=None, cart_total=None, channel='mobile'):
+        """
+        Validate if coupon can be applied. Returns (is_valid, offer, error_message).
+        """
+        if not coupon_code:
+            return False, None, "No coupon code provided"
+            
+        code = str(coupon_code).strip().upper()
+        now = timezone.now()
+        try:
+            offer = Offer.objects.get(
+                retailer=retailer,
+                coupon_code__iexact=code,
+                is_active=True
+            )
+        except Offer.DoesNotExist:
+            return False, None, "Invalid coupon code"
+            
+        if offer.start_date and now < offer.start_date:
+            return False, offer, "This coupon offer has not started yet"
+        if offer.end_date and now > offer.end_date:
+            return False, offer, "This coupon code has expired"
+            
+        if channel == 'pos' and offer.applicable_on == 'mobile':
+            return False, offer, "This coupon is valid only on the mobile app"
+        if channel != 'pos' and offer.applicable_on == 'pos':
+            return False, offer, "This coupon is valid only in-store (POS)"
+            
+        if offer.usage_limit_total and offer.current_redemptions >= offer.usage_limit_total:
+            return False, offer, "This coupon usage limit has been reached"
+            
+        if customer and customer.is_authenticated:
+            if offer.usage_limit_per_user:
+                from .models import OfferRedemption
+                used_count = OfferRedemption.objects.filter(offer=offer, customer=customer).count()
+                if used_count >= offer.usage_limit_per_user:
+                    return False, offer, f"You have already redeemed this coupon ({offer.usage_limit_per_user} per customer limit)"
+                    
+            if offer.target_audience == 'first_time':
+                from orders.models import Order
+                has_orders = Order.objects.filter(
+                    customer=customer, 
+                    retailer=retailer
+                ).exclude(status__in=['cancelled', 'returned']).exists()
+                if has_orders:
+                    return False, offer, "This coupon is only valid on your first order"
+                    
+            elif offer.target_audience == 'selected':
+                if not offer.eligible_customers.filter(id=customer.id).exists():
+                    return False, offer, "This coupon is not valid for your account"
+                    
+        if cart_total is not None and offer.min_order_value > 0 and Decimal(str(cart_total)) < offer.min_order_value:
+            gap = offer.min_order_value - Decimal(str(cart_total))
+            return False, offer, f"Add ₹{gap:.2f} more to apply this coupon (Min order ₹{offer.min_order_value:.0f})"
+            
+        return True, offer, None
     
     def calculate_offers(self, cart_items, retailer, context=None):
         """
@@ -13,47 +71,66 @@ class OfferEngine:
         Input: 
             cart_items: List of objects (must have product, quantity, unit_price, total_price attributes)
             retailer: The retailer instance
-        Output:
-            {
-                'subtotal': Decimal,
-                'discounted_total': Decimal,
-                'total_savings': Decimal,
-                'applied_offers': [
-                    {
-                        'offer_id': int,
-                        'name': str,
-                        'description': str,
-                        'savings': Decimal,
-                        'type': str
-                    }
-                ],
-                'item_discounts': {
-                    item_id: {
-                        'original_price': Decimal,
-                        'final_price': Decimal,
-                        'applied_offer': str
-                    }
-                }
-            }
+            context: dict with channel ('mobile'/'pos'), customer (user object), coupon_code (str)
         """
         if not cart_items:
             return self._empty_result()
             
-        # 1. Fetch valid offers for this retailer
-        active_offers = Offer.objects.filter(
+        # Channel & user context
+        channel = context.get('channel', 'mobile') if context else 'mobile'
+        customer = context.get('customer', None) if context else None
+        coupon_code = context.get('coupon_code', None) if context else None
+
+        # 1. Fetch valid automatic offers for this retailer (offers without coupon codes)
+        active_offers_qs = Offer.objects.filter(
             retailer=retailer,
             is_active=True,
             start_date__lte=timezone.now()
         ).exclude(
             end_date__lt=timezone.now()
-        ).order_by('-priority')
+        )
         
         # Channel/Source Filtering
-        channel = context.get('channel', 'mobile') if context else 'mobile'
         if channel == 'pos':
-            active_offers = active_offers.filter(applicable_on__in=['pos', 'both'])
+            active_offers_qs = active_offers_qs.filter(applicable_on__in=['pos', 'both'])
         else:
-            active_offers = active_offers.filter(applicable_on__in=['mobile', 'both'])
+            active_offers_qs = active_offers_qs.filter(applicable_on__in=['mobile', 'both'])
+
+        automatic_offers = list(active_offers_qs.filter(
+            models.Q(coupon_code__isnull=True) | models.Q(coupon_code='')
+        ).order_by('-priority'))
+
+        coupon_offer = None
+        coupon_error = None
+
+        # Calculate raw cart subtotal for min_order_value check
+        raw_cart_total = sum(
+            Decimal(str(getattr(item, 'unit_price', getattr(item.product, 'price', 0)))) * Decimal(str(item.quantity))
+            for item in cart_items
+        )
+
+        if coupon_code:
+            is_valid, offer, err = self.validate_coupon(
+                coupon_code=coupon_code,
+                retailer=retailer,
+                customer=customer,
+                cart_total=raw_cart_total,
+                channel=channel
+            )
+            if is_valid:
+                coupon_offer = offer
+            else:
+                coupon_error = err
+
+        active_offers = list(automatic_offers)
+        if coupon_offer:
+            active_offers.append(coupon_offer)
+            
+        # Re-sort: Discount offers first (so net item price is reduced), then credit_points (cashback) on discounted items
+        active_offers.sort(
+            key=lambda o: (0 if getattr(o, 'benefit_type', 'discount') == 'credit_points' else 1, o.priority),
+            reverse=True
+        )
         
         # 2. Prepare calculation context
         # We need a mutable structure to track price changes and applied rules
@@ -79,6 +156,13 @@ class OfferEngine:
             # Check offer usage limits
             if offer.usage_limit_total and offer.current_redemptions >= offer.usage_limit_total:
                 continue
+
+            # Check per-user usage limits if customer is present
+            if offer.usage_limit_per_user and customer and customer.is_authenticated:
+                from .models import OfferRedemption
+                used_by_user = OfferRedemption.objects.filter(offer=offer, customer=customer).count()
+                if used_by_user >= offer.usage_limit_per_user:
+                    continue
                 
             # Filter eligible items for this offer
             eligible_indices = self._get_eligible_items(offer, item_context)
@@ -100,10 +184,11 @@ class OfferEngine:
                         # Points on current price
                         p = item['current_price'] * item['quantity'] * percentage
                         points += p
-                        item['savings'] += Decimal(0) # Points don't reduce price
                         item['applied_offers'].append(offer.name)
                         if not offer.is_stackable:
                              item['is_exclusive'] = True
+                    if offer.max_discount_amount and points > offer.max_discount_amount:
+                        points = offer.max_discount_amount
 
                 elif offer.offer_type == 'flat_amount':
                     # Flat points per item
@@ -113,6 +198,8 @@ class OfferEngine:
                         item['applied_offers'].append(offer.name)
                         if not offer.is_stackable:
                              item['is_exclusive'] = True
+                    if offer.max_discount_amount and points > offer.max_discount_amount:
+                        points = offer.max_discount_amount
 
                 elif offer.offer_type == 'cart_value':
                      current_cart_total = sum(x['current_price'] * x['quantity'] for x in item_context)
@@ -134,15 +221,20 @@ class OfferEngine:
                                  item_context[idx]['applied_offers'].append(offer.name)
                 
                 if points > 0:
-                     total_points_earned += points
-                     applied_offers_summary.append({
+                    points = points.quantize(Decimal("0.01"))
+                    total_points_earned += points
+                    applied_offers_summary.append({
                         'offer_id': offer.id,
                         'name': offer.name,
                         'description': offer.description,
-                        'savings': points, # reuse field or new? frontend expects savings for display usually.
+                        'savings': points,
+                        'discount': Decimal(0),
+                        'points': points,
                         'benefit_type': 'credit_points',
-                        'type': offer.get_offer_type_display()
-                     })
+                        'type': offer.get_offer_type_display(),
+                        'is_coupon': bool(offer.coupon_code),
+                        'coupon_code': offer.coupon_code if offer.coupon_code else None
+                    })
                 
                 continue 
 
@@ -165,7 +257,9 @@ class OfferEngine:
                     'description': offer.description,
                     'savings': savings_from_this_offer,
                     'benefit_type': 'discount',
-                    'type': offer.get_offer_type_display()
+                    'type': offer.get_offer_type_display(),
+                    'is_coupon': bool(offer.coupon_code),
+                    'coupon_code': offer.coupon_code if offer.coupon_code else None
                 })
                 
         # 4. Final Aggregation
@@ -187,13 +281,32 @@ class OfferEngine:
                 'total_display_quantity': x.get('total_display_quantity', x['quantity'])
             }
 
+        applied_coupon = None
+        for app in applied_offers_summary:
+            if app.get('is_coupon') and app.get('coupon_code'):
+                savings_val = float(app['savings'])
+                is_points = app.get('benefit_type') == 'credit_points'
+                applied_coupon = {
+                    'code': app['coupon_code'],
+                    'offer_id': app['offer_id'],
+                    'name': app['name'],
+                    'savings': savings_val,
+                    'discount': 0.0 if is_points else savings_val,
+                    'points': savings_val if is_points else 0.0,
+                    'benefit_type': app.get('benefit_type', 'discount'),
+                    'type': app.get('type')
+                }
+                break
+
         return {
             'subtotal': original_subtotal.quantize(Decimal("0.01")),
             'discounted_total': final_total.quantize(Decimal("0.01")),
             'total_savings': total_savings.quantize(Decimal("0.01")),
             'total_points': total_points_earned.quantize(Decimal("0.01")),
             'applied_offers': applied_offers_summary,
-            'item_discounts': item_discounts
+            'item_discounts': item_discounts,
+            'applied_coupon': applied_coupon,
+            'coupon_error': coupon_error
         }
 
     def _get_eligible_items(self, offer, item_context):
@@ -274,6 +387,9 @@ class OfferEngine:
             
             total_savings += (savings * item_data['quantity'])
             
+        if offer.max_discount_amount and total_savings > offer.max_discount_amount:
+            total_savings = offer.max_discount_amount
+
         return total_savings
 
     def _apply_bxgy(self, offer, item_context, eligible_indices):
@@ -492,6 +608,9 @@ class OfferEngine:
             'subtotal': Decimal(0),
             'discounted_total': Decimal(0),
             'total_savings': Decimal(0),
+            'total_points': Decimal(0),
             'applied_offers': [],
-            'item_discounts': {}
+            'item_discounts': {},
+            'applied_coupon': None,
+            'coupon_error': None
         }

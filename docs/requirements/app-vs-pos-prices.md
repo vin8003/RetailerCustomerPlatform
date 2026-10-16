@@ -38,8 +38,8 @@ There is no marketplace channel in this repo. A later marketplace connector must
 |--------|------|-----|----------|
 | GET | `/api/products/` and `/api/products/<id>/` | Retailer JWT | Store `price` + `app_price` |
 | GET | `/api/products/?no_page=true` | Retailer JWT (POS) | Store `price` + `app_price` |
-| GET | `/api/products/search/` | Retailer JWT | Store `price` + `app_price` (pass request / store channel; do not fail-closed to app) |
-| GET | `/api/products/retailer/<retailer_id>/…` | Public / customer | Resolved app selling price as `price`; no `app_price` field |
+| GET | `/api/products/search/` | Retailer JWT | Store `price` + `app_price` + `discounted_price` (store selling alias; OE-298) |
+| GET | `/api/products/retailer/<retailer_id>/…` | Public / customer | Resolved app selling price as `price` (and `discounted_price` on search; OE-298); no `app_price` field |
 | POST | `/api/products/erp/pos-checkout/` | Retailer JWT | Validates against store `price` |
 | POST | `/api/cart/add/` | Customer JWT | `unit_price` from app resolution |
 | POST | `/api/orders/place/` | Customer JWT | `OrderItem` stamps cart/channel `unit_price` (not store `Product.price`) |

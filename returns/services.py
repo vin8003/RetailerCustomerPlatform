@@ -1,6 +1,12 @@
 from django.db import transaction
 from django.utils import timezone
-from products.models import Product, ProductBatch, ProductInventoryLog, SupplierLedger
+from products.inventory_service import (
+    apply_stock_decrease,
+    apply_stock_increase,
+    log_inventory_change,
+)
+from products.models import SupplierLedger
+from products.tax_service import split_inclusive_line
 from retailers.models import RetailerCustomerMapping
 from .models import SalesReturn, SalesReturnItem, PurchaseReturn, PurchaseReturnItem
 from django.db.models import Sum
@@ -26,7 +32,9 @@ def process_sales_return(retailer, order, items_data, refund_payment_mode, reaso
             created_by=created_by
         )
         
-        total_refund = 0
+        total_refund = Decimal('0.00')
+        total_taxable = Decimal('0.00')
+        total_tax = Decimal('0.00')
         for item in items_data:
             product = item['product']
             batch = item.get('batch')
@@ -41,22 +49,29 @@ def process_sales_return(retailer, order, items_data, refund_payment_mode, reaso
                     raise ValueError(f"Cannot return {qty} units of {product.name}. Already returned: {already_returned}, Purchased: {order_item.quantity}")
 
             # 1. Update Inventory
-            product.increase_quantity(qty, batch=batch)
-            
+            prev_qty = product.quantity
+            new_qty = apply_stock_increase(product, qty, batch=batch)
+
             # 2. Log Change
-            ProductInventoryLog.objects.create(
+            log_inventory_change(
                 product=product,
                 batch=batch,
                 log_type='returned',
                 quantity_change=qty,
-                previous_quantity=product.quantity - qty,
-                new_quantity=product.quantity,
+                previous_quantity=prev_qty,
+                new_quantity=new_qty,
                 reason=f"Sales Return: {reason}" if reason else "Sales Return",
-                created_by=created_by
+                created_by=created_by,
             )
             
             item_total = qty * unit_price
+            tax_source = order_item or product
+            gst_rate = tax_source.gst_rate
+            tax_split = split_inclusive_line(item_total, gst_rate)
+            item_total = tax_split['line_total']
             total_refund += item_total
+            total_taxable += tax_split['taxable_value']
+            total_tax += tax_split['tax_amount']
             
             SalesReturnItem.objects.create(
                 sales_return=sales_return,
@@ -65,11 +80,18 @@ def process_sales_return(retailer, order, items_data, refund_payment_mode, reaso
                 order_item=order_item,
                 quantity=qty,
                 refund_unit_price=unit_price,
-                total_refund=item_total
+                total_refund=item_total,
+                hsn_code=tax_source.hsn_code,
+                gst_rate=gst_rate,
+                taxable_value=tax_split['taxable_value'],
+                tax_amount=tax_split['tax_amount'],
+                tax_type=order_item.tax_type if order_item else 'GST',
             )
             
         sales_return.refund_amount = total_refund
-        sales_return.save()
+        sales_return.taxable_amount = total_taxable
+        sales_return.tax_amount = total_tax
+        sales_return.save(update_fields=['refund_amount', 'taxable_amount', 'tax_amount'])
         
         # 3. Update CRM Mapping if order/customer exists
         if order and order.customer:
@@ -139,7 +161,25 @@ def process_sales_return(retailer, order, items_data, refund_payment_mode, reaso
                     description=f"Points reverted due to return (Order #{order.order_number})"
                 )
 
+        if order:
+            _maybe_mark_order_returned(order, created_by)
+
         return sales_return
+
+
+def _maybe_mark_order_returned(order, user):
+    """Set order.status to returned when every line is fully returned (KAN-77)."""
+    items = list(order.items.all())
+    if not items:
+        return
+    for item in items:
+        already_returned = SalesReturnItem.objects.filter(order_item=item).aggregate(
+            total=Sum('quantity')
+        )['total'] or 0
+        if already_returned < item.quantity:
+            return
+    if order.status != 'returned':
+        order.update_status('returned', user)
 
 def process_purchase_return(retailer, supplier, invoice, items_data, notes, created_by):
     """
@@ -167,7 +207,9 @@ def process_purchase_return(retailer, supplier, invoice, items_data, notes, crea
             created_by=created_by
         )
         
-        total_return_value = 0
+        total_return_value = Decimal('0.00')
+        total_taxable = Decimal('0.00')
+        total_tax = Decimal('0.00')
         for item in items_data:
             product = item['product']
             batch = item.get('batch')
@@ -182,24 +224,28 @@ def process_purchase_return(retailer, supplier, invoice, items_data, notes, crea
                     raise ValueError(f"Cannot return {qty} units of {product.name}. Already returned: {already_returned}, Purchased: {purchase_item.quantity}")
 
             # 1. Update Inventory (- quantity)
-            product.reduce_quantity(
-                qty, batch=batch, allow_negative=True, forbid_expired=False
-            )
-            
+            prev_qty = product.quantity
+            new_qty = apply_stock_decrease(product, qty, batch=batch, allow_negative=True)
             # 2. Log Change
-            ProductInventoryLog.objects.create(
+            log_inventory_change(
                 product=product,
                 batch=batch,
                 log_type='removed',
                 quantity_change=-qty,
-                previous_quantity=product.quantity + qty,
-                new_quantity=product.quantity,
+                previous_quantity=prev_qty,
+                new_quantity=new_qty,
                 reason=f"Purchase Return to Supplier: {notes}" if notes else "Purchase Return",
-                created_by=created_by
+                created_by=created_by,
             )
             
             item_total = qty * price
+            tax_source = purchase_item or product
+            gst_rate = tax_source.gst_rate
+            tax_split = split_inclusive_line(item_total, gst_rate)
+            item_total = tax_split['line_total']
             total_return_value += item_total
+            total_taxable += tax_split['taxable_value']
+            total_tax += tax_split['tax_amount']
             
             PurchaseReturnItem.objects.create(
                 purchase_return=purchase_return,
@@ -208,11 +254,20 @@ def process_purchase_return(retailer, supplier, invoice, items_data, notes, crea
                 purchase_item=purchase_item,
                 quantity=qty,
                 purchase_price=price,
-                total=item_total
+                total=item_total,
+                hsn_code=tax_source.hsn_code,
+                gst_rate=gst_rate,
+                taxable_value=tax_split['taxable_value'],
+                tax_amount=tax_split['tax_amount'],
+                tax_type=purchase_item.tax_type if purchase_item else 'GST',
             )
             
         purchase_return.total_amount = total_return_value
-        purchase_return.save()
+        purchase_return.taxable_amount = total_taxable
+        purchase_return.tax_amount = total_tax
+        purchase_return.save(
+            update_fields=['total_amount', 'taxable_amount', 'tax_amount']
+        )
         
         # 3. Update Supplier Ledger
         SupplierLedger.objects.create(

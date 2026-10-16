@@ -97,6 +97,7 @@ class TestProductDetailSerializer:
             price=Decimal("50.00"),
             category=category,
             product_group="grain",
+            quantity=Decimal("10"),
             is_active=True,
             is_available=True
         )
@@ -109,6 +110,7 @@ class TestProductDetailSerializer:
             category=category,
             product_group="grain",
             is_parent_bulk=True,
+            quantity=Decimal("10"),
             is_active=True,
             is_available=True
         )
@@ -122,6 +124,7 @@ class TestProductDetailSerializer:
             product_group="grain",
             parent_bulk_product=parent_sibling,
             conversion_factor=Decimal("10"),
+            quantity=Decimal("10"),
             is_active=True,
             is_available=True
         )

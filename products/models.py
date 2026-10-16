@@ -1,13 +1,23 @@
 from django.db import models
-from django.db.models import DecimalField, F, OuterRef, Subquery, Sum
-from django.db.models.functions import Coalesce
+from django.db.models import F, Sum
 from django.conf import settings
 from django.core.validators import MinValueValidator, MaxValueValidator
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVector
 from django.utils import timezone
 from common.utils import generate_upload_path, resize_image
+from .customer_stock import ProductManager
+
+# shortcut: one shop timezone for expiry. RetailerProfile.timezone defaults to it and no
+# API or admin edits it; read it per shop once shops outside IST are possible.
+SHOP_TIME_ZONE = ZoneInfo('Asia/Kolkata')
+
+
+def shop_today():
+    """Today in the shop's timezone. The server runs in UTC, whose date flips at 05:30 IST."""
+    return timezone.localdate(timezone=SHOP_TIME_ZONE)
 
 
 class ProductCategory(models.Model):
@@ -212,7 +222,7 @@ class ProductBatch(models.Model):
         if self.expiry_date is None:
             return False
         if on_date is None:
-            on_date = timezone.localdate()
+            on_date = shop_today()
         return self.expiry_date < on_date
 
     @classmethod
@@ -222,7 +232,7 @@ class ProductBatch(models.Model):
         Null-expiry batches remain eligible.
         """
         if on_date is None:
-            on_date = timezone.localdate()
+            on_date = shop_today()
         return models.Q(expiry_date__isnull=True) | models.Q(expiry_date__gte=on_date)
 
     @classmethod
@@ -318,6 +328,13 @@ class Product(models.Model):
         default=0,
         validators=[MinValueValidator(0), MaxValueValidator(100)]
     )
+    hsn_code = models.CharField(max_length=8, blank=True, default='')
+    gst_rate = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        choices=[(Decimal(x), f'{x}%') for x in ('0', '3', '5', '18', '40')],
+    )
     
     # Inventory
     quantity = models.DecimalField(max_digits=12, decimal_places=3, default=0)
@@ -369,6 +386,8 @@ class Product(models.Model):
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = ProductManager()
     
     class Meta:
         db_table = 'product'
@@ -425,8 +444,9 @@ class Product(models.Model):
                 if child.conversion_factor and child.conversion_factor > 0:
                     child.quantity = self.quantity / child.conversion_factor
                     child.track_inventory = self.track_inventory
-                    child.is_available = self.is_available
-                    super(Product, child).save(update_fields=['quantity', 'track_inventory', 'is_available'])
+                    # KAN-49: do not copy parent is_available onto children.
+                    # Parent visibility is independent; children stay sellable.
+                    super(Product, child).save(update_fields=['quantity', 'track_inventory'])
 
     def sync_inventory_from_batches(self):
         """Update product quantity from sum of active batches (concurrency-safe)"""
@@ -470,7 +490,15 @@ class Product(models.Model):
         if not self.track_inventory:
             return self.is_available
         return self.quantity > 0
-    
+
+    def is_saleable_in_stock(self):
+        """is_in_stock, but expired batches do not count (matches saleable_quantity)."""
+        if self.parent_bulk_product:
+            return self.parent_bulk_product.is_saleable_in_stock()
+        if not self.track_inventory:
+            return self.is_available
+        return self.saleable_quantity() > 0
+
     @property
     def image_display_url(self):
         """Get product image URL or fallback to image_url"""
@@ -528,28 +556,6 @@ class Product(models.Model):
 
         return quantity <= self.saleable_quantity()
 
-    @staticmethod
-    def saleable_quantity_annotation():
-        """SUM of active, non-expired batch qty (null expiry stays saleable)."""
-        batch_sum = (
-            ProductBatch.objects.filter(
-                product_id=OuterRef('pk'),
-                is_active=True,
-            )
-            .filter(ProductBatch.saleable_q())
-            .values('product_id')
-            .annotate(total=Sum('quantity'))
-            .values('total')[:1]
-        )
-        return Coalesce(
-            Subquery(
-                batch_sum,
-                output_field=DecimalField(max_digits=12, decimal_places=3),
-            ),
-            Decimal('0'),
-            output_field=DecimalField(max_digits=12, decimal_places=3),
-        )
-
     @classmethod
     def lock_for_sale(cls, retailer, products):
         """Lock sold SKUs and pack parents in pk order under the current atomic."""
@@ -579,37 +585,37 @@ class Product(models.Model):
         """Stamp saleable_quantity_annotated on Product instances (one query)."""
         instances = []
         seen = set()
-        ids = set()
         for product in products:
             if product is None:
                 continue
             if id(product) not in seen:
                 instances.append(product)
                 seen.add(id(product))
-            ids.add(product.pk)
             if product.parent_bulk_product_id:
-                ids.add(product.parent_bulk_product_id)
                 parent = product.parent_bulk_product
                 if parent is not None and id(parent) not in seen:
                     instances.append(parent)
                     seen.add(id(parent))
-        if not ids:
+        if not instances:
             return
-        if instances and all(
+        if all(
             hasattr(product, 'saleable_quantity_annotated')
             for product in instances
         ):
             return
-        annotated = {
-            pk: qty
-            for pk, qty in cls.objects.filter(pk__in=ids).annotate(
-                saleable_quantity_annotated=cls.saleable_quantity_annotation()
-            ).values_list('pk', 'saleable_quantity_annotated')
-        }
-        for product in instances:
-            product.saleable_quantity_annotated = annotated.get(
-                product.pk, Decimal('0')
+        # One grouped sum over batch-tracked SKUs only; others never read the stamp.
+        batched_ids = [product.pk for product in instances if product.has_batches]
+        annotated = {}
+        if batched_ids:
+            annotated = dict(
+                ProductBatch.objects.filter(product_id__in=batched_ids, is_active=True)
+                .filter(ProductBatch.saleable_q())
+                .values('product_id')
+                .annotate(saleable_quantity_annotated=Sum('quantity'))
+                .values_list('product_id', 'saleable_quantity_annotated')
             )
+        for product in instances:
+            product.saleable_quantity_annotated = annotated.get(product.pk) or Decimal('0')
 
     def saleable_quantity(self):
         """On-hand that may be sold under the default expiry policy."""
@@ -628,7 +634,7 @@ class Product(models.Model):
                 return annotated
             prefetched = getattr(self, '_prefetched_objects_cache', {}).get('batches')
             if prefetched is not None:
-                on_date = timezone.localdate()
+                on_date = shop_today()
                 total = Decimal('0')
                 for batch in prefetched:
                     if not batch.is_active:
@@ -856,6 +862,7 @@ class ProductInventoryLog(models.Model):
         ('damaged', 'Damaged'),
         ('expired', 'Expired'),
         ('spoiled', 'Spoiled'),
+        ('reconciled', 'Reconciled'),
     ]
     
     product = models.ForeignKey(
@@ -1049,6 +1056,8 @@ class PurchaseInvoice(models.Model):
     invoice_date = models.DateField()
     
     total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    taxable_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    tax_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     paid_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     payment_status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='UNPAID')
     notes = models.TextField(blank=True)
@@ -1091,6 +1100,15 @@ class PurchaseItem(models.Model):
     quantity = models.DecimalField(max_digits=12, decimal_places=3)
     purchase_price = models.DecimalField(max_digits=10, decimal_places=2)  # Rate per unit
     total = models.DecimalField(max_digits=12, decimal_places=2)  # Qty * Rate
+    hsn_code = models.CharField(max_length=8, blank=True, default='')
+    gst_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
+    taxable_value = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    tax_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    tax_type = models.CharField(
+        max_length=4,
+        choices=[('GST', 'GST'), ('IGST', 'IGST')],
+        default='GST',
+    )
     
     # Store whether this invoice updated the master product MRP/Price
     mrp_updated = models.BooleanField(default=False)
@@ -1139,4 +1157,3 @@ class SupplierLedger(models.Model):
 
     def __str__(self):
         return f"{self.transaction_type} of {self.amount} on {self.date}"
-

@@ -1,17 +1,20 @@
+from decimal import Decimal
+import logging
+
 from rest_framework import status, permissions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from django.db import transaction
 from django.db.models import prefetch_related_objects
-import logging
 
 from .models import Cart, CartItem, CartHistory
 from .serializers import (
-    CartSerializer, CartItemSerializer, AddToCartSerializer,
+    CartSerializer, CartItemSerializer, AddToCartSerializer, cart_items_prefetch,
     UpdateCartItemSerializer, CartSummarySerializer
 )
 from products.models import Product
+from products.tax_service import quantize_2, split_inclusive_line
 from retailers.models import RetailerProfile
 
 logger = logging.getLogger(__name__)
@@ -40,7 +43,7 @@ def get_cart(request):
                     customer=request.user,
                     retailer=retailer
                 )
-                prefetch_related_objects([cart], 'items__product', 'retailer')
+                prefetch_related_objects([cart], cart_items_prefetch(), 'retailer')
                 serializer = CartSerializer(cart)
                 data = serializer.data
                 
@@ -53,7 +56,12 @@ def get_cart(request):
                 # Engine needs product category/brand for rules
                 cart_items = cart.items.select_related('product', 'product__category', 'product__brand').all()
 
-                offer_results = engine.calculate_offers(cart_items, retailer)
+                offer_context = {
+                    'channel': 'mobile',
+                    'customer': request.user,
+                    'coupon_code': cart.applied_coupon_code
+                }
+                offer_results = engine.calculate_offers(cart_items, retailer, context=offer_context)
                 
                 # Merge offer results into response
                 data['subtotal'] = float(offer_results['subtotal'])
@@ -77,6 +85,8 @@ def get_cart(request):
                 # Calculate potential cashback (From Offers Engine)
                 potential_points = offer_results.get('total_points', 0)
                 data['potential_points'] = float(potential_points)
+                data['applied_coupon'] = offer_results.get('applied_coupon')
+                data['coupon_error'] = offer_results.get('coupon_error')
                 
                 return Response(data, status=status.HTTP_200_OK)
             except RetailerProfile.DoesNotExist:
@@ -86,7 +96,7 @@ def get_cart(request):
                 )
         else:
             # Get all carts for customer
-            carts = Cart.objects.filter(customer=request.user).select_related('retailer').prefetch_related('items__product')
+            carts = Cart.objects.filter(customer=request.user).select_related('retailer').prefetch_related(cart_items_prefetch())
             serializer = CartSerializer(carts, many=True)
             return Response(serializer.data, status=status.HTTP_200_OK)
     
@@ -329,6 +339,25 @@ def get_cart_summary(request):
                 for item in cart_items
             )
             discounted_total = offer_results['discounted_total']
+            taxable_amount = Decimal('0.00')
+            tax_amount = Decimal('0.00')
+            item_discounts = offer_results.get('item_discounts', {})
+            for item in cart_items:
+                item_offer = item_discounts.get(item.id, {})
+                quantity = item_offer.get(
+                    'total_display_quantity',
+                    item.quantity,
+                )
+                unit_price = item_offer.get(
+                    'final_price',
+                    item.product.price,
+                )
+                tax_split = split_inclusive_line(
+                    Decimal(str(quantity)) * Decimal(str(unit_price)),
+                    item.product.gst_rate,
+                )
+                taxable_amount += tax_split['taxable_value']
+                tax_amount += tax_split['tax_amount']
             minimum_order_amount = retailer.minimum_order_amount
             
             can_checkout = discounted_total >= minimum_order_amount and not cart.is_empty
@@ -369,6 +398,8 @@ def get_cart_summary(request):
             summary_data = {
                 'total_items': total_items,
                 'total_amount': discounted_total,
+                'taxable_amount': quantize_2(taxable_amount),
+                'tax_amount': quantize_2(tax_amount),
                 'retailer_name': retailer.shop_name,
                 'retailer_id': retailer.id,
                 'minimum_order_amount': minimum_order_amount,
@@ -605,3 +636,126 @@ def _apply_same_product_auto_add(cart_item, user):
     
     except Exception as e:
         logger.error(f"Error processing auto-add offers: {str(e)}")
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def apply_coupon(request):
+    """
+    Apply a coupon code to customer's cart
+    Body: {"retailer_id": 1, "coupon_code": "SAVE50"}
+    """
+    try:
+        if request.user.user_type != 'customer':
+            return Response({'error': 'Only customers can apply coupons to cart'}, status=status.HTTP_403_FORBIDDEN)
+            
+        retailer_id = request.data.get('retailer_id')
+        coupon_code = request.data.get('coupon_code')
+        
+        if not retailer_id:
+            return Response({'error': 'retailer_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+        if not coupon_code:
+            return Response({'error': 'coupon_code is required'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        cart, _ = Cart.objects.get_or_create(customer=request.user, retailer=retailer)
+        cart_items = cart.items.select_related('product', 'product__category', 'product__brand').all()
+        
+        if not cart_items.exists():
+            return Response({'error': 'Your cart is empty'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        from offers.engine import OfferEngine
+        engine = OfferEngine()
+        
+        # Calculate raw cart subtotal for validation
+        raw_cart_total = sum(
+            Decimal(str(getattr(item, 'unit_price', getattr(item.product, 'price', 0)))) * Decimal(str(item.quantity))
+            for item in cart_items
+        )
+        
+        is_valid, offer, err = engine.validate_coupon(
+            coupon_code=coupon_code,
+            retailer=retailer,
+            customer=request.user,
+            cart_total=raw_cart_total,
+            channel='mobile'
+        )
+        
+        if not is_valid:
+            return Response({'error': err}, status=status.HTTP_400_BAD_REQUEST)
+            
+        # Save coupon to cart
+        clean_code = str(coupon_code).strip().upper()
+        cart.applied_coupon_code = clean_code
+        cart.save(update_fields=['applied_coupon_code'])
+        
+        # Calculate full offer results
+        context = {
+            'channel': 'mobile',
+            'customer': request.user,
+            'coupon_code': clean_code
+        }
+        offer_results = engine.calculate_offers(cart_items, retailer, context=context)
+        
+        # Build response
+        serializer = CartSerializer(cart)
+        data = serializer.data
+        data['subtotal'] = float(offer_results['subtotal'])
+        data['discounted_total'] = float(offer_results['discounted_total'])
+        data['total_savings'] = float(offer_results['total_savings'])
+        data['potential_points'] = float(offer_results.get('total_points', 0))
+        data['applied_coupon'] = offer_results.get('applied_coupon')
+        data['applied_offers'] = offer_results.get('applied_offers', [])
+        data['message'] = f"Coupon '{clean_code}' applied successfully!"
+        
+        return Response(data, status=status.HTTP_200_OK)
+        
+    except Exception as e:
+        logger.error(f"Error applying coupon: {str(e)}")
+        return Response({'error': 'Failed to apply coupon'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def remove_coupon(request):
+    """
+    Remove applied coupon code from customer's cart
+    Body: {"retailer_id": 1}
+    """
+    try:
+        if request.user.user_type != 'customer':
+            return Response({'error': 'Only customers can modify cart'}, status=status.HTTP_403_FORBIDDEN)
+            
+        retailer_id = request.data.get('retailer_id')
+        if not retailer_id:
+            return Response({'error': 'retailer_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        cart = Cart.objects.filter(customer=request.user, retailer=retailer).first()
+        
+        if cart:
+            cart.applied_coupon_code = None
+            cart.save(update_fields=['applied_coupon_code'])
+            
+            cart_items = cart.items.select_related('product', 'product__category', 'product__brand').all()
+            from offers.engine import OfferEngine
+            engine = OfferEngine()
+            offer_results = engine.calculate_offers(cart_items, retailer, context={'channel': 'mobile', 'customer': request.user})
+            
+            serializer = CartSerializer(cart)
+            data = serializer.data
+            data['subtotal'] = float(offer_results['subtotal'])
+            data['discounted_total'] = float(offer_results['discounted_total'])
+            data['total_savings'] = float(offer_results['total_savings'])
+            data['potential_points'] = float(offer_results.get('total_points', 0))
+            data['applied_coupon'] = None
+            data['applied_offers'] = offer_results.get('applied_offers', [])
+            data['message'] = "Coupon removed"
+            return Response(data, status=status.HTTP_200_OK)
+            
+        return Response({'error': 'Cart not found'}, status=status.HTTP_404_NOT_FOUND)
+        
+    except Exception as e:
+        logger.error(f"Error removing coupon: {str(e)}")
+        return Response({'error': 'Failed to remove coupon'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+

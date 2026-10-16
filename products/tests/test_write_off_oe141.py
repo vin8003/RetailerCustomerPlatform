@@ -10,12 +10,11 @@ from decimal import Decimal
 
 import pytest
 from django.urls import reverse
-from django.utils import timezone
 from rest_framework import status
 
 from authentication.models import User
 from products.inventory_adjust import PERM_INVENTORY_ADJUST
-from products.models import Product, ProductBatch, ProductCategory, ProductInventoryLog
+from products.models import Product, ProductBatch, ProductCategory, ProductInventoryLog, shop_today
 from products.write_off import (
     REASON_DAMAGE,
     REASON_EXPIRY,
@@ -29,7 +28,7 @@ from retailers.organization import ensure_organization_for_profile
 
 
 def _today():
-    return timezone.localdate()
+    return shop_today()
 
 
 def _make_retailer(username, shop_name):
@@ -561,6 +560,28 @@ class TestWriteOffLedgerFilter:
         assert response.data[0]["reason"] == REASON_DAMAGE
         assert response.data[0]["log_type"] == "damaged"
         assert "batch_id" in response.data[0]
+
+    def test_ledger_accepts_several_reasons(self, api_client):
+        owner, shop = _make_retailer("oe141_led_multi", "OE141 Ledger Multi")
+        product = _make_product(shop, quantity=Decimal("20.000"))
+        for reason in (REASON_DAMAGE, REASON_SPOILAGE):
+            write_off_stock(
+                product_id=product.id,
+                retailer=shop,
+                quantity=Decimal("1.000"),
+                reason=reason,
+                created_by=owner,
+            )
+
+        api_client.force_authenticate(user=owner)
+        response = api_client.get(
+            _ledger_url(), {"reason": f"{REASON_DAMAGE},{REASON_SPOILAGE}"}
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert sorted(row["reason"] for row in response.data) == sorted(
+            [REASON_DAMAGE, REASON_SPOILAGE]
+        )
 
     def test_shop_wide_reason_filter_hides_other_tenant(self, api_client):
         owner_a, shop_a = _make_retailer("oe141_led_a", "OE141 Ledger A")

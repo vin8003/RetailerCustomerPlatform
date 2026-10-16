@@ -1,5 +1,5 @@
 from decimal import Decimal
-from rest_framework import status, permissions
+from rest_framework import status, permissions, exceptions
 from rest_framework.exceptions import ValidationError
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
@@ -13,6 +13,7 @@ from datetime import timedelta
 import logging
 import re
 from common.error_utils import format_exception
+from .list_rating import patch as _patch_order_list_rating
 
 from .models import Order, OrderItem, OrderStatusLog, OrderFeedback, OrderReturn, OrderChatMessage, RetailerRating
 from .serializers import (
@@ -39,6 +40,7 @@ from orders.access import (
 )
 
 logger = logging.getLogger(__name__)
+_patch_order_list_rating()
 
 
 class OrderPagination(PageNumberPagination):
@@ -311,8 +313,8 @@ def get_order_detail(request, order_id):
         serializer = OrderDetailSerializer(order, context={'request': request})
         return Response(serializer.data, status=status.HTTP_200_OK)
     
-    except Http404:
-        raise
+    except (Http404, exceptions.NotFound):
+        return Response({'error': 'Order not found'}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         logger.error(f"Error getting order detail: {str(e)}")
         return Response(

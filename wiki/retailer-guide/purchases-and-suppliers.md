@@ -7,7 +7,7 @@ When stock arrives from a **supplier** (wholesaler, distributor, company van), r
 | Benefit | Explanation |
 |---------|-------------|
 | **Accurate stock** | Shelf quantity matches system |
-| **Cost tracking** | Know margin per product. Purchase-role staff can see each supplier’s last billed cost for a product. If you have never bought that product from a supplier, the cost stays blank — it is not shown as zero. |
+| **Cost tracking** | Know margin per product. Purchase-role staff can see each supplier’s last billed cost for a product, and a margin% on the product list, product detail, POS catalog, and a dedicated preview — selling price versus the product’s draft cost or last purchase cost. If there is no cost yet, margin stays blank — it is not shown as zero. Cashiers do not see margin on the catalog. |
 | **Supplier khata** | Track what you owe each supplier |
 | **Batch history** | Link sales to purchase lots |
 
@@ -38,6 +38,19 @@ Stock increases automatically for each line.
 Mobile number is **not required** — you can track suppliers by name alone. GSTIN is also optional.
 
 Purchase orders (PO / GRN matching) are a later step. Today, new stock-in still uses **Purchases**. The same active-supplier rule will apply when POs arrive.
+
+## Inactive suppliers
+
+When a distributor is no longer used:
+
+1. Open **Khata & Suppliers** (or their ledger)
+2. **Deactivate** — they stay on the list with an Inactive badge
+3. Old purchases, payments, and khata remain
+4. They no longer appear when recording a **new purchase**
+5. You can still **edit** their details and **record payments** without reactivating
+6. **Reactivate** if you start buying from them again
+
+Do not delete a supplier who has bills or khata. Deactivate instead so history stays linked.
 
 ## Supplier khata (what you owe)
 

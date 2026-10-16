@@ -129,6 +129,8 @@ class Order(models.Model):
         decimal_places=2,
         validators=[MinValueValidator(Decimal('0.01'))]
     )
+    taxable_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    tax_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     
     # Payment Breakdown (for Split/POS)
     cash_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), null=True, blank=True)
@@ -137,6 +139,7 @@ class Order(models.Model):
     credit_amount = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'), null=True, blank=True)
     
     # Additional info
+    coupon_code = models.CharField(max_length=50, blank=True, null=True)
     special_instructions = models.TextField(blank=True)
     cancellation_reason = models.TextField(blank=True)
     cancelled_by = models.CharField(max_length=50, blank=True, null=True)
@@ -350,21 +353,22 @@ class Order(models.Model):
             if not (config and config.is_active):
                 return False
 
-            # NEW LOGIC: Calculate actual paid amount (exclude udhaar/credit)
+            # Calculate actual paid amount for items (strictly excluding delivery fee and credit/udhaar)
             current_bill_credit = self.credit_amount if self.credit_amount and self.credit_amount > 0 else Decimal('0.00')
-            eligible_amount = max(Decimal('0.00'), self.total_amount - current_bill_credit)
+            paid_items_amount = max(Decimal('0.00'), self.subtotal - self.discount_amount - self.discount_from_points - current_bill_credit)
 
-            # 0. Calculate Rule-Based Points (Separated from Offers)
-            if eligible_amount >= config.loyalty_min_order_value:
+            # Rule-based points ONLY apply if no specific offer/coupon already awarded cashback points
+            if (not total_to_award or total_to_award <= 0) and paid_items_amount >= config.loyalty_min_order_value:
                 if config.earning_type == 'percentage':
-                    rule_points = (eligible_amount * config.loyalty_earning_value) / Decimal('100.00')
-                    total_to_award += rule_points
+                    rule_points = (paid_items_amount * config.loyalty_earning_value) / Decimal('100.00')
+                    total_to_award = rule_points
                 elif config.earning_type == 'points_per_amount' and config.loyalty_earning_value > 0:
-                    rule_points = eligible_amount // config.loyalty_earning_value
-                    total_to_award += Decimal(str(rule_points))
+                    rule_points = paid_items_amount // config.loyalty_earning_value
+                    total_to_award = Decimal(str(rule_points))
 
-            # 1. Award Total Points (Rule Points + Offer Points)
+            # 1. Award Total Points (Rule Points or Offer Points)
             if total_to_award > 0:
+                total_to_award = total_to_award.quantize(Decimal('0.01'))
                 loyalty, _ = CustomerLoyalty.objects.get_or_create(
                     customer=self.customer,
                     retailer=self.retailer
@@ -507,6 +511,15 @@ class OrderItem(models.Model):
     )
     unit_price = models.DecimalField(max_digits=10, decimal_places=2)
     total_price = models.DecimalField(max_digits=10, decimal_places=2)
+    hsn_code = models.CharField(max_length=8, blank=True, default='')
+    gst_rate = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
+    taxable_value = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    tax_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    tax_type = models.CharField(
+        max_length=4,
+        choices=[('GST', 'GST'), ('IGST', 'IGST')],
+        default='GST',
+    )
     
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)

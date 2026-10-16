@@ -13,7 +13,6 @@ import pytest
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
-from django.utils import timezone
 from rest_framework import status
 
 from authentication.models import User
@@ -24,13 +23,13 @@ from products.inventory_adjust import (
     payload_sets_batch_expiry,
     submitted_batch_expiry_differs,
 )
-from products.models import Product, ProductBatch, ProductCategory
+from products.models import Product, ProductBatch, ProductCategory, shop_today
 from retailers.models import OrgRole, OrgStaffMembership, RetailerProfile
 from retailers.organization import ensure_organization_for_profile
 
 
 def _today():
-    return timezone.localdate()
+    return shop_today()
 
 
 def _make_retailer(username, shop_name):
@@ -855,7 +854,8 @@ class TestSaleableHotPathQueryBudget:
         category = _make_category(shop, "OE136 Cart Q Cat")
         _multiline_batched_cart(customer, shop, category, line_count=1)
         api_client.force_authenticate(user=customer)
-        with django_assert_num_queries(9), CaptureQueriesContext(connection) as one:
+        # One items query joins product + brand (the view and serializer share it).
+        with django_assert_num_queries(8), CaptureQueriesContext(connection) as one:
             one_res = api_client.get(reverse("get_cart"), {"retailer_id": shop.id})
         assert one_res.status_code == status.HTTP_200_OK
         assert _per_product_saleable_sum_sql(one.captured_queries) == []
@@ -872,7 +872,7 @@ class TestSaleableHotPathQueryBudget:
         )
         _multiline_batched_cart(customer_5, shop_5, category_5, line_count=5)
         api_client.force_authenticate(user=customer_5)
-        with django_assert_num_queries(9), CaptureQueriesContext(connection) as five:
+        with django_assert_num_queries(8), CaptureQueriesContext(connection) as five:
             five_res = api_client.get(
                 reverse("get_cart"), {"retailer_id": shop_5.id}
             )
