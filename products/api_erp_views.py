@@ -1017,7 +1017,8 @@ def get_inventory_ledger(request):
     if product:
         logs = logs.filter(product=product)
     if reason:
-        logs = logs.filter(reason=reason)
+        # Comma-separated: the write-off list asks for every reason in one call.
+        logs = logs.filter(reason__in=[r.strip() for r in reason.split(',') if r.strip()])
 
     logs = logs.order_by('-created_at')[:100]
     balances = product_level_log_balances(product) if product else {}
@@ -1046,6 +1047,8 @@ def get_inventory_ledger(request):
 
 
 DEFAULT_EXPIRY_WINDOW_DAYS = 30
+# shortcut: no pagination, the soonest-expiring 500 rows only; paginate if shops outgrow it.
+EXPIRING_BATCHES_LIMIT = 500
 
 
 def _parse_expiry_window_days(raw):
@@ -1128,7 +1131,7 @@ def get_expiring_batches(request):
             expiry_date__lte=cutoff,
         )
         .select_related('product')
-        .order_by('expiry_date', 'id')
+        .order_by('expiry_date', 'id')[:EXPIRING_BATCHES_LIMIT]
     )
     include_costs = user_has_org_permission(request.user, org, 'purchasing.costs.read')
     return Response(

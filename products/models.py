@@ -1,6 +1,5 @@
 from django.db import models
-from django.db.models import DecimalField, F, OuterRef, Subquery, Sum
-from django.db.models.functions import Coalesce
+from django.db.models import F, Sum
 from django.conf import settings
 from django.core.validators import MinValueValidator, MaxValueValidator
 from decimal import Decimal
@@ -481,7 +480,15 @@ class Product(models.Model):
         if not self.track_inventory:
             return self.is_available
         return self.quantity > 0
-    
+
+    def is_saleable_in_stock(self):
+        """is_in_stock, but expired batches do not count (matches saleable_quantity)."""
+        if self.parent_bulk_product:
+            return self.parent_bulk_product.is_saleable_in_stock()
+        if not self.track_inventory:
+            return self.is_available
+        return self.saleable_quantity() > 0
+
     @property
     def image_display_url(self):
         """Get product image URL or fallback to image_url"""
@@ -539,28 +546,6 @@ class Product(models.Model):
 
         return quantity <= self.saleable_quantity()
 
-    @staticmethod
-    def saleable_quantity_annotation():
-        """SUM of active, non-expired batch qty (null expiry stays saleable)."""
-        batch_sum = (
-            ProductBatch.objects.filter(
-                product_id=OuterRef('pk'),
-                is_active=True,
-            )
-            .filter(ProductBatch.saleable_q())
-            .values('product_id')
-            .annotate(total=Sum('quantity'))
-            .values('total')[:1]
-        )
-        return Coalesce(
-            Subquery(
-                batch_sum,
-                output_field=DecimalField(max_digits=12, decimal_places=3),
-            ),
-            Decimal('0'),
-            output_field=DecimalField(max_digits=12, decimal_places=3),
-        )
-
     @classmethod
     def lock_for_sale(cls, retailer, products):
         """Lock sold SKUs and pack parents in pk order under the current atomic."""
@@ -590,37 +575,37 @@ class Product(models.Model):
         """Stamp saleable_quantity_annotated on Product instances (one query)."""
         instances = []
         seen = set()
-        ids = set()
         for product in products:
             if product is None:
                 continue
             if id(product) not in seen:
                 instances.append(product)
                 seen.add(id(product))
-            ids.add(product.pk)
             if product.parent_bulk_product_id:
-                ids.add(product.parent_bulk_product_id)
                 parent = product.parent_bulk_product
                 if parent is not None and id(parent) not in seen:
                     instances.append(parent)
                     seen.add(id(parent))
-        if not ids:
+        if not instances:
             return
-        if instances and all(
+        if all(
             hasattr(product, 'saleable_quantity_annotated')
             for product in instances
         ):
             return
-        annotated = {
-            pk: qty
-            for pk, qty in cls.objects.filter(pk__in=ids).annotate(
-                saleable_quantity_annotated=cls.saleable_quantity_annotation()
-            ).values_list('pk', 'saleable_quantity_annotated')
-        }
-        for product in instances:
-            product.saleable_quantity_annotated = annotated.get(
-                product.pk, Decimal('0')
+        # One grouped sum over batch-tracked SKUs only; others never read the stamp.
+        batched_ids = [product.pk for product in instances if product.has_batches]
+        annotated = {}
+        if batched_ids:
+            annotated = dict(
+                ProductBatch.objects.filter(product_id__in=batched_ids, is_active=True)
+                .filter(ProductBatch.saleable_q())
+                .values('product_id')
+                .annotate(saleable_quantity_annotated=Sum('quantity'))
+                .values_list('product_id', 'saleable_quantity_annotated')
             )
+        for product in instances:
+            product.saleable_quantity_annotated = annotated.get(product.pk) or Decimal('0')
 
     def saleable_quantity(self):
         """On-hand that may be sold under the default expiry policy."""

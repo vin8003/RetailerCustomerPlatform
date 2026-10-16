@@ -42,16 +42,24 @@ class SalesReturnViewSet(viewsets.ModelViewSet):
             retailer=retailer,
             status='delivered'
         ).prefetch_related('items__product').order_by('-created_at')[:20] # Limit to 20 results
+        orders = list(orders)
         
-        if not orders.exists():
+        if not orders:
             return Response({'error': 'No matching orders found'}, status=404)
+
+        returned_by_item = dict(
+            SalesReturnItem.objects.filter(order_item__order__in=orders)
+            .values('order_item_id')
+            .annotate(total=Sum('quantity'))
+            .values_list('order_item_id', 'total')
+        )
             
         results = []
         for order in orders:
             items_data = []
             for item in order.items.all():
                 # Calculate how much already returned for this specific row
-                returned_qty = SalesReturnItem.objects.filter(order_item=item).aggregate(total=Sum('quantity'))['total'] or 0
+                returned_qty = returned_by_item.get(item.id) or 0
                 items_data.append({
                     'id': item.id,
                     'product_id': item.product.id,

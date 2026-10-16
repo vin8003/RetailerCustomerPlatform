@@ -180,11 +180,13 @@ class TestRetailerCustomerListScalars:
         assert detail.status_code == status.HTTP_200_OK
 
         list_row = _row_by_customer_id(listed.data, customer.id)
-        _assert_scalars_equal(list_row, detail.data)
+        for key in ("email", "notes", "credit_due_days"):
+            assert list_row[key] == detail.data[key]
         assert list_row["email"] in ("", None)
         assert list_row["notes"] is None
         assert list_row["credit_due_days"] is None
-        assert Decimal(str(list_row["credit_limit"])) == Decimal("0.00")
+        # 0 means "no limit": the list keeps its pre-OE-305 null so clients do not show ₹0.
+        assert list_row["credit_limit"] is None
         for blob in DETAIL_ONLY_BLOBS:
             assert blob not in list_row
 

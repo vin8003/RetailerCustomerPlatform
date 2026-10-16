@@ -23,6 +23,25 @@ def product_barcode_match_q(query):
     )
 
 
+def product_barcode_exact_q(query):
+    """Whole-code match for scans. A quoted needle matches one JSON list element, not a fragment."""
+    element = f'"{query}"'
+    return (
+        Q(barcode__iexact=query) |
+        Q(additional_barcodes__icontains=element) |
+        Q(batches__barcode__iexact=query) |
+        Q(batches__additional_barcodes__icontains=element)
+    )
+
+
+def _exact_barcode_rank(query):
+    return Case(
+        When(product_barcode_exact_q(query), then=Value(1)),
+        default=Value(0),
+        output_field=IntegerField(),
+    )
+
+
 def smart_product_search(queryset, search_query):
     """
     Hybrid Smart Search optimized for grocery data.
@@ -53,6 +72,7 @@ def smart_product_search(queryset, search_query):
     search_query_obj = SearchQuery(query)
 
     qs_smart = queryset.annotate(
+        is_barcode_exact=_exact_barcode_rank(query),
         rank_score=SearchRank(vector, search_query_obj),
         trigram_score=TrigramSimilarity('name', query),
         is_barcode=Case(
@@ -84,6 +104,7 @@ def smart_product_search(queryset, search_query):
     ).distinct()
 
     qs_smart = qs_smart.order_by(
+        '-is_barcode_exact',
         '-is_barcode',
         '-is_exact',
         '-is_startswith',
@@ -105,6 +126,7 @@ def smart_product_search(queryset, search_query):
         logger.warning('Smart product search failed; using the basic search', exc_info=True)
 
     return queryset.annotate(
+        is_barcode_exact=_exact_barcode_rank(query),
         in_stock=Case(
             When(quantity__gt=0, then=Value(1)),
             default=Value(0),
@@ -117,4 +139,4 @@ def smart_product_search(queryset, search_query):
         Q(category__name__icontains=query) |
         Q(product_group__icontains=query) |
         product_barcode_match_q(query)
-    ).distinct().order_by('-in_stock', '-discount_percentage', 'name')
+    ).distinct().order_by('-is_barcode_exact', '-in_stock', '-discount_percentage', 'name')

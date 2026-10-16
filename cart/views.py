@@ -10,7 +10,7 @@ from django.db.models import prefetch_related_objects
 
 from .models import Cart, CartItem, CartHistory
 from .serializers import (
-    CartSerializer, CartItemSerializer, AddToCartSerializer,
+    CartSerializer, CartItemSerializer, AddToCartSerializer, cart_items_prefetch,
     UpdateCartItemSerializer, CartSummarySerializer
 )
 from products.models import Product
@@ -43,7 +43,7 @@ def get_cart(request):
                     customer=request.user,
                     retailer=retailer
                 )
-                prefetch_related_objects([cart], 'items__product', 'retailer')
+                prefetch_related_objects([cart], cart_items_prefetch(), 'retailer')
                 serializer = CartSerializer(cart)
                 data = serializer.data
                 
@@ -96,7 +96,7 @@ def get_cart(request):
                 )
         else:
             # Get all carts for customer
-            carts = Cart.objects.filter(customer=request.user).select_related('retailer').prefetch_related('items__product')
+            carts = Cart.objects.filter(customer=request.user).select_related('retailer').prefetch_related(cart_items_prefetch())
             serializer = CartSerializer(carts, many=True)
             return Response(serializer.data, status=status.HTTP_200_OK)
     

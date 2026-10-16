@@ -108,6 +108,14 @@ class CartItemSerializer(serializers.ModelSerializer):
         return data
 
 
+def cart_items_prefetch():
+    """Cart items with product and brand joined. Views and CartSerializer share it."""
+    return Prefetch(
+        'items',
+        queryset=CartItem.objects.select_related('product', 'product__brand'),
+    )
+
+
 class CartSerializer(serializers.ModelSerializer):
     """
     Serializer for shopping cart
@@ -141,19 +149,8 @@ class CartSerializer(serializers.ModelSerializer):
         return float(obj.retailer.minimum_order_amount)
 
     def to_representation(self, instance):
-        # Views often prefetch items__product without brand. Drop that cache
-        # so this Prefetch can join brand; otherwise Django skips a second
-        # items prefetch and brand_name becomes per-row ProductBrand lookups.
-        cache = getattr(instance, '_prefetched_objects_cache', None)
-        if cache is not None:
-            cache.pop('items', None)
-        prefetch_related_objects(
-            [instance],
-            Prefetch(
-                'items',
-                queryset=CartItem.objects.select_related('product', 'product__brand'),
-            ),
-        )
+        # No-op when the view already used cart_items_prefetch().
+        prefetch_related_objects([instance], cart_items_prefetch())
         items = instance.items.all()
         Product.cache_saleable_quantities([item.product for item in items])
         return super().to_representation(instance)

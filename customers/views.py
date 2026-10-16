@@ -1082,7 +1082,8 @@ def get_retailer_customers(request):
                 'current_balance': float(mapping.current_balance) if (mapping.current_balance > 0 or mapping.credit_limit > 0) else None,
                 'email': user.email,
                 'notes': mapping.notes,
-                'credit_limit': mapping.credit_limit,
+                # 0 means no limit; older clients read "0.00" as a ₹0 limit.
+                'credit_limit': mapping.credit_limit if mapping.credit_limit > 0 else None,
                 'credit_due_days': mapping.credit_due_days,
             })
             

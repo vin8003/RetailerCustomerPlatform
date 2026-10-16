@@ -113,6 +113,9 @@ class SaleableQuantityReadMixin:
         data = super().to_representation(instance)
         if not self._include_saleable_quantity():
             data.pop('saleable_quantity', None)
+        elif 'is_in_stock' in data:
+            # Same source as saleable_quantity, so expired-only stock is not "in stock".
+            data['is_in_stock'] = instance.is_saleable_in_stock()
         return data
 
 
@@ -127,8 +130,8 @@ class FractionalChildReadSerializer(serializers.ModelSerializer):
 
     def get_saleable_quantity(self, obj):
         parent = self.context.get('pack_parent')
-        if parent is not None:
-            obj.parent_bulk_product = parent
+        if parent is not None and obj.conversion_factor and obj.conversion_factor > 0:
+            return json_qty(parent.saleable_quantity() / obj.conversion_factor)
         return json_qty(obj.saleable_quantity())
 
 
@@ -270,7 +273,10 @@ class GroupVariantsListSerializer(serializers.ListSerializer):
 
     def to_representation(self, data):
         products = list(data)
-        if self.context.get('group_siblings_by_key') is None:
+        if (
+            self.context.get('include_group_variants')
+            and self.context.get('group_siblings_by_key') is None
+        ):
             self.context['group_siblings_by_key'] = cache_group_siblings(products)
         if (
             self.context.get('include_margin_percent')
@@ -285,13 +291,26 @@ class GroupVariantsListSerializer(serializers.ListSerializer):
 class GroupVariantsReadMixin:
     """Same-shop product_group siblings; empty group → [].
 
+    Opt-in via context ``include_group_variants`` (retailer reads). Customer
+    lists omit it: each row would embed every sibling and its stock.
     Subclasses must redeclare ``group_variants`` as a SerializerMethodField.
     """
 
     group_variants = serializers.SerializerMethodField()
 
+    def _include_group_variants(self):
+        return bool(self.context.get('include_group_variants'))
+
     def get_group_variants(self, obj):
+        if not self._include_group_variants():
+            return []
         return safe_group_variants_payload(obj, self.context)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if not self._include_group_variants():
+            data.pop('group_variants', None)
+        return data
 
 
 def parent_bulk_cycle_exists(child_pk, parent_product):
@@ -521,11 +540,7 @@ class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, 
             return None
 
     def get_brand_name(self, obj):
-        try:
-            return obj.brand.name if obj.brand else None
-        except Exception as e:
-            logger.error(f"Error getting brand name: {e}")
-            return None
+        return obj.brand.name if obj.brand else None
 
     def get_image(self, obj):
         """Get product image URL or fallback to image_url"""
@@ -682,13 +697,9 @@ class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
             return None
 
     def get_brand_name(self, obj):
-        try:
-            return obj.brand.name if obj.brand else None
-        except Exception as e:
-            logger.error(f"Error getting brand name: {e}")
-            return None
+        return obj.brand.name if obj.brand else None
 
-class ProductDetailSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
+class ProductDetailSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product detail view
     """

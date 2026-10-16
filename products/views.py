@@ -461,7 +461,7 @@ def get_retailer_products(request):
                     'is_active': p.is_active,
                     'is_featured': p.is_featured,
                     'is_available': p.is_available,
-                    'is_in_stock': p.is_in_stock,
+                    'is_in_stock': p.is_saleable_in_stock(),
                     'is_seasonal': p.is_seasonal,
                     'product_group': p.product_group,
                     'has_batches': p.has_batches,
@@ -524,6 +524,7 @@ def get_retailer_products(request):
                     'active_offers': active_offers,
                     'include_saleable_quantity': True,
                     'include_fractional_children': True,
+                    'include_group_variants': True,
                     'include_margin_percent': include_purchase_margin(request.user),
                 },
             )
@@ -539,6 +540,7 @@ def get_retailer_products(request):
                 'active_offers': active_offers,
                 'include_saleable_quantity': True,
                 'include_fractional_children': True,
+                'include_group_variants': True,
                 'include_margin_percent': include_purchase_margin(request.user),
             },
         )
@@ -633,6 +635,7 @@ def search_products(request):
                 'request': request,
                 'include_saleable_quantity': True,
                 'include_fractional_children': True,
+                'include_group_variants': True,
                 'include_margin_percent': include_purchase_margin(request.user),
             },
         )
