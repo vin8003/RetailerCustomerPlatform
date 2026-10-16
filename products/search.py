@@ -1,9 +1,14 @@
 """Product search matching, including multi-batch barcodes (KAN-72)."""
+import logging
+
+from django.db import DatabaseError, transaction
 from django.db.models import (
     Q, Value, Case, When, TextField, IntegerField,
 )
 from django.db.models.functions import Cast
 from django.contrib.postgres.search import SearchVector, SearchQuery, SearchRank
+
+logger = logging.getLogger(__name__)
 
 
 def product_barcode_match_q(query):
@@ -89,20 +94,27 @@ def smart_product_search(queryset, search_query):
         'name'
     )
 
-    if not qs_smart.exists():
-        return queryset.annotate(
-            in_stock=Case(
-                When(quantity__gt=0, then=Value(1)),
-                default=Value(0),
-                output_field=IntegerField(),
-            )
-        ).filter(
-            Q(name__icontains=query) |
-            Q(description__icontains=query) |
-            Q(tags__icontains=query) |
-            Q(category__name__icontains=query) |
-            Q(product_group__icontains=query) |
-            product_barcode_match_q(query)
-        ).distinct().order_by('-in_stock', '-discount_percentage', 'name')
+    # Fall back to basic search when FTS/trigram finds nothing or is unavailable
+    # (no pg_trgm, SQLite). The savepoint keeps a failed probe from aborting an
+    # outer transaction, which PostgreSQL would otherwise do.
+    try:
+        with transaction.atomic():
+            if qs_smart.exists():
+                return qs_smart
+    except DatabaseError:
+        logger.warning('Smart product search failed; using the basic search', exc_info=True)
 
-    return qs_smart
+    return queryset.annotate(
+        in_stock=Case(
+            When(quantity__gt=0, then=Value(1)),
+            default=Value(0),
+            output_field=IntegerField(),
+        )
+    ).filter(
+        Q(name__icontains=query) |
+        Q(description__icontains=query) |
+        Q(tags__icontains=query) |
+        Q(category__name__icontains=query) |
+        Q(product_group__icontains=query) |
+        product_barcode_match_q(query)
+    ).distinct().order_by('-in_stock', '-discount_percentage', 'name')
