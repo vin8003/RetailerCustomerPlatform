@@ -9,18 +9,17 @@ from decimal import Decimal
 
 import pytest
 from django.urls import reverse
-from django.utils import timezone
 from rest_framework import status
 
 from authentication.models import User
-from products.models import Product, ProductBatch, ProductCategory
+from products.models import Product, ProductBatch, ProductCategory, shop_today
 from products.serializers import ProductBatchSerializer
 from retailers.models import RetailerProfile
 from retailers.organization import ensure_organization_for_profile
 
 
 def _today():
-    return timezone.localdate()
+    return shop_today()
 
 
 def _make_retailer(username, shop_name):

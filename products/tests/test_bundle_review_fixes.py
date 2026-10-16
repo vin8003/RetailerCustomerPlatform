@@ -4,9 +4,8 @@ from decimal import Decimal
 
 import pytest
 from django.urls import reverse
-from django.utils import timezone
 
-from products.models import Product, ProductBatch
+from products.models import Product, ProductBatch, shop_today
 
 # What public search may send to customers (#130). Retailer-only fields
 # (saleable_quantity, margin_percent, fractional_children, group_variants,
@@ -68,7 +67,7 @@ def test_retailer_search_is_in_stock_ignores_expired_batches(api_client, retaile
     )
     ProductBatch.objects.create(
         product=product, retailer=retailer, batch_number='OLD', quantity=4,
-        price=Decimal('30.00'), expiry_date=timezone.localdate() - timedelta(days=2),
+        price=Decimal('30.00'), expiry_date=shop_today() - timedelta(days=2),
     )
     api_client.force_authenticate(user=retailer_user)
 

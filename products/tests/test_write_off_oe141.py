@@ -10,12 +10,11 @@ from decimal import Decimal
 
 import pytest
 from django.urls import reverse
-from django.utils import timezone
 from rest_framework import status
 
 from authentication.models import User
 from products.inventory_adjust import PERM_INVENTORY_ADJUST
-from products.models import Product, ProductBatch, ProductCategory, ProductInventoryLog
+from products.models import Product, ProductBatch, ProductCategory, ProductInventoryLog, shop_today
 from products.write_off import (
     REASON_DAMAGE,
     REASON_EXPIRY,
@@ -29,7 +28,7 @@ from retailers.organization import ensure_organization_for_profile
 
 
 def _today():
-    return timezone.localdate()
+    return shop_today()
 
 
 def _make_retailer(username, shop_name):

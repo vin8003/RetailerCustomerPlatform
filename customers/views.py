@@ -1080,6 +1080,9 @@ def get_retailer_customers(request):
                 'joined_date': mapping.created_at,
                 # Only show credit balance if it's non-zero or retailer has explicitly set a credit limit
                 'current_balance': float(mapping.current_balance) if (mapping.current_balance > 0 or mapping.credit_limit > 0) else None,
+                # Known RBAC gap (OE-305 / #94): any staff seat with the customers module sees
+                # customer email here and on customer detail. Gate both together when the
+                # staff permissions on #94 land; hiding it on one endpoint alone hides nothing.
                 'email': user.email,
                 'notes': mapping.notes,
                 # 0 means no limit; older clients read "0.00" as a ₹0 limit.
@@ -1258,6 +1261,7 @@ def get_customer_details_for_retailer(request, customer_id):
             'nickname': mapping.nickname,
             'notes': mapping.notes,
             'phone_number': user.phone_number,
+            # Same RBAC gap as the customer list: no staff permission gates email yet (#94).
             'email': user.email,
             'profile_image': profile.profile_image.url if profile and profile.profile_image else None,
             'points': points,

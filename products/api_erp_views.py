@@ -25,7 +25,7 @@ from retailers.suppliers import (
     require_purchasing_terms,
     resolve_supplier_home_retailer,
 )
-from products.models import PurchaseInvoice, PurchaseItem, SupplierLedger, Product, ProductBatch, ProductInventoryLog
+from products.models import PurchaseInvoice, PurchaseItem, SupplierLedger, Product, ProductBatch, ProductInventoryLog, shop_today
 from products.inventory_service import (
     apply_stock_decrease,
     apply_stock_increase,
@@ -1120,7 +1120,7 @@ def get_expiring_batches(request):
     if invalid is not None:
         return invalid
 
-    cutoff = timezone.localdate() + timedelta(days=days)
+    cutoff = shop_today() + timedelta(days=days)
     batches = (
         ProductBatch.objects.filter(
             retailer_id__in=served,

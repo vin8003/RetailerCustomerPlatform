@@ -3,11 +3,21 @@ from django.db.models import F, Sum
 from django.conf import settings
 from django.core.validators import MinValueValidator, MaxValueValidator
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVector
 from django.utils import timezone
 from common.utils import generate_upload_path, resize_image
 from .customer_stock import ProductManager
+
+# shortcut: one shop timezone for expiry. RetailerProfile.timezone defaults to it and no
+# API or admin edits it; read it per shop once shops outside IST are possible.
+SHOP_TIME_ZONE = ZoneInfo('Asia/Kolkata')
+
+
+def shop_today():
+    """Today in the shop's timezone. The server runs in UTC, whose date flips at 05:30 IST."""
+    return timezone.localdate(timezone=SHOP_TIME_ZONE)
 
 
 class ProductCategory(models.Model):
@@ -212,7 +222,7 @@ class ProductBatch(models.Model):
         if self.expiry_date is None:
             return False
         if on_date is None:
-            on_date = timezone.localdate()
+            on_date = shop_today()
         return self.expiry_date < on_date
 
     @classmethod
@@ -222,7 +232,7 @@ class ProductBatch(models.Model):
         Null-expiry batches remain eligible.
         """
         if on_date is None:
-            on_date = timezone.localdate()
+            on_date = shop_today()
         return models.Q(expiry_date__isnull=True) | models.Q(expiry_date__gte=on_date)
 
     @classmethod
@@ -624,7 +634,7 @@ class Product(models.Model):
                 return annotated
             prefetched = getattr(self, '_prefetched_objects_cache', {}).get('batches')
             if prefetched is not None:
-                on_date = timezone.localdate()
+                on_date = shop_today()
                 total = Decimal('0')
                 for batch in prefetched:
                     if not batch.is_active:

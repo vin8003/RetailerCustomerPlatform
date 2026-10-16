@@ -5,23 +5,32 @@ Thin EXTEND only. Derived from ProductBatch.is_expired() (null → false).
 List / detail / search / POS no_page, plus OE-210 expiring-batches.
 Auth/tenancy unchanged. No alerts/notify invent.
 """
-from datetime import timedelta
+from datetime import date, datetime, timedelta, timezone as dt_timezone
 from decimal import Decimal
+from unittest import mock
 
 import pytest
 from django.urls import reverse
-from django.utils import timezone
 from rest_framework import status
 
 from authentication.models import User
-from products.models import Product, ProductBatch, ProductCategory
+from products.models import Product, ProductBatch, ProductCategory, shop_today
 from products.serializers import ProductBatchSerializer
 from retailers.models import RetailerProfile
 from retailers.organization import ensure_organization_for_profile
 
 
 def _today():
-    return timezone.localdate()
+    return shop_today()
+
+
+def test_expiry_uses_shop_date_not_server_utc_date():
+    # 20:00 UTC on 16 Oct is already 17 Oct in the shop (IST).
+    late_utc = datetime(2026, 10, 16, 20, 0, tzinfo=dt_timezone.utc)
+    with mock.patch('django.utils.timezone.now', return_value=late_utc):
+        assert shop_today() == date(2026, 10, 17)
+        assert ProductBatch(expiry_date=date(2026, 10, 16)).is_expired()
+        assert not ProductBatch(expiry_date=date(2026, 10, 17)).is_expired()
 
 
 def _make_retailer(username, shop_name):
