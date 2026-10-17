@@ -20,3 +20,5 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - run: pytest
+        env:
+          AUTHKEY_API_KEY: dummy-key-for-tests  # SMS HTTP calls are mocked; tests just need it non-empty
