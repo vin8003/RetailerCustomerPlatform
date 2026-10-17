@@ -416,12 +416,7 @@ def get_retailer_detail(request, retailer_id):
     """
     try:
         retailer = get_object_or_404(
-            RetailerProfile,
-            id=retailer_id,
-            is_active=True,
-            is_verified=True,
-            verification_status='approved'
-        )
+            RetailerProfile.objects.public(), id=retailer_id)
         serializer = RetailerProfileSerializer(retailer)
         return Response(serializer.data, status=status.HTTP_200_OK)
     

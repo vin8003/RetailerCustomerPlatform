@@ -4,6 +4,7 @@ import logging
 from rest_framework import status, permissions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
+from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.db import transaction
 from django.db.models import prefetch_related_objects
@@ -38,12 +39,7 @@ def get_cart(request):
         
         if retailer_id:
             try:
-                retailer = RetailerProfile.objects.get(
-                    id=retailer_id,
-                    is_active=True,
-                    is_verified=True,
-                    verification_status='approved'
-                )
+                retailer = RetailerProfile.objects.public().get(id=retailer_id)
                 cart, created = Cart.objects.get_or_create(
                     customer=request.user,
                     retailer=retailer
@@ -267,7 +263,7 @@ def clear_cart(request):
             )
         
         try:
-            retailer = RetailerProfile.objects.get(id=retailer_id, is_active=True)
+            retailer = RetailerProfile.objects.public().get(id=retailer_id)
             cart = Cart.objects.get(customer=request.user, retailer=retailer)
             
             # Log cart history
@@ -330,7 +326,7 @@ def get_cart_summary(request):
             )
         
         try:
-            retailer = RetailerProfile.objects.get(id=retailer_id, is_active=True)
+            retailer = RetailerProfile.objects.public().get(id=retailer_id)
             cart = Cart.objects.prefetch_related('items__product').get(customer=request.user, retailer=retailer)
             
             # Calculate summary using OfferEngine
@@ -456,7 +452,7 @@ def validate_cart(request):
             )
         
         try:
-            retailer = RetailerProfile.objects.get(id=retailer_id, is_active=True)
+            retailer = RetailerProfile.objects.public().get(id=retailer_id)
             cart = Cart.objects.prefetch_related('items__product').get(customer=request.user, retailer=retailer)
             
             if cart.is_empty:
@@ -662,7 +658,7 @@ def apply_coupon(request):
         if not coupon_code:
             return Response({'error': 'coupon_code is required'}, status=status.HTTP_400_BAD_REQUEST)
             
-        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        retailer = get_object_or_404(RetailerProfile.objects.public(), id=retailer_id)
         cart, _ = Cart.objects.get_or_create(customer=request.user, retailer=retailer)
         cart_items = cart.items.select_related('product', 'product__category', 'product__brand').all()
         
@@ -715,6 +711,8 @@ def apply_coupon(request):
         
         return Response(data, status=status.HTTP_200_OK)
         
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error applying coupon: {str(e)}")
         return Response({'error': 'Failed to apply coupon'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -735,7 +733,7 @@ def remove_coupon(request):
         if not retailer_id:
             return Response({'error': 'retailer_id is required'}, status=status.HTTP_400_BAD_REQUEST)
             
-        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        retailer = get_object_or_404(RetailerProfile.objects.public(), id=retailer_id)
         cart = Cart.objects.filter(customer=request.user, retailer=retailer).first()
         
         if cart:
@@ -760,6 +758,8 @@ def remove_coupon(request):
             
         return Response({'error': 'Cart not found'}, status=status.HTTP_404_NOT_FOUND)
         
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error removing coupon: {str(e)}")
         return Response({'error': 'Failed to remove coupon'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

@@ -1,6 +1,7 @@
 import logging
 from django.conf import settings
-from django.db.models import Q
+from django.db.models import Count, Q
+from rest_framework.pagination import PageNumberPagination
 from rest_framework import permissions, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
@@ -37,6 +38,12 @@ def list_retailer_verifications(request):
       - search: string to match shop_name, username, email, phone, city
     """
     status_filter = request.GET.get('status', 'pending').strip().lower()
+    valid_statuses = {choice for choice, _ in RetailerProfile.VERIFICATION_STATUS_CHOICES}
+    if status_filter != 'all' and status_filter not in valid_statuses:
+        return Response(
+            {'error': "Invalid status. Must be 'pending', 'approved', 'rejected' or 'all'."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
     search_query = request.GET.get('search', '').strip()
 
     queryset = RetailerProfile.objects.select_related('user').all()
@@ -55,17 +62,22 @@ def list_retailer_verifications(request):
 
     queryset = queryset.order_by('-created_at')
 
-    # Status counts for admin tab badges
-    base_qs = RetailerProfile.objects.all()
-    counts = {
-        'pending': base_qs.filter(verification_status='pending').count(),
-        'approved': base_qs.filter(verification_status='approved').count(),
-        'rejected': base_qs.filter(verification_status='rejected').count(),
-        'all': base_qs.count(),
-    }
+    # Status counts for admin tab badges (single aggregate query)
+    counts = RetailerProfile.objects.aggregate(
+        pending=Count('id', filter=Q(verification_status='pending')),
+        approved=Count('id', filter=Q(verification_status='approved')),
+        rejected=Count('id', filter=Q(verification_status='rejected')),
+        all=Count('id'),
+    )
+
+    paginator = PageNumberPagination()
+    paginator.page_size = 50
+    paginator.page_size_query_param = 'page_size'
+    paginator.max_page_size = 200
+    page = paginator.paginate_queryset(queryset, request)
 
     results = []
-    for profile in queryset:
+    for profile in page:
         results.append({
             'id': profile.id,
             'user_id': profile.user.id if profile.user else None,
@@ -94,10 +106,8 @@ def list_retailer_verifications(request):
             'created_at': profile.created_at,
         })
 
-    return Response({
-        'counts': counts,
-        'results': results,
-    }, status=status.HTTP_200_OK)
+    paged = paginator.get_paginated_response(results).data
+    return Response({'counts': counts, **paged}, status=status.HTTP_200_OK)
 
 
 @api_view(['POST'])
@@ -117,13 +127,20 @@ def verify_retailer_action(request, profile_id):
             status=status.HTTP_404_NOT_FOUND
         )
 
-    action = request.data.get('action', '').strip().lower()
-    reason = request.data.get('reason', '').strip()
+    action = request.data.get('action')
+    reason = request.data.get('reason')
+    action = action.strip().lower() if isinstance(action, str) else ''
+    reason = reason.strip() if isinstance(reason, str) else ''
+
+    previous_status = profile.verification_status
 
     if action == 'approve':
         profile.verification_status = 'approved'
         profile.is_verified = True
-        profile.is_active = True
+        # Only a first-time/rejected retailer is switched on; a shop that was
+        # already approved keeps whatever active state the retailer chose.
+        if previous_status != 'approved':
+            profile.is_active = True
         profile.rejection_reason = ''
         profile.save(update_fields=['verification_status', 'is_verified', 'is_active', 'rejection_reason', 'updated_at'])
         logger.info(f"Admin approved retailer profile {profile.id} ({profile.shop_name})")

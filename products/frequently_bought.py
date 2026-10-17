@@ -6,6 +6,7 @@ and simple co-purchase counts. No ML models.
 import logging
 
 from django.db.models import Avg, Count, Q
+from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import permissions, status
@@ -50,7 +51,7 @@ def _cart_product_ids(user, retailer):
 def get_frequently_bought_together(request, retailer_id):
     """Return high-affinity add-ons for the current cart or seed product ids."""
     try:
-        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        retailer = get_object_or_404(RetailerProfile.objects.public(), id=retailer_id)
         seed_ids = set(_parse_product_ids(request.query_params.get('product_ids')))
         seed_ids.update(_cart_product_ids(request.user, retailer))
         if not seed_ids:
@@ -130,6 +131,8 @@ def get_frequently_bought_together(request, retailer_id):
             context={'request': request, 'active_offers': active_offers},
         )
         return Response(serializer.data, status=status.HTTP_200_OK)
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error getting frequently bought together: {str(e)}")
         return Response(

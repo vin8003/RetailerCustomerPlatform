@@ -38,6 +38,8 @@ class TestSupplierSearch:
             is_active=True,
         )
         other_retailer = RetailerProfile.objects.create(
+            is_verified=True,
+            verification_status='approved',
             user=other_user,
             shop_name="Other Shop",
             address_line1="456 Side St",

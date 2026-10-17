@@ -176,3 +176,29 @@ class RetailerVerificationTests(TestCase):
 
         detail_res = self.client.get(f'/api/retailer/{self.retailer_profile.id}/')
         self.assertEqual(detail_res.status_code, status.HTTP_404_NOT_FOUND)
+
+    @override_settings(ADMIN_EMAILS=['admin@ordereasy.in'])
+    def test_admin_input_validation(self):
+        self.client.force_authenticate(user=self.admin_user)
+        res = self.client.get('/api/retailer/admin/verifications/?status=bogus')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+        url = f'/api/retailer/admin/verifications/{self.retailer_profile.id}/action/'
+        res = self.client.post(url, {'action': None}, format='json')
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    @override_settings(ADMIN_EMAILS=['admin@ordereasy.in'])
+    def test_reapprove_keeps_retailer_deactivation(self):
+        self.client.force_authenticate(user=self.admin_user)
+        url = f'/api/retailer/admin/verifications/{self.retailer_profile.id}/action/'
+        self.client.post(url, {'action': 'approve'}, format='json')
+        RetailerProfile.objects.filter(pk=self.retailer_profile.pk).update(is_active=False)
+        self.client.post(url, {'action': 'approve'}, format='json')
+        self.retailer_profile.refresh_from_db()
+        self.assertFalse(self.retailer_profile.is_active)
+
+    def test_pending_retailer_cannot_be_used_for_cart_lookup(self):
+        self.assertFalse(RetailerProfile.objects.public().filter(pk=self.retailer_profile.pk).exists())
+        RetailerProfile.objects.filter(pk=self.retailer_profile.pk).update(
+            verification_status='approved', is_verified=True, is_active=True)
+        self.assertTrue(RetailerProfile.objects.public().filter(pk=self.retailer_profile.pk).exists())

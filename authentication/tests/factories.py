@@ -23,3 +23,5 @@ class RetailerProfileFactory(DjangoModelFactory):
     user = factory.SubFactory(RetailerUserFactory)
     shop_name = factory.Faker('company')
     is_active = True
+    is_verified = True
+    verification_status = 'approved'

@@ -3,6 +3,12 @@
 from django.db import migrations, models
 
 
+def approve_existing_retailers(apps, schema_editor):
+    """Retailers that predate admin verification are treated as already verified."""
+    RetailerProfile = apps.get_model('retailers', 'RetailerProfile')
+    RetailerProfile.objects.update(verification_status='approved', is_verified=True)
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -20,4 +26,5 @@ class Migration(migrations.Migration):
             name='verification_status',
             field=models.CharField(choices=[('pending', 'Pending Verification'), ('approved', 'Approved'), ('rejected', 'Rejected')], default='pending', max_length=20),
         ),
+        migrations.RunPython(approve_existing_retailers, migrations.RunPython.noop),
     ]

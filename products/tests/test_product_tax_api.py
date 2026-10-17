@@ -28,6 +28,8 @@ class ProductTaxSerializerTests(TestCase):
             is_active=True,
         )
         self.retailer = RetailerProfile.objects.create(
+            is_verified=True,
+            verification_status='approved',
             user=self.retailer_user,
             shop_name="Tax Test Shop",
             address_line1="123 Main St",
@@ -172,6 +174,8 @@ class ProductTaxAPITests(TestCase):
             is_active=True,
         )
         self.retailer = RetailerProfile.objects.create(
+            is_verified=True,
+            verification_status='approved',
             user=self.retailer_user,
             shop_name="Tax API Shop",
             address_line1="123 Main St",
@@ -318,6 +322,8 @@ class ProductTaxExcelTests(TestCase):
             is_active=True,
         )
         self.retailer = RetailerProfile.objects.create(
+            is_verified=True,
+            verification_status='approved',
             user=self.retailer_user,
             shop_name="Tax Excel Shop",
             address_line1="123 Main St",

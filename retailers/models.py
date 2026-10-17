@@ -5,6 +5,12 @@ from django.core.validators import RegexValidator
 from common.utils import generate_upload_path, resize_image
 
 
+class RetailerProfileQuerySet(models.QuerySet):
+    def public(self):
+        """Retailers visible to customers: live and approved by a platform admin."""
+        return self.filter(is_active=True, is_verified=True, verification_status='approved')
+
+
 class RetailerProfile(models.Model):
     """
     Extended profile for retailer users
@@ -98,6 +104,8 @@ class RetailerProfile(models.Model):
         help_text="Paper size for thermal receipts"
     )
     
+    objects = RetailerProfileQuerySet.as_manager()
+
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

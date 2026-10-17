@@ -457,7 +457,7 @@ class OrderCreateSerializer(serializers.Serializer):
         """Validate retailer exists"""
         from retailers.models import RetailerProfile
         try:
-            retailer = RetailerProfile.objects.get(id=value, is_active=True)
+            retailer = RetailerProfile.objects.public().get(id=value)
             return value
         except RetailerProfile.DoesNotExist:
             raise serializers.ValidationError("Retailer not found")
