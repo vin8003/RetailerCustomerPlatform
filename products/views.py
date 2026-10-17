@@ -6,6 +6,7 @@ from django.db.models import Q, Avg, Count, Sum, Max
 from django.db.models import Q, Avg, Count, Sum, Max, F, Value, Case, When, FloatField, TextField, IntegerField, DecimalField
 from django.db.models.functions import Coalesce, Greatest, Cast
 from django.contrib.postgres.search import SearchVector, SearchQuery, SearchRank
+from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 import logging
@@ -961,7 +962,7 @@ def get_retailer_products_public(request, retailer_id):
     Get products for a specific retailer (public endpoint)
     """
     try:
-        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        retailer = get_object_or_404(RetailerProfile.objects.public(), id=retailer_id)
 
         products = Product.objects.select_related(
             'retailer', 'category', 'brand', 'master_product'
@@ -1096,6 +1097,8 @@ def get_retailer_products_public(request, retailer_id):
         serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error getting retailer products: {str(e)}")
         return Response(
@@ -1111,7 +1114,7 @@ def search_products_public(request, retailer_id):
     Search products for a specific retailer (public endpoint) with minimal data
     """
     try:
-        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        retailer = get_object_or_404(RetailerProfile.objects.public(), id=retailer_id)
 
         products = Product.objects.filter(
             retailer=retailer, 
@@ -1159,6 +1162,8 @@ def search_products_public(request, retailer_id):
             'facets': facets
         }, status=status.HTTP_200_OK)
 
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error searching public retailer products: {str(e)}")
         return Response(
@@ -1178,7 +1183,7 @@ def get_retailer_categories(request, retailer_id):
     Includes recursive product counts.
     """
     try:
-        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        retailer = get_object_or_404(RetailerProfile.objects.public(), id=retailer_id)
         requested_parent_id = request.query_params.get('parent_id')
         if requested_parent_id == 'null' or requested_parent_id == '':
             requested_parent_id = None
@@ -1248,6 +1253,8 @@ def get_retailer_categories(request, retailer_id):
         
         return Response(data, status=status.HTTP_200_OK)
 
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error getting retailer categories: {str(e)}")
         return Response(
@@ -1263,7 +1270,7 @@ def get_retailer_product_groups_by_category(request, retailer_id, category_id):
     Get all unique product groups for a specific retailer and category (public endpoint).
     """
     try:
-        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        retailer = get_object_or_404(RetailerProfile.objects.public(), id=retailer_id)
         category_ids = get_all_category_ids(category_id)
         
         groups = Product.objects.filter(
@@ -1277,6 +1284,8 @@ def get_retailer_product_groups_by_category(request, retailer_id, category_id):
         all_groups = sorted(list(groups))
         return Response(all_groups, status=status.HTTP_200_OK)
 
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error getting retailer product groups by category: {str(e)}")
         return Response(
@@ -1292,7 +1301,7 @@ def get_retailer_featured_products(request, retailer_id):
     Returns at most 10 featured products, optimized for home page display.
     """
     try:
-        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        retailer = get_object_or_404(RetailerProfile.objects.public(), id=retailer_id)
 
         products = Product.objects.select_related(
             'retailer', 'category', 'brand', 'master_product'
@@ -1336,6 +1345,8 @@ def get_retailer_featured_products(request, retailer_id):
         )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error getting retailer featured products: {str(e)}")
         return Response(
@@ -1351,7 +1362,7 @@ def get_product_detail_public(request, retailer_id, product_id):
     Get product detail (public endpoint)
     """
     try:
-        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        retailer = get_object_or_404(RetailerProfile.objects.public(), id=retailer_id)
         
         # Optimize query with select_related and prefetch_related
         queryset = Product.objects.select_related(
@@ -1397,6 +1408,8 @@ def get_product_detail_public(request, retailer_id, product_id):
         )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error getting product detail: {str(e)}")
         return Response(
@@ -3030,7 +3043,7 @@ def get_best_selling_products(request, retailer_id):
     Get top selling products for a specific retailer (public endpoint)
     """
     try:
-        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        retailer = get_object_or_404(RetailerProfile.objects.public(), id=retailer_id)
 
         # Get top products by sales volume
         # We need to import OrderItem locally to avoid circular import if not already imported
@@ -3065,6 +3078,8 @@ def get_best_selling_products(request, retailer_id):
         serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error getting best selling products: {str(e)}")
         return Response(
@@ -3084,7 +3099,7 @@ def get_buy_again_products(request, retailer_id):
              # Let's return empty list for now to avoid UI breakage
             return Response([], status=status.HTTP_200_OK)
 
-        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        retailer = get_object_or_404(RetailerProfile.objects.public(), id=retailer_id)
         
         # Find products in user's past delivered orders
         from orders.models import Order
@@ -3117,6 +3132,8 @@ def get_buy_again_products(request, retailer_id):
         serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error getting buy again products: {str(e)}")
         return Response(
@@ -3131,7 +3148,7 @@ def get_recommended_products(request, retailer_id):
     Get recommended products for the user (based on past purchases or popular items)
     """
     try:
-        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        retailer = get_object_or_404(RetailerProfile.objects.public(), id=retailer_id)
         
         # Simple recommendation strategy:
         # 1. Look at categories user has bought from
@@ -3184,6 +3201,8 @@ def get_recommended_products(request, retailer_id):
         serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error getting recommended products: {str(e)}")
         return Response(
@@ -3214,7 +3233,7 @@ def get_deals_of_the_day(request, retailer_id):
     Get Deals of the Day (highest discount percentage > 0)
     """
     try:
-        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        retailer = get_object_or_404(RetailerProfile.objects.public(), id=retailer_id)
         products = Product.objects.filter(
             retailer=retailer,
             is_active=True,
@@ -3237,6 +3256,8 @@ def get_deals_of_the_day(request, retailer_id):
 
         serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
         return Response(serializer.data, status=status.HTTP_200_OK)
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error getting deals of the day: {str(e)}")
         return Response({'error': format_exception(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -3249,7 +3270,7 @@ def get_budget_buys(request, retailer_id):
     Get Budget Buys (price <= 99)
     """
     try:
-        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        retailer = get_object_or_404(RetailerProfile.objects.public(), id=retailer_id)
         limit_price = float(request.query_params.get('max_price', 99))
         products = Product.objects.filter(
             retailer=retailer,
@@ -3273,6 +3294,8 @@ def get_budget_buys(request, retailer_id):
 
         serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
         return Response(serializer.data, status=status.HTTP_200_OK)
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error getting budget buys: {str(e)}")
         return Response({'error': format_exception(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -3285,7 +3308,7 @@ def get_trending_products(request, retailer_id):
     Get Trending Products (velocity based on last 72 hours)
     """
     try:
-        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        retailer = get_object_or_404(RetailerProfile.objects.public(), id=retailer_id)
         
         from django.utils import timezone
         from datetime import timedelta
@@ -3313,6 +3336,8 @@ def get_trending_products(request, retailer_id):
 
         serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
         return Response(serializer.data, status=status.HTTP_200_OK)
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error getting trending products: {str(e)}")
         return Response({'error': format_exception(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -3325,7 +3350,7 @@ def get_new_arrivals(request, retailer_id):
     Get New Arrivals (order by -created_at)
     """
     try:
-        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        retailer = get_object_or_404(RetailerProfile.objects.public(), id=retailer_id)
         products = Product.objects.filter(
             retailer=retailer,
             is_active=True,
@@ -3347,6 +3372,8 @@ def get_new_arrivals(request, retailer_id):
 
         serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
         return Response(serializer.data, status=status.HTTP_200_OK)
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error getting new arrivals: {str(e)}")
         return Response({'error': format_exception(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -3359,7 +3386,7 @@ def get_seasonal_picks(request, retailer_id):
     Get Seasonal Picks (filter by is_seasonal flag)
     """
     try:
-        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        retailer = get_object_or_404(RetailerProfile.objects.public(), id=retailer_id)
         products = Product.objects.filter(
             retailer=retailer,
             is_active=True,
@@ -3382,6 +3409,8 @@ def get_seasonal_picks(request, retailer_id):
 
         serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
         return Response(serializer.data, status=status.HTTP_200_OK)
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error getting seasonal picks: {str(e)}")
         return Response({'error': format_exception(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

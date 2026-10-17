@@ -457,7 +457,7 @@ class OrderCreateSerializer(serializers.Serializer):
         """Validate retailer exists"""
         from retailers.models import RetailerProfile
         try:
-            retailer = RetailerProfile.objects.get(id=value, is_active=True)
+            retailer = RetailerProfile.objects.public().get(id=value)
             return value
         except RetailerProfile.DoesNotExist:
             raise serializers.ValidationError("Retailer not found")
@@ -1196,7 +1196,7 @@ class OrderModificationSerializer(serializers.Serializer):
             
             # Recalculate order subtotal from scratch to be safe
             # (In case some items were not in the update list but still exist)
-            current_items = list(instance.items.all())
+            current_items = list(OrderItem.objects.filter(order=instance))
             subtotal = sum(
                 (item.total_price for item in current_items),
                 Decimal('0.00'),
@@ -1227,20 +1227,26 @@ class OrderModificationSerializer(serializers.Serializer):
             # Update discount
             if discount_amount is not None:
                 instance.discount_amount = discount_amount
+            elif instance.discount_amount is None:
+                instance.discount_amount = Decimal('0.00')
             
+            discount_to_allocate = instance.discount_amount or Decimal('0.00')
             # Tax is split from the post-discount inclusive line totals, so the
             # order-level discount has to be allocated across the lines first.
             # Loyalty points and delivery fee stay out of the tax base.
             allocated_totals = allocate_order_discount(
                 [item.total_price for item in current_items],
-                instance.discount_amount,
+                discount_to_allocate,
             )
             taxable_amount = Decimal('0.00')
             tax_amount = Decimal('0.00')
             for item, allocated_total in zip(current_items, allocated_totals):
+                if not item.pk:
+                    continue
                 # Existing lines keep the rate they were sold at; re-reading the
                 # product here would rewrite historical tax.
-                tax_split = split_inclusive_line(allocated_total, item.gst_rate)
+                gst_rate = item.gst_rate if item.gst_rate is not None else Decimal('0.00')
+                tax_split = split_inclusive_line(allocated_total, gst_rate)
                 item.taxable_value = tax_split['taxable_value']
                 item.tax_amount = tax_split['tax_amount']
                 item.save(update_fields=['taxable_value', 'tax_amount'])
@@ -1251,7 +1257,9 @@ class OrderModificationSerializer(serializers.Serializer):
             instance.tax_amount = quantize_2(tax_amount)
             
             # Recalculate total
-            instance.total_amount = (instance.subtotal + instance.delivery_fee - instance.discount_amount - instance.discount_from_points).quantize(Decimal('0.01'))
+            discount_amount_val = instance.discount_amount or Decimal('0.00')
+            points_discount_val = instance.discount_from_points or Decimal('0.00')
+            instance.total_amount = (instance.subtotal + instance.delivery_fee - discount_amount_val - points_discount_val).quantize(Decimal('0.01'))
             
             # Validate total amount
             if instance.total_amount < 0:

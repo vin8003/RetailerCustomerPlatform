@@ -20,6 +20,8 @@ class KhataSystemTest(TestCase):
             user_type='retailer'
         )
         self.retailer = RetailerProfile.objects.create(
+            is_verified=True,
+            verification_status='approved',
             user=self.retailer_user,
             shop_name='Test Shop'
         )

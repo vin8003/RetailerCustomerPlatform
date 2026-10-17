@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 from ordering_platform.database import build_database_config
 
 env_path = os.path.join(BASE_DIR, '.env')
-load_dotenv(env_path)
+load_dotenv(env_path, override=True)
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-change-this-in-production')
@@ -24,6 +24,11 @@ SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-change-this-in-production'
 DEBUG = os.getenv('DEBUG', 'True').lower() == 'true'
 
 RETAILER_ACCESS_CODE = os.getenv('RETAILER_ACCESS_CODE', 'Subh_Labh@26')
+ADMIN_EMAILS = [
+    email.strip().lower()
+    for email in os.getenv('ADMIN_EMAILS', '').split(',')
+    if email.strip()
+]
 
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 if '*' in ALLOWED_HOSTS:

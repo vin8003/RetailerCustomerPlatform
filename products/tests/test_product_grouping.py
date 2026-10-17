@@ -186,6 +186,8 @@ class TestProductGrouping:
         )
         
         other_retailer = RetailerProfile.objects.create(
+            is_verified=True,
+            verification_status='approved',
             user=other_user,
             shop_name="Other Store",
             is_active=True

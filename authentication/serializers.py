@@ -1,3 +1,4 @@
+from django.conf import settings
 from rest_framework import serializers
 from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
@@ -179,13 +180,19 @@ class UserProfileSerializer(serializers.ModelSerializer):
     """
     shop_name = serializers.SerializerMethodField()
     shop_image = serializers.SerializerMethodField()
+    is_admin = serializers.SerializerMethodField()
+    verification_status = serializers.SerializerMethodField()
+    is_verified = serializers.SerializerMethodField()
+    rejection_reason = serializers.SerializerMethodField()
 
     class Meta:
         model = User
         fields = ['id', 'username', 'email', 'first_name', 'last_name', 
                  'phone_number', 'user_type', 'is_phone_verified', 'created_at',
-                 'shop_name', 'shop_image']
-        read_only_fields = ['id', 'username', 'user_type', 'is_phone_verified', 'created_at']
+                 'shop_name', 'shop_image', 'is_admin', 'verification_status',
+                 'is_verified', 'rejection_reason']
+        read_only_fields = ['id', 'username', 'user_type', 'is_phone_verified', 'created_at',
+                           'is_admin', 'verification_status', 'is_verified', 'rejection_reason']
 
     def get_shop_name(self, obj):
         if obj.user_type == 'retailer' and hasattr(obj, 'retailer_profile'):
@@ -195,6 +202,25 @@ class UserProfileSerializer(serializers.ModelSerializer):
     def get_shop_image(self, obj):
         if obj.user_type == 'retailer' and hasattr(obj, 'retailer_profile') and obj.retailer_profile.shop_image:
             return obj.retailer_profile.shop_image.url
+        return None
+
+    def get_is_admin(self, obj):
+        admin_emails = getattr(settings, 'ADMIN_EMAILS', [])
+        return bool(obj.is_staff or obj.is_superuser or (obj.email and obj.email.strip().lower() in admin_emails))
+
+    def get_verification_status(self, obj):
+        if obj.user_type == 'retailer' and hasattr(obj, 'retailer_profile'):
+            return getattr(obj.retailer_profile, 'verification_status', 'pending')
+        return None
+
+    def get_is_verified(self, obj):
+        if obj.user_type == 'retailer' and hasattr(obj, 'retailer_profile'):
+            return getattr(obj.retailer_profile, 'is_verified', False)
+        return False
+
+    def get_rejection_reason(self, obj):
+        if obj.user_type == 'retailer' and hasattr(obj, 'retailer_profile'):
+            return getattr(obj.retailer_profile, 'rejection_reason', '')
         return None
 
 

@@ -1,7 +1,11 @@
 from django.urls import path
-from . import views
+from . import views, admin_views
 
 urlpatterns = [
+    # Platform Admin endpoints
+    path('admin/verifications/', admin_views.list_retailer_verifications, name='admin_list_retailer_verifications'),
+    path('admin/verifications/<int:profile_id>/action/', admin_views.verify_retailer_action, name='admin_verify_retailer_action'),
+
     # Retailer profile management
     path('profile/', views.get_retailer_profile, name='get_retailer_profile'),
     path('profile/create/', views.create_retailer_profile, name='create_retailer_profile'),

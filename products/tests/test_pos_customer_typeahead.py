@@ -46,6 +46,8 @@ class TestSearchPosCustomersKAN73:
             is_active=True,
         )
         other_retailer = RetailerProfile.objects.create(
+            is_verified=True,
+            verification_status='approved',
             user=other_user,
             shop_name="Other Shop",
             address_line1="1 Other St",
@@ -100,6 +102,8 @@ class TestSearchPosCustomersKAN73:
             is_active=True,
         )
         other_retailer = RetailerProfile.objects.create(
+            is_verified=True,
+            verification_status='approved',
             user=other_user,
             shop_name="Shop Two",
             address_line1="2 Other St",
