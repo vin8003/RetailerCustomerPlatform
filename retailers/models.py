@@ -97,14 +97,6 @@ class RetailerProfile(models.Model):
         default='80mm',
         help_text="Paper size for thermal receipts"
     )
-    pickup_uncollected_hours = models.PositiveIntegerField(
-        default=48,
-        help_text='Hours after pickup-ready before uncollected orders expire and ATP is restored',
-    )
-    fulfillment_slot_capacity = models.PositiveIntegerField(
-        default=5,
-        help_text='Max orders per 30-minute pickup/delivery slot at this location',
-    )
     
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
