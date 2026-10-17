@@ -5,6 +5,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.throttling import AnonRateThrottle
 from django.db.models import Q, Avg
 from django.shortcuts import get_object_or_404
+from django.http import Http404
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 import ipaddress
@@ -267,7 +268,11 @@ def list_retailers(request):
     List retailers with filtering and search
     """
     try:
-        queryset = RetailerProfile.objects.filter(is_active=True).prefetch_related('categories__category')
+        queryset = RetailerProfile.objects.filter(
+            is_active=True,
+            is_verified=True,
+            verification_status='approved'
+        ).prefetch_related('categories__category')
         
         # Apply filters
         city = request.query_params.get('city')
@@ -410,10 +415,16 @@ def get_retailer_detail(request, retailer_id):
     Get detailed information about a specific retailer
     """
     try:
-        retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+        retailer = get_object_or_404(
+            RetailerProfile.objects.public(), id=retailer_id)
         serializer = RetailerProfileSerializer(retailer)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
+    except Http404:
+        return Response(
+            {'error': 'Retailer not found'}, 
+            status=status.HTTP_404_NOT_FOUND
+        )
     except Exception as e:
         logger.error(f"Error getting retailer detail: {str(e)}")
         return Response(
@@ -449,7 +460,11 @@ def list_operational_cities(request):
     """
     try:
         cities = list(
-            RetailerProfile.objects.filter(is_active=True)
+            RetailerProfile.objects.filter(
+                is_active=True,
+                is_verified=True,
+                verification_status='approved'
+            )
             .exclude(city__isnull=True)
             .exclude(city='')
             .exclude(state__isnull=True)
@@ -685,7 +700,9 @@ def search_retailers(request):
             Q(city__icontains=query) |
             Q(state__icontains=query) |
             Q(categories__category__name__icontains=query),
-            is_active=True
+            is_active=True,
+            is_verified=True,
+            verification_status='approved'
         ).prefetch_related('categories__category').distinct()
         
         # Apply additional filters

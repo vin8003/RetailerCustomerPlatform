@@ -55,6 +55,8 @@ def retailer_user():
 @pytest.fixture
 def retailer(retailer_user):
     return RetailerProfile.objects.create(
+        is_verified=True,
+        verification_status='approved',
         user=retailer_user,
         shop_name="Products Test Shop",
         address_line1="123 Main St",

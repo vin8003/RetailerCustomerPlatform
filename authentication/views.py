@@ -43,14 +43,7 @@ def retailer_signup(request):
     """
     try:
         data = request.data.copy()
-        access_code = data.pop('access_code', None)
-        
-        # Verify access code
-        if access_code != settings.RETAILER_ACCESS_CODE:
-            return Response(
-                {'error': 'Invalid Access Code'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        data.pop('access_code', None)  # Optional backward compatibility
 
         data['user_type'] = 'retailer'
 
@@ -58,7 +51,7 @@ def retailer_signup(request):
         if serializer.is_valid():
             user = serializer.save()
 
-            # Create RetailerProfile with default values
+            # Create RetailerProfile with default values (pending verification)
             profile = RetailerProfile.objects.create(
                 user=user,
                 shop_name=f"{user.first_name or user.username}'s Shop",
@@ -69,7 +62,10 @@ def retailer_signup(request):
                 state='',
                 pincode='000000',
                 contact_phone=user.phone_number or '',
-                is_active=False,  # Inactive until profile is completed
+                contact_email=user.email or '',
+                is_verified=False,
+                verification_status='pending',
+                is_active=False,  # Not live to customers until Admin approves
             )
 
             # (Removed manual hours creation to test for duplicates)
@@ -421,14 +417,15 @@ def verify_otp(request):
                                     'state': '',
                                     'pincode': '000000',
                                     'contact_phone': user.phone_number or '',
-                                    'is_active': True,
+                                    'contact_email': user.email or '',
+                                    'is_active': False,
                                 }
                             )
-                            # Activate existing profile on phone verification
-                            if not created and not profile.is_active:
+                            # Only activate existing profile if it has been approved by platform admin
+                            if not created and profile.verification_status == 'approved' and not profile.is_active:
                                 profile.is_active = True
                                 profile.save()
-                                logger.info(f"Activated RetailerProfile for user: {user.username}")
+                                logger.info(f"Activated approved RetailerProfile for user: {user.username}")
                             elif created:
                                 # Create default operating hours for new profile
                                 days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
@@ -518,14 +515,15 @@ def verify_otp(request):
                             'state': '',
                             'pincode': '000000',
                             'contact_phone': user.phone_number or '',
-                            'is_active': True,
+                            'contact_email': user.email or '',
+                            'is_active': False,
                         }
                     )
-                    # Activate existing profile on phone verification
-                    if not created and not profile.is_active:
+                    # Only activate existing profile if it has been approved by platform admin
+                    if not created and profile.verification_status == 'approved' and not profile.is_active:
                         profile.is_active = True
                         profile.save()
-                        logger.info(f"Activated RetailerProfile for user: {user.username}")
+                        logger.info(f"Activated approved RetailerProfile for user: {user.username}")
                     elif created:
                         # Create default operating hours for new profile
                         days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
