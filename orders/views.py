@@ -26,6 +26,7 @@ from retailers.serializers import RetailerReviewSerializer
 from customers.models import CustomerAddress, CustomerLoyalty
 from django.db.models import Exists, OuterRef, Prefetch
 from common.notifications import send_push_notification
+from common.meta_tracking import track_meta_purchase
 from .views_ops import get_order_stats, get_retailer_reviews, modify_order, confirm_modification
 from .views_chat import (
     get_order_chat, send_order_message, create_retailer_rating,
@@ -63,11 +64,7 @@ def place_order(request):
                 except RetailerProfile.DoesNotExist:
                      pass
             order = serializer.save()
-            try:
-                from common.meta_tracking import track_meta_purchase
-                track_meta_purchase(order, request)
-            except Exception as meta_err:
-                logger.warning(f"Meta tracking dispatch error: {meta_err}")
+            track_meta_purchase(order, request)
 
             if order.retailer and order.retailer.user:
                 send_push_notification(user=order.retailer.user, title="New Order Received!", message=f"Order #{order.order_number} has been placed by {request.user.get_full_name() or request.user.username}.", data={'type': 'new_order', 'order_id': str(order.id)})

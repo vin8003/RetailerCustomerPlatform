@@ -9,7 +9,7 @@ import urllib.error
 
 logger = logging.getLogger(__name__)
 
-META_GRAPH_API_VERSION = "v19.0"
+META_GRAPH_API_VERSION = "v22.0"
 
 
 def _hash_value(val: str) -> str:
@@ -30,10 +30,13 @@ def _normalize_phone(phone: str) -> str:
     return digits
 
 
-def _dispatch_meta_event(payload: dict, dataset_id: str, access_token: str):
-    """Worker function executed in background thread."""
+def _dispatch_meta_event(payload: dict, dataset_id: str):
+    """
+    Worker function executed in background thread.
+    Access token is sent in the request body to avoid appearing in URL proxy/access logs.
+    """
     try:
-        url = f"https://graph.facebook.com/{META_GRAPH_API_VERSION}/{dataset_id}/events?access_token={access_token}"
+        url = f"https://graph.facebook.com/{META_GRAPH_API_VERSION}/{dataset_id}/events"
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
             url,
@@ -75,10 +78,6 @@ def track_meta_purchase(order, request=None, test_event_code=None):
             first_name = getattr(customer, "first_name", "")
             last_name = getattr(customer, "last_name", "")
 
-        # Fallback to delivery address phone if customer phone is empty
-        if not raw_phone and hasattr(order, "delivery_phone") and order.delivery_phone:
-            raw_phone = order.delivery_phone
-
         user_data = {}
         norm_phone = _normalize_phone(raw_phone)
         if norm_phone:
@@ -107,63 +106,56 @@ def track_meta_purchase(order, request=None, test_event_code=None):
             if user_agent:
                 user_data["client_user_agent"] = user_agent
 
-        # Order amount
-        value = 0.0
-        for attr in ["final_amount", "total_amount", "subtotal"]:
-            if hasattr(order, attr) and getattr(order, attr) is not None:
-                try:
-                    value = float(getattr(order, attr))
-                    break
-                except (ValueError, TypeError):
-                    continue
-
-        order_id = str(getattr(order, "order_number", None) or getattr(order, "id", ""))
+        # Order total value
+        value = float(getattr(order, "total_amount", 0.0) or 0.0)
+        order_number = str(getattr(order, "order_number", None) or getattr(order, "id", ""))
 
         custom_data = {
             "currency": "INR",
             "value": round(value, 2),
-            "order_id": order_id,
+            "order_id": order_number,
             "content_type": "product",
         }
 
-        # Item contents
+        # Item contents with Decimal quantity support (e.g. 0.5 kg)
         try:
             contents = []
-            if hasattr(order, "items"):
-                for item in order.items.all():
-                    item_id = str(getattr(item, "product_id", "") or getattr(item, "id", ""))
-                    qty = getattr(item, "quantity", 1)
-                    price = float(getattr(item, "unit_price", 0.0) or getattr(item, "price", 0.0) or 0.0)
-                    contents.append({
-                        "id": item_id,
-                        "quantity": int(qty),
-                        "item_price": round(price, 2)
-                    })
+            for item in order.items.all():
+                item_id = str(item.product_id)
+                qty = float(item.quantity)
+                price = float(item.unit_price)
+                contents.append({
+                    "id": item_id,
+                    "quantity": qty,
+                    "item_price": round(price, 2)
+                })
             if contents:
                 custom_data["contents"] = contents
-        except Exception:
-            pass
+        except Exception as item_err:
+            logger.warning(f"[Meta CAPI] Error serializing order items: {str(item_err)}")
 
         event_data = {
             "event_name": "Purchase",
             "event_time": int(time.time()),
+            "event_id": order_number,
             "action_source": "website",
             "event_source_url": "https://customer.ordereasy.win/checkout/success",
             "user_data": user_data,
             "custom_data": custom_data,
         }
 
-        payload = {"data": [event_data]}
+        payload = {
+            "data": [event_data],
+            "access_token": access_token
+        }
 
-        # If test_event_code is passed or configured in environment
-        active_test_code = test_event_code or os.getenv("META_TEST_EVENT_CODE")
-        if active_test_code:
-            payload["test_event_code"] = active_test_code
+        if test_event_code:
+            payload["test_event_code"] = test_event_code
 
         # Fire in background thread so caller returns immediately
         thread = threading.Thread(
             target=_dispatch_meta_event,
-            args=(payload, dataset_id, access_token),
+            args=(payload, dataset_id),
             daemon=True
         )
         thread.start()
