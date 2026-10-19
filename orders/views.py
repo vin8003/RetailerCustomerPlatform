@@ -63,6 +63,12 @@ def place_order(request):
                 except RetailerProfile.DoesNotExist:
                      pass
             order = serializer.save()
+            try:
+                from common.meta_tracking import track_meta_purchase
+                track_meta_purchase(order, request)
+            except Exception as meta_err:
+                logger.warning(f"Meta tracking dispatch error: {meta_err}")
+
             if order.retailer and order.retailer.user:
                 send_push_notification(user=order.retailer.user, title="New Order Received!", message=f"Order #{order.order_number} has been placed by {request.user.get_full_name() or request.user.username}.", data={'type': 'new_order', 'order_id': str(order.id)})
                 from common.notifications import send_silent_update
