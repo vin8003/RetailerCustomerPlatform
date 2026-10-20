@@ -329,7 +329,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'subtotal', 'delivery_fee', 'discount_amount', 'discount_from_points', 'points_redeemed', 'points_earned',
             'taxable_amount', 'tax_amount', 'total_amount', 'refund_amount', 'net_amount',
             'coupon_code',
-            'special_instructions', 'cancellation_reason', 'cancelled_by', 
+            'special_instructions', 'notes', 'cancellation_reason', 'cancelled_by', 
             'payment_reference_id', 'payment_status', 'payment_edit_count', 'is_payment_locked',
             'cash_amount', 'upi_amount', 'card_amount', 'credit_amount',
             'delivery_address_text', 'retailer_gst_number', 'retailer_receipt_footer', 'retailer_show_gst', 'retailer_print_upi_qr', 'retailer_printer_size',
@@ -381,6 +381,9 @@ class OrderDetailSerializer(serializers.ModelSerializer):
         user = getattr(request, 'user', None)
         if getattr(user, 'id', None) is None or user.id != instance.customer_id:
             data.pop('pickup_code', None)
+        # Order notes are the shop's internal notes (OE-325): staff only.
+        if getattr(user, 'user_type', None) != 'retailer':
+            data.pop('notes', None)
         return data
 
     def get_customer_name(self, obj):

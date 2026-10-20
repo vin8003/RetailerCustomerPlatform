@@ -1068,6 +1068,37 @@ def mark_chat_read(request, order_id):
         return Response({'error': format_exception(e)}, status=500)
 
 
+ORDER_NOTES_MAX = 1000
+
+
+@api_view(['PATCH'])
+@permission_classes([permissions.IsAuthenticated])
+def update_order_notes(request, order_id):
+    """Set the shop's internal notes on an order (OE-325). Staff with orders.update only."""
+    if request.user.user_type != 'retailer':
+        return Response(
+            {'error': 'Only shop staff can edit order notes'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    order, access_err = get_order_for_retailer(request.user, order_id, PERM_ORDERS_UPDATE)
+    if access_err is not None:
+        return access_err
+    notes = request.data.get('notes')
+    if notes is None:
+        notes = ''
+    if not isinstance(notes, str):
+        return Response({'error': 'notes must be text'}, status=status.HTTP_400_BAD_REQUEST)
+    notes = notes.strip()
+    if len(notes) > ORDER_NOTES_MAX:
+        return Response(
+            {'error': f'notes must be at most {ORDER_NOTES_MAX} characters'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    order.notes = notes
+    order.save(update_fields=['notes', 'updated_at'])
+    return Response({'id': order.id, 'notes': order.notes})
+
+
 @api_view(['PATCH'])
 @permission_classes([permissions.IsAuthenticated])
 def update_estimated_time(request, order_id):

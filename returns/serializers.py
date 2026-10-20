@@ -28,7 +28,7 @@ class SalesReturnSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SalesReturn
-        fields = ['id', 'order', 'order_number', 'customer_name', 'refund_amount', 'refund_payment_mode', 'reason', 'processed_by_name', 'created_at', 'items']
+        fields = ['id', 'order', 'order_number', 'customer_name', 'refund_amount', 'refund_payment_mode', 'reason', 'notes', 'processed_by_name', 'created_at', 'items']
         read_only_fields = ['id', 'created_at', 'refund_amount']
 
     def get_customer_name(self, obj):

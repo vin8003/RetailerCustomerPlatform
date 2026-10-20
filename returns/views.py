@@ -11,6 +11,9 @@ from retailers.models import RetailerProfile, Supplier
 from orders.models import Order, OrderItem
 from products.models import PurchaseInvoice, Product, ProductBatch, PurchaseItem
 
+
+SALES_RETURN_NOTES_MAX = 1000
+
 class SalesReturnViewSet(viewsets.ModelViewSet):
     serializer_class = SalesReturnSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -96,6 +99,15 @@ class SalesReturnViewSet(viewsets.ModelViewSet):
         items_data = request.data.get('items', [])
         payment_mode = request.data.get('refund_payment_mode', 'cash')
         reason = request.data.get('reason', '')
+        notes = request.data.get('notes') or ''
+        if not isinstance(notes, str):
+            return Response({'error': 'notes must be text'}, status=status.HTTP_400_BAD_REQUEST)
+        notes = notes.strip()
+        if len(notes) > SALES_RETURN_NOTES_MAX:
+            return Response(
+                {'error': f'notes must be at most {SALES_RETURN_NOTES_MAX} characters'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         if not items_data:
             return Response({'error': 'No items provided for return'}, status=status.HTTP_400_BAD_REQUEST)
@@ -140,6 +152,7 @@ class SalesReturnViewSet(viewsets.ModelViewSet):
                 items_data=processed_items,
                 refund_payment_mode=payment_mode,
                 reason=reason,
+                notes=notes,
                 created_by=request.user
             )
             serializer = self.get_serializer(sales_return)

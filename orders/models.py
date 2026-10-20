@@ -141,6 +141,8 @@ class Order(models.Model):
     # Additional info
     coupon_code = models.CharField(max_length=50, blank=True, null=True)
     special_instructions = models.TextField(blank=True)
+    # Internal shop notes on the order; never sent to the customer (OE-325).
+    notes = models.TextField(blank=True, default='')
     cancellation_reason = models.TextField(blank=True)
     cancelled_by = models.CharField(max_length=50, blank=True, null=True)
     payment_reference_id = models.CharField(max_length=100, blank=True, null=True)

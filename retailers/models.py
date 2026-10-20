@@ -878,6 +878,7 @@ class Supplier(models.Model):
     company_name = models.CharField(max_length=255)
     contact_person = models.CharField(max_length=255, blank=True)
     phone_number = models.CharField(max_length=20, blank=True)
+    email = models.EmailField(blank=True, default='', help_text='Optional supplier contact email (OE-337).')
     gst_number = models.CharField(
         max_length=15,
         blank=True,

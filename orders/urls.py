@@ -20,6 +20,7 @@ urlpatterns = [
     path('<int:order_id>/submit_payment/', views.submit_payment, name='submit_payment'),
     path('<int:order_id>/verify_payment/', views.verify_payment, name='verify_payment'),
     path('<int:order_id>/estimated-time/', views.update_estimated_time, name='update_estimated_time'),
+    path('<int:order_id>/notes/', views.update_order_notes, name='update_order_notes'),
     path(
         '<int:order_id>/fulfillment-slot/',
         views.reschedule_order_fulfillment_slot,
