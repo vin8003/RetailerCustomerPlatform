@@ -11,6 +11,7 @@ from .models import (
 )
 from products.inventory_adjust import UNPARSEABLE_EXPIRY, parse_expiry_date
 from products.channel_price import (
+    CHANNEL_APP,
     apply_channel_price_representation,
     channel_from_context,
     resolve_channel_price,
@@ -959,44 +960,23 @@ class ProductDetailSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
             return False
 
     def get_group_variants(self, obj):
-        """Get all other active products in the same group for this retailer, sorting parent/child first"""
-        try:
-            if obj.product_group:
-                siblings = filter_in_stock_for_customer(Product.objects.filter(
-                    retailer=obj.retailer,
-                    product_group=obj.product_group,
-                    is_active=True,
-                    is_available=True
-                )).exclude(id=obj.id).only(
-                    'id', 'name', 'unit', 'price', 'original_price', 
-                    'is_parent_bulk', 'parent_bulk_product'
-                )
-                
-                # Sort: items where is_parent_bulk is True or parent_bulk_product_id is not None come first
-                sorted_siblings = sorted(
-                    list(siblings),
-                    key=lambda s: (0 if (s.is_parent_bulk or s.parent_bulk_product_id is not None) else 1, s.id)
-                )
-                
-                variants = []
-                for s in sorted_siblings:
-                    variants.append({
-                        'id': s.id,
-                        'name': s.name,
-                        'unit': s.unit,
-                        'price': float(s.price),
-                        'original_price': float(s.original_price) if s.original_price else float(s.price),
-                        'image': s.image_display_url,
-                        'minimum_order_quantity': float(s.minimum_order_quantity) if s.minimum_order_quantity else 1,
-                        'maximum_order_quantity': float(s.maximum_order_quantity) if s.maximum_order_quantity else None,
-                        'track_inventory': s.track_inventory,
-                        'quantity': float(s.quantity) if s.quantity else 0
-                    })
-                return variants
+        """Other active products in the same group, parent/child first.
+
+        Customers (app channel) see in-stock siblings at the app price (KAN-63,
+        OE-106); shop staff see every sibling at the store price.
+        """
+        if not obj.product_group:
             return []
-        except Exception as e:
-            logger.error(f"Error getting group variants: {e}")
-            return []
+        channel = channel_from_context(self.context)
+        siblings = group_sibling_queryset(
+            [obj.retailer_id], [obj.product_group]
+        ).exclude(id=obj.id)
+        if channel == CHANNEL_APP:
+            siblings = filter_in_stock_for_customer(siblings)
+        return [
+            serialize_group_variant(sibling, channel)
+            for sibling in sort_group_siblings(siblings)
+        ]
 
 
 class MasterProductSerializer(serializers.ModelSerializer):

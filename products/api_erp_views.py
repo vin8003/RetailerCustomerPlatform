@@ -64,8 +64,6 @@ class SupplierViewSet(viewsets.ModelViewSet):
     filter_backends = [SearchFilter]
     search_fields = ['company_name', 'contact_person', 'phone_number']
 
-    search_fields = ['company_name', 'contact_person', 'phone_number']
-
     def _caller_org(self):
         """Resolve the caller org once; every action asks for it 2-3 times."""
         if not hasattr(self, '_cached_caller_org'):
@@ -179,8 +177,12 @@ class SupplierViewSet(viewsets.ModelViewSet):
         if denied is not None:
             return denied
         supplier = self.get_object()
-        if supplier.purchase_invoices.exists() or supplier.ledger_entries.exists():
-            # Deleting would drop ledger rows and unlink invoices; deactivate instead.
+        if (
+            supplier.purchase_invoices.exists()
+            or supplier.ledger_entries.exists()
+            or supplier.purchase_returns.exists()
+        ):
+            # Deleting would drop ledger rows and unlink invoices/returns; deactivate instead.
             return Response(
                 {'error': 'This supplier has purchase history. Deactivate it instead of deleting.'},
                 status=status.HTTP_409_CONFLICT,
@@ -219,19 +221,6 @@ class SupplierViewSet(viewsets.ModelViewSet):
             supplier.payment_terms,
             organization=self._caller_org(),
         )
-
-    def destroy(self, request, *args, **kwargs):
-        instance = self.get_object()
-        if (
-            instance.purchase_invoices.exists()
-            or instance.ledger_entries.exists()
-            or instance.purchase_returns.exists()
-        ):
-            raise ValidationError(
-                "Cannot delete a supplier linked to purchases, payments, ledger, or returns. "
-                "Deactivate instead."
-            )
-        return super().destroy(request, *args, **kwargs)
 
 
 class PurchaseInvoiceViewSet(viewsets.ModelViewSet):
@@ -551,6 +540,24 @@ def create_pos_order(request):
         final_discount = max(automated_discount, raw_discount)
 
         with transaction.atomic():
+            # Selling below zero stock is a client request, so it needs its own permission.
+            allow_negative = data.get('allow_negative') is True
+            if allow_negative:
+                oversell_org = get_organization_for_user(request.user)
+                if oversell_org is None or not user_has_org_permission(
+                    request.user, oversell_org, 'orders.oversell'
+                ):
+                    raise CreditOverrideDenied(
+                        'Selling more than the stock on hand needs the orders.oversell permission'
+                    )
+            # One pk-ASC lock for every sold SKU (+ pack parents). Do not
+            # lock child-then-parent ad hoc — that AB-BA deadlocks with
+            # place_order / modify lock_for_sale.
+            locked_products = Product.lock_for_sale(
+                retailer,
+                [pos_item.product for pos_item in pos_items],
+            )
+
             # Prepare the exact post-offer lines once so inventory, order items,
             # and tax snapshots all use the same quantities and prices.
             item_discounts = offer_results.get('item_discounts', {})
@@ -558,9 +565,7 @@ def create_pos_order(request):
             raw_lines = []
             offered_lines = []
             for i, item in enumerate(items_data):
-                product = Product.objects.select_for_update().get(
-                    id=item['product_id'], retailer=retailer
-                )
+                product = locked_products[item['product_id']]
                 batch_id = item.get('batch_id')
                 batch = None
                 if batch_id:
@@ -781,10 +786,14 @@ def create_pos_order(request):
                     if available_elsewhere >= qty:
                         stock_batch = None
 
-                # POS allows negative stock (allow_negative=True)
-                new_qty = apply_stock_decrease(
-                    product, qty, batch=stock_batch, allow_negative=True
-                )
+                # Sale deduct blocks when on-hand would go negative unless
+                # the caller passed allow_negative with orders.oversell (OE-146).
+                try:
+                    new_qty = apply_stock_decrease(
+                        product, qty, batch=stock_batch, allow_negative=allow_negative
+                    )
+                except ValueError:
+                    raise ValueError(f"Not enough saleable stock for {product.name}")
 
                 OrderItem.objects.create(
                     order=order,
@@ -1013,7 +1022,7 @@ def get_inventory_ledger(request):
 
     logs = ProductInventoryLog.objects.filter(
         product__retailer=retailer
-    ).select_related('product', 'created_by')
+    ).select_related('product', 'created_by', 'batch')
     if product:
         logs = logs.filter(product=product)
     if reason:
@@ -1035,6 +1044,8 @@ def get_inventory_ledger(request):
             'barcode': log.product.barcode,
             'log_type': log.log_type,
             'batch_id': log.batch_id,
+            # Retailer write-off rows show it (OE-364); null when the log has no batch.
+            'batch_number': log.batch.batch_number if log.batch_id else None,
             'quantity_change': log.quantity_change,
             'previous_quantity': prev_qty,
             'new_quantity': new_qty,

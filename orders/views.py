@@ -14,6 +14,7 @@ import logging
 import re
 from common.error_utils import format_exception
 from .list_rating import patch as _patch_order_list_rating
+from .status_filters import apply_order_status_filter
 
 from .models import Order, OrderItem, OrderStatusLog, OrderFeedback, OrderReturn, OrderChatMessage, RetailerRating
 from .serializers import (
@@ -161,10 +162,8 @@ def get_current_orders(request):
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        # Apply filters
-        status_filter = request.query_params.get('status')
-        if status_filter:
-            orders = orders.filter(status=status_filter)
+        # Apply filters (KAN-77: "returned" also matches orders with a sales return)
+        orders = apply_order_status_filter(orders, request.query_params.get('status'))
         
         # Search by order number
         search = request.query_params.get('search')
@@ -218,13 +217,8 @@ def get_order_history(request):
                 status=status.HTTP_403_FORBIDDEN
             )
         
-        # Apply filters
-        status_filter = request.query_params.get('status')
-        if status_filter:
-            # Handle aliases for frontend compatibility
-            if status_filter == 'shipped':
-                status_filter = 'out_for_delivery'
-            orders = orders.filter(status=status_filter)
+        # Apply filters (KAN-77: "returned" also matches orders with a sales return)
+        orders = apply_order_status_filter(orders, request.query_params.get('status'))
         
         # Date range filtering
         start_date = request.query_params.get('start_date')

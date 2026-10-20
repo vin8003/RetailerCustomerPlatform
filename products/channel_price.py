@@ -95,6 +95,11 @@ def apply_channel_price_representation(data, product, context):
         data['discounted_price'] = formatted
     if channel == CHANNEL_APP:
         data.pop('app_price', None)
+        # Cost price is shop-only data; customers and anonymous callers never get it.
+        data.pop('purchase_price', None)
+        for row in data.get('batches') or []:
+            if isinstance(row, dict):
+                row.pop('purchase_price', None)
     else:
         data['app_price'] = format_money(getattr(product, 'app_price', None))
     _rewrite_nested_batch_prices(data, product, channel)

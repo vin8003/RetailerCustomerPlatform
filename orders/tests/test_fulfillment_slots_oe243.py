@@ -445,7 +445,7 @@ class TestFulfillmentSlotQueryCounts:
         slot = _slot_start_local(11, 30)
 
         api_client.force_authenticate(user=customer)
-        with django_assert_num_queries(53):
+        with django_assert_num_queries(58):  # main merge: +RetailerCustomerMapping get_or_create (4) and GST order snapshot UPDATE (1)
             resp = api_client.post(
                 reverse("place_order"),
                 {

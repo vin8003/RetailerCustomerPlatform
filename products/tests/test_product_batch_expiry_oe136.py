@@ -902,7 +902,8 @@ class TestSaleableHotPathQueryBudget:
 
         api_client.force_authenticate(user=customer)
         # +1: one lock_for_sale query for all tracked cart SKUs (not per line).
-        with django_assert_num_queries(86), CaptureQueriesContext(connection) as ctx:
+        # main merge: +RetailerCustomerMapping get_or_create and GST order snapshot UPDATE
+        with django_assert_num_queries(92), CaptureQueriesContext(connection) as ctx:
             response = api_client.post(
                 reverse("place_order"),
                 {

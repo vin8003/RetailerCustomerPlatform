@@ -76,3 +76,30 @@ def test_retailer_search_is_in_stock_ignores_expired_batches(api_client, retaile
     row = next(r for r in res.data['results'] if r['id'] == product.id)
     assert row['saleable_quantity'] == 0
     assert row['is_in_stock'] is False
+
+
+@pytest.mark.django_db
+def test_customer_list_and_detail_never_send_cost_price(
+    api_client, retailer, retailer_user, customer, product
+):
+    """purchase_price is shop-only; the app channel must not read it (#186 QA)."""
+    Product.objects.filter(pk=product.pk).update(purchase_price=Decimal('61.00'), has_batches=True)
+    ProductBatch.objects.create(
+        product=product, retailer=retailer, batch_number='COST-1',
+        price=Decimal('90.00'), purchase_price=Decimal('60.00'), quantity=3, is_active=True,
+    )
+    for user in (None, customer):
+        api_client.force_authenticate(user=user)
+        listed = api_client.get(reverse('get_retailer_products_public', args=[retailer.id]))
+        rows = listed.data['results'] if isinstance(listed.data, dict) else listed.data
+        assert rows and all('purchase_price' not in row for row in rows)
+        detail = api_client.get(
+            reverse('get_product_detail_public', kwargs={'retailer_id': retailer.id, 'product_id': product.id})
+        )
+        assert detail.status_code == 200
+        assert 'purchase_price' not in detail.data
+        assert all('purchase_price' not in batch for batch in detail.data.get('batches') or [])
+
+    api_client.force_authenticate(user=retailer_user)
+    store = api_client.get(reverse('get_product_detail', args=[product.id]))
+    assert store.data['purchase_price'] == '61.00'

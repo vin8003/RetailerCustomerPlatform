@@ -152,7 +152,7 @@ class TestSupplierManagement:
         _auth(api_client, retailer_user)
         url = reverse("erp-supplier-detail", args=[supplier.id])
         response = api_client.delete(url)
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.status_code == status.HTTP_409_CONFLICT
         assert Supplier.objects.filter(id=supplier.id).exists()
 
     def test_delete_blocked_when_ledger_exists(
@@ -167,7 +167,7 @@ class TestSupplierManagement:
         _auth(api_client, retailer_user)
         url = reverse("erp-supplier-detail", args=[supplier.id])
         response = api_client.delete(url)
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.status_code == status.HTTP_409_CONFLICT
         assert Supplier.objects.filter(id=supplier.id).exists()
 
     def test_delete_blocked_when_purchase_return_exists(
@@ -181,7 +181,7 @@ class TestSupplierManagement:
         _auth(api_client, retailer_user)
         url = reverse("erp-supplier-detail", args=[supplier.id])
         response = api_client.delete(url)
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert response.status_code == status.HTTP_409_CONFLICT
         assert Supplier.objects.filter(id=supplier.id).exists()
 
     def test_search_by_company_name_returns_200(

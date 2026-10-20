@@ -89,7 +89,7 @@ class TestPOSSaleableCheckout:
         self, api_client, retailer_user, product, django_assert_num_queries
     ):
         api_client.force_authenticate(user=retailer_user)
-        with django_assert_num_queries(28):
+        with django_assert_num_queries(31):  # main merge (KAN-75): +INITIAL-STOCK sync (2) and product refresh (1) per sold SKU
             response = api_client.post(
                 reverse("create_pos_order"),
                 _pos_payload(product),

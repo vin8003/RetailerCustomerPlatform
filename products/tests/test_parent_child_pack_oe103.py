@@ -570,7 +570,7 @@ class TestChildSaleAdjustsParent:
         api_client.force_authenticate(user=owner)
 
         # One lock_for_sale for sold child + pack parent (pk ASC), not ad-hoc child-then-parent.
-        with django_assert_num_queries(33):
+        with django_assert_num_queries(36):  # main merge (KAN-75): +INITIAL-STOCK sync (2) and product refresh (1) per sold SKU
             response = api_client.post(
                 reverse("create_pos_order"),
                 _pos_payload(child, Decimal("10")),

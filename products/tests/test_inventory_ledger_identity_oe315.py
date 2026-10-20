@@ -238,3 +238,31 @@ class TestInventoryLedgerProductIdentity:
         names = {row["product_name"] for row in response.data}
         assert names == {f"OE315 Q{i}" for i in range(5)}
         assert {row["id"] for row in response.data} == {log.id for log in logs}
+
+
+@pytest.mark.django_db
+class TestLedgerBatchNumberOE364:
+    def test_batch_number_echoes_the_log_batch(self, api_client, django_assert_num_queries):
+        from products.models import ProductBatch
+
+        owner, shop = _make_retailer("oe364_own", "OE364 Shop")
+        product = _make_product(shop, "OE364 Milk", PRIMARY_A, has_batches=True)
+        batch = ProductBatch.objects.create(
+            product=product, retailer=shop, batch_number="LOT-77",
+            price=Decimal("20.00"), quantity=Decimal("3"), is_active=True,
+        )
+        ProductInventoryLog.objects.create(
+            product=product, batch=batch, log_type="damaged", quantity_change=Decimal("-1"),
+            previous_quantity=Decimal("4"), new_quantity=Decimal("3"), reason="damage",
+            created_by=owner,
+        )
+        _log(product, owner)
+        api_client.force_authenticate(user=owner)
+
+        with django_assert_num_queries(2):
+            res = api_client.get(reverse("get_inventory_ledger"), {"reason": "damage"})
+
+        assert res.status_code == status.HTTP_200_OK
+        assert [row["batch_number"] for row in res.data] == ["LOT-77"]
+        everything = api_client.get(reverse("get_inventory_ledger"), {"product_id": product.id})
+        assert sorted(row["batch_number"] or "" for row in everything.data) == ["", "LOT-77"]

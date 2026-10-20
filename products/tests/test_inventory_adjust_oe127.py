@@ -139,14 +139,17 @@ class TestOnHandPayloadHelpers:
             [{"id": 1, "quantity": 16}], {1: product}
         ) is True
 
-    def test_bulk_fractional_echo_is_a_change_because_write_truncates(self):
-        """Bulk writes int(qty); Decimal-equal 10.75 vs 10.750 would become 10."""
+    def test_bulk_fractional_echo_is_not_a_change(self):
+        """Bulk writes Decimal qty (KAN-75); 10.750 echoes stored 10.75."""
         product = type("P", (), {"quantity": Decimal("10.75")})()
         assert bulk_items_would_change_on_hand(
             [{"id": 1, "quantity": 10.750}], {1: product}
-        ) is True
+        ) is False
         assert bulk_items_would_change_on_hand(
             [{"id": 1, "quantity": Decimal("10.750")}], {1: product}
+        ) is False
+        assert bulk_items_would_change_on_hand(
+            [{"id": 1, "quantity": "10.5"}], {1: product}
         ) is True
 
 
@@ -450,7 +453,8 @@ class TestInventoryAdjustGate:
         assert product.quantity == 22
         assert product.price == Decimal("81.00")
 
-    def test_cashier_bulk_fractional_echo_cannot_truncate(self, api_client):
+    def test_cashier_bulk_fractional_echo_keeps_decimal(self, api_client):
+        """Bulk writes Decimal (KAN-75); echo 10.750 is not a change, so no 403."""
         owner, shop = _make_retailer("oe127_own_frac", "OE127 Frac Bulk Shop")
         org = shop.organization
         cashier = _make_staff(org, "oe127_cashier_frac", [])
@@ -466,10 +470,30 @@ class TestInventoryAdjustGate:
             format="json",
         )
 
+        assert response.status_code == status.HTTP_200_OK
+        product.refresh_from_db()
+        assert product.quantity == Decimal("10.75")
+        assert product.price == Decimal("71.00")
+
+    def test_cashier_bulk_fractional_change_is_blocked(self, api_client):
+        owner, shop = _make_retailer("oe127_own_frac2", "OE127 Frac Bulk Shop 2")
+        org = shop.organization
+        cashier = _make_staff(org, "oe127_cashier_frac2", [])
+        cashier_shop = _make_location_profile(cashier, org, "OE127 Frac Loc 2")
+        product = _make_product(
+            cashier_shop, name="Frac Rice 2", quantity=Decimal("10.75")
+        )
+
+        api_client.force_authenticate(user=cashier)
+        response = api_client.patch(
+            reverse("bulk_update_products"),
+            {"items": [{"id": product.id, "quantity": "10.5"}]},
+            format="json",
+        )
+
         assert response.status_code == status.HTTP_403_FORBIDDEN
         product.refresh_from_db()
         assert product.quantity == Decimal("10.75")
-        assert product.price == Decimal("90.00")
 
     def test_cashier_product_update_fractional_echo_keeps_decimal(self, api_client):
         """Product update writes Decimal; echo 10.750 must not truncate or 403."""

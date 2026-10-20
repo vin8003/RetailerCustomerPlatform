@@ -338,15 +338,12 @@ class TestSearchIsInStock:
         assert featured_search["is_available"] is True
         assert featured_search["product_group"] == GROUP_ATTA
 
-        oos_list = _row_by_id(public.data, oos_available.id)
-        oos_search = _row_by_id(public_search.data, oos_available.id)
-        assert "is_in_stock" in oos_search
-        assert oos_search["is_in_stock"] is False
-        assert oos_search["is_in_stock"] == oos_list["is_in_stock"]
-        assert oos_search["is_available"] is True
-
         public_ids = {row["id"] for row in _rows(public.data)}
         public_search_ids = {row["id"] for row in _rows(public_search.data)}
+        # KAN-63 (main): customer list and search both hide tracked
+        # out-of-stock SKUs, so they agree by omitting the row.
+        assert oos_available.id not in public_ids
+        assert oos_available.id not in public_search_ids
         assert hidden.id not in public_ids
         assert hidden.id not in public_search_ids
 

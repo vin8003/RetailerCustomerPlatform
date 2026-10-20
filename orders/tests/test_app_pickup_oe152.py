@@ -807,7 +807,7 @@ class TestPickupQueryCounts:
 
         api_client.force_authenticate(user=customer)
         # +1: place_order select_for_update of sold products before deduct.
-        with django_assert_num_queries(46):
+        with django_assert_num_queries(51):  # main merge: +RetailerCustomerMapping get_or_create (4) and GST order snapshot UPDATE (1)
             resp = api_client.post(
                 reverse("place_order"),
                 {

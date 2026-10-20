@@ -64,12 +64,16 @@ def _qty_differs(raw, current):
 
 
 def bulk_write_quantity(raw):
-    """int() on-hand ``bulk_update_products`` would assign, or None if skipped."""
+    """Decimal on-hand ``bulk_update_products`` would assign, or None if skipped.
+
+    Decimal, not int: fractional (loose/kg) stock must not be truncated (KAN-75),
+    and the gate must compare the same value the write stores.
+    """
     try:
-        value = int(raw)
-    except (TypeError, ValueError):
+        value = Decimal(str(raw))
+    except (InvalidOperation, TypeError, ValueError):
         return None
-    if value < 0:
+    if not value.is_finite() or value < 0:
         return None
     return value
 
