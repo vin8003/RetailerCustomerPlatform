@@ -21,6 +21,9 @@ logger = logging.getLogger(__name__)
 @permission_classes([permissions.IsAuthenticated])
 def get_order_stats(request):
     try:
+        # Fully returned orders (KAN-77) still count as sales; their refunds are
+        # subtracted below, so leaving them out would take the money off twice.
+        SOLD = Q(status__in=['delivered', 'returned'])
         if request.user.user_type != 'retailer':
             return Response({'error': 'Only retailers can access order stats'}, status=status.HTTP_403_FORBIDDEN)
         try:
@@ -60,13 +63,13 @@ def get_order_stats(request):
             confirmed_orders=Count('id', filter=Q(status='confirmed')),
             delivered_orders=Count('id', filter=Q(status='delivered')),
             cancelled_orders=Count('id', filter=Q(status='cancelled')),
-            total_revenue=Sum('total_amount', filter=Q(status='delivered')),
-            avg_order_value=Avg('total_amount', filter=Q(status='delivered')),
-            cash_sales=Sum('cash_amount', filter=Q(status='delivered')),
-            digital_sales=Sum(F('upi_amount') + F('card_amount'), filter=Q(status='delivered')),
-            credit_sales=Sum('credit_amount', filter=Q(status='delivered')),
-            pos_sales=Sum('total_amount', filter=Q(status='delivered') & Q(source='pos')),
-            online_sales=Sum('total_amount', filter=Q(status='delivered') & (Q(source='app') | Q(source__isnull=True)))
+            total_revenue=Sum('total_amount', filter=SOLD),
+            avg_order_value=Avg('total_amount', filter=SOLD),
+            cash_sales=Sum('cash_amount', filter=SOLD),
+            digital_sales=Sum(F('upi_amount') + F('card_amount'), filter=SOLD),
+            credit_sales=Sum('credit_amount', filter=SOLD),
+            pos_sales=Sum('total_amount', filter=SOLD & Q(source='pos')),
+            online_sales=Sum('total_amount', filter=SOLD & (Q(source='app') | Q(source__isnull=True)))
         )
         from returns.models import SalesReturn
         returns_qs = SalesReturn.objects.filter(retailer=retailer)

@@ -113,3 +113,29 @@ class TestNoServerErrors:
         assert api_client.get("/api/returns/sales/").status_code == 404
         assert api_client.get("/api/returns/sales/1/").status_code == 404
         assert api_client.get("/api/returns/sales/search_order/", {"query": "x"}).status_code == 404
+
+
+@pytest.mark.django_db
+class TestStatsWithFullyReturnedOrder:
+    def test_fully_returned_online_order_nets_to_zero_not_negative(self, api_client, retailer_user, retailer, customer):
+        from orders.models import Order
+        from returns.models import SalesReturn
+
+        Order.objects.create(
+            customer=customer, retailer=retailer, source="pos", status="delivered",
+            subtotal=Decimal("300.00"), total_amount=Decimal("300.00"), payment_mode="cash",
+            cash_amount=Decimal("300.00"), delivery_mode="pickup",
+        )
+        returned = Order.objects.create(
+            customer=customer, retailer=retailer, source="app", status="returned",
+            subtotal=Decimal("525.00"), total_amount=Decimal("525.00"), payment_mode="cash",
+            delivery_mode="delivery",
+        )
+        SalesReturn.objects.create(
+            retailer=retailer, order=returned, refund_amount=Decimal("525.00"), refund_payment_mode="cash",
+        )
+        api_client.force_authenticate(user=retailer_user)
+        data = api_client.get("/api/orders/stats/").data
+        assert Decimal(str(data["online_sales"])) == 0
+        assert Decimal(str(data["pos_sales"])) == 300
+        assert Decimal(str(data["total_revenue"])) == 300
