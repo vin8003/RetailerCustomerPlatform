@@ -77,6 +77,7 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'common.middleware.RequestLoggingMiddleware',
+    'common.middleware.RejectNulCharactersMiddleware',
 ]
 
 ROOT_URLCONF = 'ordering_platform.urls'
