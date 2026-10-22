@@ -778,8 +778,9 @@ class TestOfferLimitHeldWhenTheOrderIsSaved:
         payload = {"retailer_id": shop.id, "delivery_mode": "pickup", "payment_mode": "cash_pickup", **extra}
         return api_client.post("/api/orders/place/", payload, format="json")
 
-    def _use_taken_after_pricing(self, take_use):
-        """validate() and create() each price the cart; another order lands right after create() does."""
+    def _use_taken_after_pricing(self, take_use, after_call=2):
+        """validate() and create() each price the cart; another order lands right after create() does
+        (after_call=1: right after validate() does)."""
         from offers.engine import OfferEngine
 
         real = OfferEngine.calculate_offers
@@ -788,7 +789,7 @@ class TestOfferLimitHeldWhenTheOrderIsSaved:
         def calculate(engine, *args, **kwargs):
             result = real(engine, *args, **kwargs)
             calls.append(1)
-            if len(calls) == 2:
+            if len(calls) == after_call:
                 take_use()
             return result
 
@@ -838,3 +839,33 @@ class TestOfferLimitHeldWhenTheOrderIsSaved:
         offer.refresh_from_db()
         assert offer.current_redemptions == 1
         assert Order.objects.get(customer=customer).total_amount == Decimal("70.00")
+
+    def test_used_up_coupon_is_refused_with_the_reason(self, api_client):
+        shop, customer, widget, offer = self._shop_cart_and_offer(coupon_code="SAVE30", usage_limit_total=1)
+        Offer.objects.filter(pk=offer.pk).update(current_redemptions=1)  # used up before this checkout
+        resp = self._place(api_client, customer, shop, coupon_code="SAVE30")
+        assert resp.status_code == 400
+        assert resp.data == {"coupon_code": ["This coupon usage limit has been reached"]}
+        assert not Order.objects.filter(customer=customer).exists()
+        widget.refresh_from_db()
+        assert widget.quantity == 50
+
+    def test_coupon_run_out_between_validate_and_create_is_refused(self, api_client):
+        shop, customer, _widget, offer = self._shop_cart_and_offer(coupon_code="SAVE30", usage_limit_total=1)
+        take = lambda: Offer.objects.filter(pk=offer.pk).update(current_redemptions=1)  # noqa: E731
+        with self._use_taken_after_pricing(take, after_call=1):
+            resp = self._place(api_client, customer, shop, coupon_code="SAVE30")
+        assert resp.status_code == 400
+        assert resp.data == {"coupon_code": ["This coupon usage limit has been reached"]}
+        assert not Order.objects.filter(customer=customer).exists()
+
+    def test_stale_cart_coupon_is_not_put_on_the_order(self, api_client):
+        """The checkout shows the cart coupon's error and sends no code; the order is placed without it."""
+        shop, customer, _widget, offer = self._shop_cart_and_offer(coupon_code="SAVE30", usage_limit_total=1)
+        Cart.objects.filter(customer=customer, retailer=shop).update(applied_coupon_code="SAVE30")
+        Offer.objects.filter(pk=offer.pk).update(current_redemptions=1)
+        resp = self._place(api_client, customer, shop)
+        assert resp.status_code == 201, resp.data
+        order = Order.objects.get(customer=customer)
+        assert order.total_amount == Decimal("100.00")
+        assert order.coupon_code is None

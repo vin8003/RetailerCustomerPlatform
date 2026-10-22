@@ -639,6 +639,7 @@ class OrderCreateSerializer(serializers.Serializer):
             'coupon_code': coupon_code
         }
         offer_results = engine.calculate_offers(cart_items, retailer, context=offer_context)
+        self._refuse_requested_coupon(data.get('coupon_code'), offer_results)
         item_discounts = offer_results.get('item_discounts', {})
 
         # Validate cart items availability and limits
@@ -747,6 +748,16 @@ class OrderCreateSerializer(serializers.Serializer):
 
         return data
     
+    @staticmethod
+    def _refuse_requested_coupon(requested_code, offer_results):
+        """
+        A coupon the customer asked for at checkout that can no longer be used (used up,
+        expired, minimum not met) is a 400 with the reason, as a use taken meanwhile is,
+        not an order at full price that names the coupon.
+        """
+        if requested_code and offer_results.get('coupon_error'):
+            raise serializers.ValidationError({'coupon_code': [offer_results['coupon_error']]})
+
     def create(self, validated_data):
         """Create order from cart"""
         from retailers.models import RetailerProfile, RetailerCustomerMapping
@@ -774,6 +785,8 @@ class OrderCreateSerializer(serializers.Serializer):
             'coupon_code': coupon_code
         }
         offer_results = engine.calculate_offers(cart_items, retailer, context=offer_context)
+        # validate() priced the cart a moment ago; the coupon can have run out since.
+        self._refuse_requested_coupon(validated_data.get('coupon_code'), offer_results)
         
         subtotal = offer_results['subtotal']
         offer_discount = offer_results['total_savings']
@@ -837,7 +850,13 @@ class OrderCreateSerializer(serializers.Serializer):
         with transaction.atomic():
             # Create order with explicit payment breakdown for production DB stability
             applied_coupon_obj = offer_results.get('applied_coupon')
-            final_coupon_code = applied_coupon_obj.get('code') if applied_coupon_obj else (coupon_code if coupon_code else None)
+            if applied_coupon_obj:
+                final_coupon_code = applied_coupon_obj.get('code')
+            elif offer_results.get('coupon_error'):
+                # A coupon left on the cart that no longer applies is not put on the order.
+                final_coupon_code = None
+            else:
+                final_coupon_code = coupon_code if coupon_code else None
             order_data = {
                 'customer': customer,
                 'retailer': retailer,
