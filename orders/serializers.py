@@ -1311,6 +1311,16 @@ class OrderStatsSerializer(serializers.Serializer):
     credit_sales = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
 
 
+def offer_savings_in_lines(items):
+    """Savings already inside line prices: list price x quantity above the line total (app offers)."""
+    saved = Decimal('0.00')
+    for item in items:
+        if item.product_price is None:
+            continue
+        saved += max(Decimal('0.00'), item.product_price * item.quantity - item.total_price)
+    return quantize_2(saved)
+
+
 class OrderModificationSerializer(serializers.Serializer):
     """
     Serializer for modifying order by retailer
@@ -1354,6 +1364,7 @@ class OrderModificationSerializer(serializers.Serializer):
             
             # Create a map of existing items for easy access
             existing_items = {item.id: item for item in instance.items.all()}
+            savings_before = offer_savings_in_lines(existing_items.values())
             logs_to_create = []
 
             # One pk-ASC lock for every SKU this modify will reduce
@@ -1522,11 +1533,22 @@ class OrderModificationSerializer(serializers.Serializer):
             # Recalculate order subtotal from scratch to be safe
             # (In case some items were not in the update list but still exist)
             current_items = list(OrderItem.objects.filter(order=instance))
-            subtotal = sum(
+            line_total = sum(
                 (item.total_price for item in current_items),
                 Decimal('0.00'),
             )
-            instance.subtotal = quantize_2(subtotal)
+            # App offers are already inside the line prices, and the stored discount_amount
+            # counts them. Only the part above those savings is an extra order discount;
+            # subtracting the whole amount again undercharged the customer.
+            requested_discount = (
+                discount_amount if discount_amount is not None
+                else (instance.discount_amount or Decimal('0.00'))
+            )
+            extra_discount = max(Decimal('0.00'), quantize_2(requested_discount) - savings_before)
+            savings_now = offer_savings_in_lines(current_items)
+            # Same meaning as at placement: list-price subtotal minus every saving.
+            instance.subtotal = quantize_2(line_total + savings_now)
+            instance.discount_amount = quantize_2(savings_now + extra_discount)
             
             # Update delivery mode
             if delivery_mode:
@@ -1535,7 +1557,7 @@ class OrderModificationSerializer(serializers.Serializer):
             # Always recalculate delivery fee based on current delivery_mode and retailer settings
             # This ensures correct fee whether mode changed or items changed
             retailer = instance.retailer
-            current_subtotal = instance.subtotal
+            current_subtotal = line_total
             
             if instance.delivery_mode == 'delivery':
                 if retailer.delivery_charge > 0:
@@ -1549,13 +1571,7 @@ class OrderModificationSerializer(serializers.Serializer):
             else:
                 instance.delivery_fee = Decimal('0.00')
             
-            # Update discount
-            if discount_amount is not None:
-                instance.discount_amount = discount_amount
-            elif instance.discount_amount is None:
-                instance.discount_amount = Decimal('0.00')
-            
-            discount_to_allocate = instance.discount_amount or Decimal('0.00')
+            discount_to_allocate = extra_discount
             # Tax is split from the post-discount inclusive line totals, so the
             # order-level discount has to be allocated across the lines first.
             # Loyalty points and delivery fee stay out of the tax base.

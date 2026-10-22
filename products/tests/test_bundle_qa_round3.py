@@ -290,6 +290,88 @@ class TestOrderModificationResponses:
 
 
 @pytest.mark.django_db
+class TestOrderEditCountsAppOffersOnce:
+    """An app order as place_order stores it: atta listed at 280, sold at 266 (5% offer), discount 14."""
+
+    @pytest.fixture(autouse=True)
+    def _no_notifications(self):
+        with patch("common.notification_dispatcher.dispatch_order_status_notification"), \
+                patch("common.notifications.send_push_notification"), \
+                patch("common.notifications.send_silent_update"):
+            yield
+
+    def _offer_order(self, customer, retailer):
+        atta = Product.objects.create(retailer=retailer, name="Atta", price=Decimal("280.00"), quantity=Decimal("10"))
+        dal = Product.objects.create(retailer=retailer, name="Dal", price=Decimal("150.00"), quantity=Decimal("10"))
+        salt = Product.objects.create(retailer=retailer, name="Salt", price=Decimal("28.00"), quantity=Decimal("10"))
+        order = Order.objects.create(
+            customer=customer, retailer=retailer, source="app", status="pending", payment_mode="cash",
+            delivery_mode="pickup", subtotal=Decimal("430.00"), discount_amount=Decimal("14.00"),
+            total_amount=Decimal("416.00"),
+        )
+        atta_line = OrderItem.objects.create(
+            order=order, product=atta, product_name=atta.name, product_price=Decimal("280.00"),
+            quantity=1, unit_price=Decimal("266.00"), total_price=Decimal("266.00"),
+        )
+        dal_line = OrderItem.objects.create(
+            order=order, product=dal, product_name=dal.name, product_price=Decimal("150.00"),
+            quantity=1, unit_price=Decimal("150.00"), total_price=Decimal("150.00"),
+        )
+        return order, atta_line, dal_line, salt
+
+    def _modify(self, api_client, retailer_user, order, payload):
+        api_client.force_authenticate(user=retailer_user)
+        resp = api_client.post(f"/api/orders/{order.id}/modify/", payload, format="json")
+        assert resp.status_code == 200, resp.data
+        order.refresh_from_db()
+        return order
+
+    def test_adding_an_item_charges_the_lines_once(self, api_client, retailer, retailer_user, customer):
+        order, _atta, _dal, salt = self._offer_order(customer, retailer)
+        order = self._modify(api_client, retailer_user, order, {"items": [{"product_id": salt.id, "quantity": 1}]})
+        assert order.total_amount == Decimal("444.00")  # 266 + 150 + 28, the offer counted once
+        assert order.subtotal == Decimal("458.00")
+        assert order.discount_amount == Decimal("14.00")
+
+    def test_saving_the_edit_form_unchanged_keeps_the_total(self, api_client, retailer, retailer_user, customer):
+        order, atta, dal, _salt = self._offer_order(customer, retailer)
+        # The edit page sends every line and the discount it loaded (14).
+        order = self._modify(api_client, retailer_user, order, {
+            "items": [{"id": atta.id, "quantity": 1, "unit_price": "266.00"},
+                      {"id": dal.id, "quantity": 1, "unit_price": "150.00"}],
+            "discount_amount": "14.00",
+        })
+        assert order.total_amount == Decimal("416.00")
+        line = OrderItem.objects.get(pk=atta.pk)
+        assert line.taxable_value + line.tax_amount == Decimal("266.00")  # no second discount in the tax base
+
+    def test_a_discount_above_the_offer_is_an_extra_discount(self, api_client, retailer, retailer_user, customer):
+        order, atta, dal, _salt = self._offer_order(customer, retailer)
+        order = self._modify(api_client, retailer_user, order, {
+            "items": [{"id": dal.id, "quantity": 1}], "discount_amount": "34.00",
+        })
+        assert order.total_amount == Decimal("396.00")  # 416 lines - 20 extra
+        assert order.discount_amount == Decimal("34.00")
+
+    def test_removing_the_offer_line_drops_its_saving(self, api_client, retailer, retailer_user, customer):
+        order, atta, dal, _salt = self._offer_order(customer, retailer)
+        order = self._modify(api_client, retailer_user, order, {
+            "items": [{"id": atta.id, "quantity": 0}], "discount_amount": "14.00",
+        })
+        assert order.total_amount == Decimal("150.00")
+        assert order.discount_amount == Decimal("0.00")
+
+    def test_manual_discount_on_lines_without_offers_is_unchanged(self, api_client, retailer, retailer_user, customer):
+        order, atta, dal, salt = self._offer_order(customer, retailer)
+        OrderItem.objects.filter(pk=atta.pk).delete()
+        order.discount_amount = Decimal("10.00")
+        order.save(update_fields=["discount_amount"])
+        order = self._modify(api_client, retailer_user, order, {"items": [{"product_id": salt.id, "quantity": 1}]})
+        assert order.total_amount == Decimal("168.00")  # 150 + 28 - 10
+        assert order.discount_amount == Decimal("10.00")
+
+
+@pytest.mark.django_db
 class TestFrequentlyBoughtSkipsHiddenCoPurchases:
     def test_out_of_stock_co_purchases_do_not_crowd_out_sellable_ones(
         self, api_client, retailer, customer
