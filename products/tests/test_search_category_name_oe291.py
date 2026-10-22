@@ -30,6 +30,7 @@ def _make_retailer(username, shop_name):
         is_active=True,
     )
     profile = RetailerProfile.objects.create(
+        is_verified=True, verification_status='approved',
         user=user,
         shop_name=shop_name,
         address_line1="1 Main",

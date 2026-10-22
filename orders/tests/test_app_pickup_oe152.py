@@ -37,6 +37,7 @@ def _make_retailer(username, shop_name, *, offers_pickup=True, offers_delivery=T
         is_active=True,
     )
     profile = RetailerProfile.objects.create(
+        is_verified=True, verification_status='approved',
         user=user,
         shop_name=shop_name,
         address_line1="1 Main",

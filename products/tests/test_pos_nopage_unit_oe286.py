@@ -25,6 +25,7 @@ def _make_retailer(username, shop_name):
         is_active=True,
     )
     profile = RetailerProfile.objects.create(
+        is_verified=True, verification_status='approved',
         user=user,
         shop_name=shop_name,
         address_line1="1 Main",
@@ -73,6 +74,7 @@ def _make_staff(org, username, permissions):
 
 def _make_location_profile(user, org, shop_name):
     return RetailerProfile.objects.create(
+        is_verified=True, verification_status='approved',
         user=user,
         organization=org,
         shop_name=shop_name,

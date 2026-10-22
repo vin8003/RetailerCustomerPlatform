@@ -2131,8 +2131,15 @@ def list_fulfillment_slots(request, retailer_id):
     Slots are 30 minutes, derived from existing operating hours. Capacity is
     retailer-configurable; express is out of scope for v1.
     """
+    from orders.fulfillment_slots import (
+        FulfillmentSlotError,
+        MAX_SLOT_LIST_DAYS,
+        build_slot_payloads,
+        slot_capacity,
+    )
+
+    retailer = get_object_or_404(RetailerProfile.objects.public(), id=retailer_id)
     try:
-        retailer = get_object_or_404(RetailerProfile.objects.public(), id=retailer_id)
         delivery_mode = request.query_params.get('delivery_mode', 'pickup')
         if delivery_mode not in {'pickup', 'delivery'}:
             return Response(
@@ -2147,13 +2154,6 @@ def list_fulfillment_slots(request, retailer_id):
                 {'error': 'days must be an integer'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
-        from orders.fulfillment_slots import (
-            FulfillmentSlotError,
-            MAX_SLOT_LIST_DAYS,
-            build_slot_payloads,
-            slot_capacity,
-        )
 
         if days < 1 or days > MAX_SLOT_LIST_DAYS:
             return Response(

@@ -45,6 +45,7 @@ def _make_retailer(username, shop_name, *, slot_capacity=5):
         is_active=True,
     )
     profile = RetailerProfile.objects.create(
+        is_verified=True, verification_status='approved',
         user=user,
         shop_name=shop_name,
         address_line1="1 Main",
@@ -191,6 +192,15 @@ class TestFulfillmentSlotList:
         resp = api_client.get(_slots_url(profile.id), {"days": 1})
         assert resp.status_code == status.HTTP_200_OK
         assert resp.data["slots"] == []
+
+    def test_unknown_or_unapproved_shop_is_404(self, mock_now, api_client):
+        assert api_client.get(_slots_url(999999), {"days": 1}).status_code == status.HTTP_404_NOT_FOUND
+        _, profile, _ = _make_retailer("oe243_pending", "Pending Shop")
+        profile.verification_status = "pending"
+        profile.is_verified = False
+        profile.save(update_fields=["verification_status", "is_verified"])
+        resp = api_client.get(_slots_url(profile.id), {"days": 1})
+        assert resp.status_code == status.HTTP_404_NOT_FOUND
 
 
 @pytest.mark.django_db
