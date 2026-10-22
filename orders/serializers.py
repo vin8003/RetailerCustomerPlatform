@@ -5,6 +5,7 @@ from django.utils import timezone
 from .models import Order, OrderItem, OrderStatusLog, OrderDelivery, OrderFeedback, OrderReturn, OrderChatMessage, RetailerRating
 from .domain.status_policy import ensure_transition_allowed, InvalidStatusTransitionError
 from customers.models import CustomerAddress
+from products.channel_price import CHANNEL_APP, CHANNEL_STORE, resolve_channel_price
 from products.models import Product, ProductInventoryLog
 from cart.models import Cart, CartItem
 from returns.models import SalesReturnItem
@@ -1494,17 +1495,22 @@ class OrderModificationSerializer(serializers.Serializer):
                         created_by=self.context.get('request').user if self.context.get('request') else None
                     ))
                     
+                    # App orders are priced at the app list, as place_order does (OE-106).
+                    selling = resolve_channel_price(
+                        product,
+                        CHANNEL_APP if instance.source == 'app' else CHANNEL_STORE,
+                    )
                     # Create new OrderItem. Only lines added during this
                     # modification take the current product tax defaults.
                     OrderItem.objects.create(
                         order=instance,
                         product=product,
                         product_name=product.name,
-                        product_price=product.price,
+                        product_price=selling,
                         product_unit=product.unit,
                         quantity=quantity,
-                        unit_price=product.price, # Default to current product price
-                        total_price=product.price * quantity,
+                        unit_price=selling,
+                        total_price=selling * quantity,
                         hsn_code=product.hsn_code or '',
                         gst_rate=product.gst_rate if product.gst_rate is not None else Decimal('0.00'),
                         tax_type='GST',

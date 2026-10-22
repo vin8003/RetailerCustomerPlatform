@@ -322,9 +322,10 @@ class LoyaltyRedeemOTP(models.Model):
 
     class Meta:
         db_table = 'loyalty_redeem_otp'
+        # Names pinned to migration 0007 so makemigrations stays clean.
         indexes = [
-            models.Index(fields=['customer', 'retailer', 'is_used']),
-            models.Index(fields=['expires_at']),
+            models.Index(fields=['customer', 'retailer', 'is_used'], name='loyalty_red_custome_otp_idx'),
+            models.Index(fields=['expires_at'], name='loyalty_red_expires_otp_idx'),
         ]
 
     def is_expired(self):

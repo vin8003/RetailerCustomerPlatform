@@ -96,6 +96,10 @@ class PurchaseMarginReadMixin:
             data.pop('margin_percent', None)
         if self.context.get('hide_purchase_price'):
             data.pop('purchase_price', None)
+            # Batch rows carry their own cost; hide it with the product cost.
+            for row in data.get('batches') or []:
+                if isinstance(row, dict):
+                    row.pop('purchase_price', None)
         return data
 
 

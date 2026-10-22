@@ -918,7 +918,8 @@ class Supplier(models.Model):
         db_table = 'supplier'
         indexes = [
             models.Index(fields=['retailer', 'company_name']),
-            models.Index(fields=['gst_number']),
+            # Name pinned to migration 0027 so makemigrations stays clean.
+            models.Index(fields=['gst_number'], name='supplier_gst_num_8c1e4a_idx'),
         ]
         constraints = [
             models.UniqueConstraint(

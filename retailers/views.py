@@ -844,6 +844,8 @@ def manage_reward_configuration(request):
                 return Response(serializer.data, status=status.HTTP_200_OK)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error managing reward config: {str(e)}")
         return Response(

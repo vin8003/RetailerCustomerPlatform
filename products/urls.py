@@ -1,5 +1,6 @@
 from django.urls import path
 from . import views, api_erp_views
+from .channel_price import app_channel_view
 from .customer_stock import hide_oos_for_customer
 from .frequently_bought import get_frequently_bought_together
 from rest_framework.routers import DefaultRouter
@@ -58,29 +59,30 @@ urlpatterns = [
     path('upload/session/item/<int:item_id>/delete/', views.DeleteSessionItemView.as_view(), name='delete_session_item'),
     path('upload/session/commit/', views.CommitUploadSessionView.as_view(), name='commit_upload_session'),
 
-    # Public product endpoints (KAN-63: hide tracked OOS from the customer app)
-    path('retailer/<int:retailer_id>/', hide_oos_for_customer(views.get_retailer_products_public), name='get_retailer_products_public'),
-    path('retailer/<int:retailer_id>/search/', hide_oos_for_customer(views.search_products_public), name='search_products_public'),
+    # Public product endpoints (KAN-63: hide tracked OOS from the customer app).
+    # app_channel_view: every caller gets app prices here, never another shop's cost.
+    path('retailer/<int:retailer_id>/', app_channel_view(hide_oos_for_customer(views.get_retailer_products_public)), name='get_retailer_products_public'),
+    path('retailer/<int:retailer_id>/search/', app_channel_view(hide_oos_for_customer(views.search_products_public)), name='search_products_public'),
     path('retailer/<int:retailer_id>/categories/', views.get_retailer_categories, name='get_retailer_categories'),
     path('retailer/<int:retailer_id>/categories/<int:category_id>/groups/', views.get_retailer_product_groups_by_category, name='get_retailer_product_groups_by_category'),
-    path('retailer/<int:retailer_id>/featured/', hide_oos_for_customer(views.get_retailer_featured_products), name='get_retailer_featured_products'),
-    path('retailer/<int:retailer_id>/best-selling/', hide_oos_for_customer(views.get_best_selling_products), name='get_best_selling_products'),
-    path('retailer/<int:retailer_id>/buy-again/', hide_oos_for_customer(views.get_buy_again_products), name='get_buy_again_products'),
-    path('retailer/<int:retailer_id>/recommended/', hide_oos_for_customer(views.get_recommended_products), name='get_recommended_products'),
+    path('retailer/<int:retailer_id>/featured/', app_channel_view(hide_oos_for_customer(views.get_retailer_featured_products)), name='get_retailer_featured_products'),
+    path('retailer/<int:retailer_id>/best-selling/', app_channel_view(hide_oos_for_customer(views.get_best_selling_products)), name='get_best_selling_products'),
+    path('retailer/<int:retailer_id>/buy-again/', app_channel_view(hide_oos_for_customer(views.get_buy_again_products)), name='get_buy_again_products'),
+    path('retailer/<int:retailer_id>/recommended/', app_channel_view(hide_oos_for_customer(views.get_recommended_products)), name='get_recommended_products'),
     path(
         'retailer/<int:retailer_id>/frequently-bought-together/',
-        get_frequently_bought_together,
+        app_channel_view(get_frequently_bought_together),
         name='get_frequently_bought_together',
     ),
     
     # New Discovery Lanes
-    path('retailer/<int:retailer_id>/deals-of-the-day/', hide_oos_for_customer(views.get_deals_of_the_day), name='get_deals_of_the_day'),
-    path('retailer/<int:retailer_id>/budget-buys/', hide_oos_for_customer(views.get_budget_buys), name='get_budget_buys'),
-    path('retailer/<int:retailer_id>/trending-now/', hide_oos_for_customer(views.get_trending_products), name='get_trending_products'),
-    path('retailer/<int:retailer_id>/new-arrivals/', hide_oos_for_customer(views.get_new_arrivals), name='get_new_arrivals'),
-    path('retailer/<int:retailer_id>/seasonal-picks/', hide_oos_for_customer(views.get_seasonal_picks), name='get_seasonal_picks'),
+    path('retailer/<int:retailer_id>/deals-of-the-day/', app_channel_view(hide_oos_for_customer(views.get_deals_of_the_day)), name='get_deals_of_the_day'),
+    path('retailer/<int:retailer_id>/budget-buys/', app_channel_view(hide_oos_for_customer(views.get_budget_buys)), name='get_budget_buys'),
+    path('retailer/<int:retailer_id>/trending-now/', app_channel_view(hide_oos_for_customer(views.get_trending_products)), name='get_trending_products'),
+    path('retailer/<int:retailer_id>/new-arrivals/', app_channel_view(hide_oos_for_customer(views.get_new_arrivals)), name='get_new_arrivals'),
+    path('retailer/<int:retailer_id>/seasonal-picks/', app_channel_view(hide_oos_for_customer(views.get_seasonal_picks)), name='get_seasonal_picks'),
     
-    path('retailer/<int:retailer_id>/<int:product_id>/', views.get_product_detail_public, name='get_product_detail_public'),
+    path('retailer/<int:retailer_id>/<int:product_id>/', app_channel_view(views.get_product_detail_public), name='get_product_detail_public'),
 
     # Categories and brands
     path('categories/', views.get_product_categories, name='get_product_categories'),

@@ -38,6 +38,7 @@ from .serializers import (
     ProductSearchSerializer,
     cache_group_siblings,
     fractional_children_payload,
+    json_qty,
     safe_group_variants_payload,
 )
 from retailers.models import OrgAuditLog, RetailerProfile
@@ -1101,6 +1102,8 @@ def delete_product(request, product_id):
             status=status.HTTP_200_OK
         )
 
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error deleting product: {str(e)}")
         return Response(
@@ -1859,7 +1862,13 @@ def get_product_detail_public(request, retailer_id, product_id):
                 'wishlisted_product_ids': wishlisted_product_ids
             }
         )
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        data = serializer.data
+        if product.track_inventory:
+            # Expired batch stock cannot be sold (OE-149), so the customer page shows the
+            # stock it can actually sell and treats expired-only stock as out of stock (KAN-63).
+            data['quantity'] = json_qty(product.saleable_quantity())
+            data['is_in_stock'] = product.is_saleable_in_stock()
+        return Response(data, status=status.HTTP_200_OK)
 
     except Http404:
         raise
@@ -2477,8 +2486,7 @@ def update_product_category(request, category_id):
         category = get_object_or_404(ProductCategory, id=category_id)
         
         if hasattr(request.user, 'user_type') and request.user.user_type == 'retailer':
-            from retailers.models import RetailerProfile
-            retailer = RetailerProfile.objects.get(user=request.user)
+            retailer = get_object_or_404(RetailerProfile, user=request.user)
             if category.retailer != retailer:
                 if category.retailer is None:
                     # Clone generic category for this specific retailer to ensure isolation
@@ -2508,6 +2516,8 @@ def update_product_category(request, category_id):
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error updating category: {str(e)}")
         return Response(
@@ -2531,8 +2541,7 @@ def delete_product_category(request, category_id):
         category = get_object_or_404(ProductCategory, id=category_id)
         
         if hasattr(request.user, 'user_type') and request.user.user_type == 'retailer':
-            from retailers.models import RetailerProfile
-            retailer = RetailerProfile.objects.get(user=request.user)
+            retailer = get_object_or_404(RetailerProfile, user=request.user)
             if category.retailer != retailer:
                 if category.retailer is None:
                     return Response({'error': 'Cannot delete generic global categories. They will disappear when no longer used by your products.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -2549,6 +2558,8 @@ def delete_product_category(request, category_id):
         logger.info(f"Category deleted: {category_name} by {request.user.username}")
         return Response({'message': 'Category deleted successfully'}, status=status.HTTP_200_OK)
 
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error deleting category: {str(e)}")
         return Response(

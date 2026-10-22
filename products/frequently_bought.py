@@ -87,10 +87,12 @@ def get_frequently_bought_together(request, retailer_id):
             affinity |= Q(product_group__in=groups)
         related = catalog.filter(affinity) if affinity else catalog.none()
 
+        # Rank only sellable products, so hidden ones do not use up the FBT_LIMIT slots.
         co_purchased_ids = list(
             OrderItem.objects.filter(
                 order__retailer=retailer,
                 order__items__product_id__in=seed_ids,
+                product__in=catalog,
             ).exclude(
                 product_id__in=seed_ids
             ).values('product_id').annotate(

@@ -411,6 +411,8 @@ def cancel_order(request, order_id):
         serializer = OrderDetailSerializer(order, context={'request': request})
         return Response(serializer.data, status=status.HTTP_200_OK)
     
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error cancelling order: {str(e)}")
         return Response(
@@ -446,6 +448,8 @@ def create_order_feedback(request, order_id):
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error creating order feedback: {str(e)}")
         return Response(
@@ -481,6 +485,8 @@ def create_return_request(request, order_id):
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error creating return request: {str(e)}")
         return Response(
@@ -810,7 +816,7 @@ def modify_order(request, order_id):
                 
                 # Fetch fresh detail to return
                 order.refresh_from_db()
-                detail_serializer = OrderDetailSerializer(order)
+                detail_serializer = OrderDetailSerializer(order, context={'request': request})
                 return Response(detail_serializer.data)
             
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -892,9 +898,11 @@ def confirm_modification(request, order_id):
         
         logger.info(f"{message}: {order.order_number}")
         
-        serializer = OrderDetailSerializer(order)
+        serializer = OrderDetailSerializer(order, context={'request': request})
         return Response(serializer.data, status=status.HTTP_200_OK)
     
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error confirming modification: {str(e)}")
         return Response(
@@ -987,6 +995,8 @@ def send_order_message(request, order_id):
         serializer = OrderChatMessageSerializer(message, context={'request': request})
         return Response(serializer.data, status=status.HTTP_201_CREATED)
         
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error sending message: {e}")
         return Response({'error': format_exception(e)}, status=500)
@@ -1270,6 +1280,8 @@ def submit_payment(request, order_id):
         serializer = OrderDetailSerializer(order, context={'request': request})
         return Response(serializer.data, status=status.HTTP_200_OK)
     
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error submitting payment: {str(e)}")
         return Response(
@@ -1484,6 +1496,8 @@ def reschedule_order_fulfillment_slot(request, order_id):
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error rescheduling fulfillment slot: {str(e)}")
         return Response(

@@ -7,6 +7,7 @@ unchanged (``Product.quantity`` / saleable). No PriceList engine (F-0022)
 and no marketplace connector.
 """
 from decimal import Decimal, InvalidOperation
+from functools import wraps
 from types import SimpleNamespace
 
 from rest_framework import status
@@ -25,6 +26,7 @@ CHANNEL_APP = 'app'
 PERM_CATALOG_PRICE = 'catalog.price'
 
 _MONEY = DecimalField(max_digits=10, decimal_places=2)
+_PERCENT = DecimalField(max_digits=5, decimal_places=2)
 
 
 def resolve_channel_price(product, channel, batch=None):
@@ -42,7 +44,7 @@ def price_channel_from_request(request):
     anonymous, missing request) sees the app list. Fail closed: do not leak
     store-only fields on an unknown caller.
     """
-    if request is None:
+    if request is None or getattr(request, 'force_app_price_channel', False):
         return CHANNEL_APP
     user = getattr(request, 'user', None)
     if (
@@ -52,6 +54,18 @@ def price_channel_from_request(request):
     ):
         return CHANNEL_STORE
     return CHANNEL_APP
+
+
+def app_channel_view(view_func):
+    """
+    Customer catalog routes serve any shop's products, so every caller gets the
+    app list there. A retailer JWT must not read another shop's store list or cost.
+    """
+    @wraps(view_func)
+    def wrapped(request, *args, **kwargs):
+        request.force_app_price_channel = True
+        return view_func(request, *args, **kwargs)
+    return wrapped
 
 
 def channel_from_context(context):
@@ -83,6 +97,14 @@ def _rewrite_nested_batch_prices(data, product, channel):
         )
 
 
+def _discount_off_mrp(original_price, selling):
+    """(savings, percent) off MRP at this selling price; same rule as Product.save()."""
+    if original_price and original_price > selling:
+        saved = original_price - selling
+        return saved, saved / original_price * 100
+    return Decimal('0.00'), Decimal('0.00')
+
+
 def apply_channel_price_representation(data, product, context):
     """Rewrite shared product payloads so app callers cannot read store list."""
     if not isinstance(data, dict) or product is None:
@@ -93,6 +115,13 @@ def apply_channel_price_representation(data, product, context):
     data['price'] = formatted
     if 'discounted_price' in data:
         data['discounted_price'] = formatted
+    if 'discount_percentage' in data or 'savings' in data:
+        # The stored discount is off the store list; show the one this caller pays.
+        saved, percent = _discount_off_mrp(getattr(product, 'original_price', None), selling)
+        if 'discount_percentage' in data:
+            data['discount_percentage'] = _PERCENT.to_representation(percent)
+        if 'savings' in data:
+            data['savings'] = format_money(saved)
     if channel == CHANNEL_APP:
         data.pop('app_price', None)
         # Cost price is shop-only data; customers and anonymous callers never get it.

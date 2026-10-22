@@ -184,6 +184,8 @@ def update_cart_item(request, item_id):
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error updating cart item: {str(e)}")
         return Response(
@@ -233,6 +235,8 @@ def remove_cart_item(request, item_id):
         logger.info(f"Item removed from cart: {product.name} by {request.user.username}")
         return Response(cart_serializer.data, status=status.HTTP_200_OK)
     
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error removing cart item: {str(e)}")
         return Response(

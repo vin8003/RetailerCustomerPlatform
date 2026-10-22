@@ -20,9 +20,15 @@ def _shop_for(user):
     return get_object_or_404(RetailerProfile, user=user)
 
 
+# Returns are posted once through the services, which move stock and refunds. A generic
+# edit or delete would skip that (and could point a return at another shop's order).
+RETURN_HTTP_METHODS = ['get', 'post', 'head', 'options']
+
+
 class SalesReturnViewSet(viewsets.ModelViewSet):
     serializer_class = SalesReturnSerializer
     permission_classes = [permissions.IsAuthenticated]
+    http_method_names = RETURN_HTTP_METHODS
 
     def get_queryset(self):
         retailer = _shop_for(self.request.user)
@@ -170,6 +176,7 @@ class SalesReturnViewSet(viewsets.ModelViewSet):
 class PurchaseReturnViewSet(viewsets.ModelViewSet):
     serializer_class = PurchaseReturnSerializer
     permission_classes = [permissions.IsAuthenticated]
+    http_method_names = RETURN_HTTP_METHODS
 
     def get_queryset(self):
         retailer = _shop_for(self.request.user)

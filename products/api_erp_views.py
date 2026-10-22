@@ -5,6 +5,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework.decorators import action, api_view, permission_classes
 from django.db import IntegrityError, transaction
@@ -57,6 +58,11 @@ from orders.serializers import OrderDetailSerializer
 from common.permissions import IsRetailerOwner
 from authentication.utils import normalize_phone_number
 from customers.models import CustomerProfile
+
+def _caller_shop(user):
+    """The caller's shop profile; 404 (not 500) for customers and profile-less staff."""
+    return get_object_or_404(RetailerProfile, user=user)
+
 
 class SupplierViewSet(viewsets.ModelViewSet):
     serializer_class = SupplierSerializer
@@ -245,7 +251,7 @@ class PurchaseInvoiceViewSet(viewsets.ModelViewSet):
         return ctx
 
     def get_queryset(self):
-        retailer = RetailerProfile.objects.get(user=self.request.user)
+        retailer = _caller_shop(self.request.user)
         # supplier_name reads supplier.company_name on every row.
         qs = (
             PurchaseInvoice.objects.filter(retailer=retailer)
@@ -264,11 +270,11 @@ class PurchaseInvoiceViewSet(viewsets.ModelViewSet):
     search_fields = ['invoice_number', 'supplier__company_name']
 
     def perform_create(self, serializer):
-        retailer = RetailerProfile.objects.get(user=self.request.user)
+        retailer = _caller_shop(self.request.user)
         invoice = serializer.save(retailer=retailer)
         
     def perform_destroy(self, instance):
-        retailer = RetailerProfile.objects.get(user=self.request.user)
+        retailer = _caller_shop(self.request.user)
         # Ensure retailer ownership
         if instance.retailer != retailer:
             raise ValidationError("You do not have permission to delete this invoice.")
@@ -374,7 +380,7 @@ class SupplierLedgerViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        retailer = RetailerProfile.objects.get(user=self.request.user)
+        retailer = _caller_shop(self.request.user)
         qs = SupplierLedger.objects.filter(supplier__retailer=retailer)
         supplier_id = self.request.query_params.get('supplier')
         start_date = self.request.query_params.get('start_date')
@@ -388,7 +394,7 @@ class SupplierLedgerViewSet(viewsets.ModelViewSet):
         return qs
 
     def perform_create(self, serializer):
-        retailer = RetailerProfile.objects.get(user=self.request.user)
+        retailer = _caller_shop(self.request.user)
         supplier = serializer.validated_data.get('supplier')
         if not supplier or supplier.retailer_id != retailer.id:
             raise ValidationError({'supplier': 'Invalid supplier for this retailer.'})

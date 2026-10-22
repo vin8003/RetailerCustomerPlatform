@@ -217,6 +217,8 @@ def get_customer_address(request, address_id):
         serializer = CustomerAddressSerializer(address)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error getting customer address: {str(e)}")
         return Response(
@@ -259,6 +261,8 @@ def update_customer_address(request, address_id):
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error updating customer address: {str(e)}")
         return Response(
@@ -297,6 +301,8 @@ def delete_customer_address(request, address_id):
             status=status.HTTP_200_OK
         )
     
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error deleting customer address: {str(e)}")
         return Response(
@@ -412,6 +418,8 @@ def remove_from_wishlist(request, product_id):
             status=status.HTTP_200_OK
         )
     
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error removing from wishlist: {str(e)}")
         return Response(
@@ -485,6 +493,8 @@ def mark_notification_read(request, notification_id):
         serializer = CustomerNotificationSerializer(notification)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error marking notification as read: {str(e)}")
         return Response(
@@ -795,6 +805,8 @@ def get_retailer_customers_loyalty(request):
             
         return Response(data, status=status.HTTP_200_OK)
     
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error getting retailer customers loyalty: {str(e)}")
         return Response(
@@ -1096,6 +1108,8 @@ def get_retailer_customers(request):
             
         return Response(serializer.data, status=status.HTTP_200_OK)
     
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error getting retailer customers: {str(e)}")
         return Response(
@@ -1284,6 +1298,8 @@ def get_customer_details_for_retailer(request, customer_id):
         serializer = RetailerCustomerDetailSerializer(data)
         return Response(serializer.data, status=status.HTTP_200_OK)
         
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error getting customer details: {str(e)}")
         return Response(
@@ -1383,6 +1399,8 @@ def update_retailer_customer(request, customer_id):
             'notes': mapping.notes
         }, status=status.HTTP_200_OK)
         
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error updating retailer customer mapping: {str(e)}")
         return Response(
@@ -1418,6 +1436,8 @@ def get_customer_ledger(request, customer_id):
         serializer = CustomerLedgerSerializer(ledger_entries, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
         
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error getting customer ledger: {str(e)}")
         return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

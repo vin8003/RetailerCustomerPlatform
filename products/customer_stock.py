@@ -2,8 +2,9 @@
 
 Tracked products with quantity <= 0 are hidden from customer listings.
 Batch-tracked products are hidden when no unexpired batch has stock (OE-149),
-since that stock cannot be sold. Untracked products remain visible.
-Retailer-authenticated endpoints must not enable the request flag.
+since that stock cannot be sold. Pack children sell from their parent's stock,
+so the same rule applies to the parent's batches. Untracked products remain
+visible. Retailer-authenticated endpoints must not enable the request flag.
 """
 from functools import wraps
 import threading
@@ -21,8 +22,23 @@ def customer_in_stock_q():
         is_active=True,
         quantity__gt=0,
     )
+    parent_saleable_batch = ProductBatch.objects.filter(
+        ProductBatch.saleable_q(),
+        product=OuterRef('parent_bulk_product'),
+        is_active=True,
+        quantity__gt=0,
+    )
+    # Mirrors Product.saleable_quantity(): a child's stock is its parent's saleable stock.
+    parent_can_sell = (
+        Q(parent_bulk_product__isnull=True)
+        | Q(parent_bulk_product__track_inventory=False)
+        | Q(parent_bulk_product__has_batches=False)
+        | Exists(parent_saleable_batch)
+    )
     return Q(track_inventory=False) | (
-        Q(quantity__gt=0) & (Q(has_batches=False) | Exists(saleable_batch))
+        Q(quantity__gt=0)
+        & (Q(has_batches=False) | Exists(saleable_batch))
+        & parent_can_sell
     )
 
 _tls = threading.local()
