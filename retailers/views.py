@@ -1,5 +1,6 @@
 from rest_framework import status, permissions
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
+from rest_framework.exceptions import APIException, ValidationError
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.throttling import AnonRateThrottle
@@ -11,6 +12,7 @@ from rest_framework.filters import SearchFilter, OrderingFilter
 import ipaddress
 import logging
 import requests
+from common.client_input import decimal_value
 from common.error_utils import format_exception
 
 from .models import (
@@ -382,10 +384,9 @@ def list_retailers(request):
         
         if min_rating:
             try:
-                min_rating = float(min_rating)
-                queryset = queryset.filter(average_rating__gte=min_rating)
-            except ValueError:
-                pass
+                queryset = queryset.filter(average_rating__gte=decimal_value(min_rating, 'min_rating'))
+            except ValidationError:
+                pass  # malformed (also nan / inf) is ignored, as before
         
         if has_referral:
             queryset = queryset.filter(reward_config__is_referral_enabled=has_referral.lower() == 'true')
@@ -478,6 +479,8 @@ def list_retailers(request):
         serializer = RetailerListSerializer(queryset, many=True, context={'request': request})
         return Response(serializer.data, status=status.HTTP_200_OK)
     
+    except (Http404, APIException):
+        raise
     except Exception as e:
         logger.error(f"Error listing retailers: {str(e)}")
         return Response(
@@ -628,6 +631,8 @@ def get_retailer_reviews(request, retailer_id):
         serializer = RetailerReviewSerializer(reviews, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
+    except (Http404, APIException):
+        raise
     except Exception as e:
         logger.error(f"Error getting retailer reviews: {str(e)}")
         return Response(
@@ -664,6 +669,8 @@ def create_retailer_review(request, retailer_id):
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
+    except (Http404, APIException):
+        raise
     except Exception as e:
         logger.error(f"Error creating retailer review: {str(e)}")
         return Response(
@@ -1410,6 +1417,8 @@ def organization_staff(request, org_id):
             OrgStaffMembershipSerializer(membership).data,
             status=status.HTTP_201_CREATED,
         )
+    except (Http404, APIException):
+        raise
     except Exception as e:
         logger.error(f"Error in organization_staff: {str(e)}")
         return Response(
@@ -1649,6 +1658,8 @@ def organization_api_keys(request, org_id):
         payload = OrgApiKeySerializer(api_key).data
         payload['api_key'] = raw  # shown once
         return Response(payload, status=status.HTTP_201_CREATED)
+    except (Http404, APIException):
+        raise
     except Exception as e:
         logger.error(f"Error in organization_api_keys: {str(e)}")
         return Response(
@@ -1797,6 +1808,8 @@ def organization_audit_log(request, org_id):
         page = paginator.paginate_queryset(qs, request)
         serializer = OrgAuditLogSerializer(page, many=True)
         return paginator.get_paginated_response(serializer.data)
+    except (Http404, APIException):
+        raise
     except Exception as e:
         logger.error(f"Error in organization_audit_log: {str(e)}")
         return Response(
@@ -2007,6 +2020,8 @@ def organization_notification_deliveries(request, org_id):
 
         serializer = OrgNotificationDeliverySerializer(qs, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
+    except (Http404, APIException):
+        raise
     except Exception as e:
         logger.error(f"Error in organization_notification_deliveries: {str(e)}")
         return Response(

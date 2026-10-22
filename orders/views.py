@@ -1,6 +1,6 @@
 from decimal import Decimal
 from rest_framework import status, permissions, exceptions
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import APIException, ValidationError
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
@@ -183,6 +183,8 @@ def get_current_orders(request):
         serializer = OrderListSerializer(orders, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
+    except (Http404, APIException):
+        raise
     except Exception as e:
         logger.error(f"Error getting current orders: {str(e)}")
         return Response(
@@ -256,6 +258,8 @@ def get_order_history(request):
         serializer = OrderListSerializer(orders, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
+    except (Http404, APIException):
+        raise
     except Exception as e:
         logger.error(f"Error getting order history: {str(e)}")
         return Response(
@@ -720,6 +724,8 @@ def get_retailer_reviews(request):
             
         return paginator.get_paginated_response(data)
     
+    except (Http404, APIException):
+        raise
     except Exception as e:
         logger.error(f"Error getting retailer reviews: {str(e)}")
         return Response(
@@ -757,7 +763,8 @@ def modify_order(request, order_id):
             serializer = OrderModificationSerializer(
                 order,
                 data=request.data,
-                context={'user': request.user}
+                # The serializer reads 'request' for created_by on the stock logs it writes.
+                context={'user': request.user, 'request': request}
             )
             
             if serializer.is_valid():
@@ -820,7 +827,11 @@ def modify_order(request, order_id):
                 return Response(detail_serializer.data)
             
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-            
+
+    except ValidationError as e:
+        # Raised while applying the edit (not enough stock, bad quantity): a 400 with the
+        # same message the edit page shows, not a 500.
+        return Response({'error': format_exception(e)}, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
         logger.error(f"Error modifying order: {str(e)}")
         return Response(
@@ -1403,6 +1414,8 @@ def list_retailer_inbox(request):
         serializer = OrderListSerializer(orders, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    except (Http404, APIException):
+        raise
     except Exception as e:
         logger.error(f"Error listing retailer inbox: {str(e)}")
         return Response(

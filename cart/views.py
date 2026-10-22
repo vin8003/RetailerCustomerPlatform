@@ -3,9 +3,9 @@ import logging
 
 from rest_framework import status, permissions
 from rest_framework.decorators import api_view, permission_classes
+from rest_framework.generics import get_object_or_404  # malformed ids are a 404, not a 500
 from rest_framework.response import Response
 from django.http import Http404
-from django.shortcuts import get_object_or_404
 from django.db import transaction
 from django.db.models import prefetch_related_objects
 
@@ -19,6 +19,15 @@ from products.tax_service import quantize_2, split_inclusive_line
 from retailers.models import RetailerProfile
 
 logger = logging.getLogger(__name__)
+
+
+def _public_shop(retailer_id):
+    """The public shop a client names; DoesNotExist (404 here) for unknown or malformed ids."""
+    try:
+        pk = int(str(retailer_id).strip())
+    except (TypeError, ValueError):
+        raise RetailerProfile.DoesNotExist from None
+    return RetailerProfile.objects.public().get(id=pk)
 
 
 @api_view(['GET'])
@@ -39,7 +48,7 @@ def get_cart(request):
         
         if retailer_id:
             try:
-                retailer = RetailerProfile.objects.public().get(id=retailer_id)
+                retailer = _public_shop(retailer_id)
                 cart, created = Cart.objects.get_or_create(
                     customer=request.user,
                     retailer=retailer
@@ -267,7 +276,7 @@ def clear_cart(request):
             )
         
         try:
-            retailer = RetailerProfile.objects.public().get(id=retailer_id)
+            retailer = _public_shop(retailer_id)
             cart = Cart.objects.get(customer=request.user, retailer=retailer)
             
             # Log cart history
@@ -330,7 +339,7 @@ def get_cart_summary(request):
             )
         
         try:
-            retailer = RetailerProfile.objects.public().get(id=retailer_id)
+            retailer = _public_shop(retailer_id)
             cart = Cart.objects.prefetch_related('items__product').get(customer=request.user, retailer=retailer)
             
             # Calculate summary using OfferEngine
@@ -456,7 +465,7 @@ def validate_cart(request):
             )
         
         try:
-            retailer = RetailerProfile.objects.public().get(id=retailer_id)
+            retailer = _public_shop(retailer_id)
             cart = Cart.objects.prefetch_related('items__product').get(customer=request.user, retailer=retailer)
             
             if cart.is_empty:

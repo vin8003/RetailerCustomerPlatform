@@ -11,6 +11,7 @@ from cart.models import Cart, CartItem
 from returns.models import SalesReturnItem
 from django.db.models import Sum
 from products.tax_service import allocate_order_discount, quantize_2, split_inclusive_line
+from common.client_input import decimal_value, id_value, money_value
 
 
 class OrderItemSerializer(serializers.ModelSerializer):
@@ -1341,13 +1342,20 @@ class OrderModificationSerializer(serializers.Serializer):
                 # New item validation
                 if 'quantity' not in item:
                     raise serializers.ValidationError("Quantity is required for new items")
-                if Decimal(str(item['quantity'])) <= 0:
+                item['product_id'] = id_value(item['product_id'], 'product_id')
+                if decimal_value(item['quantity'], 'quantity') <= 0:
                      raise serializers.ValidationError("Quantity must be positive for new items")
             
             if 'id' in item:
                 # Existing item validation
                 if 'quantity' not in item and 'unit_price' not in item:
                     raise serializers.ValidationError("Either quantity or unit_price is required for update")
+                item['id'] = id_value(item['id'], 'id')
+                if 'unit_price' in item:
+                    money_value(item['unit_price'], 'unit_price')
+            if 'quantity' in item:
+                # Text quantities used to reach Decimal() in update() and fail there as a 500.
+                decimal_value(item['quantity'], 'quantity')
         return value
 
     def update(self, instance, validated_data):

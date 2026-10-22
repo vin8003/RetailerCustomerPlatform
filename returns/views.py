@@ -1,15 +1,16 @@
 from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from django.db.models import Prefetch, Q, Sum
-from decimal import Decimal
 from .models import SalesReturn, PurchaseReturn, SalesReturnItem, PurchaseReturnItem
 from .serializers import SalesReturnSerializer, PurchaseReturnSerializer
 from .services import process_sales_return, process_purchase_return
 from retailers.models import RetailerProfile, Supplier
 from orders.models import Order, OrderItem
 from products.models import PurchaseInvoice, Product, ProductBatch, PurchaseItem
+from common.client_input import error_message, id_value, list_of_objects, money_value, quantity_value
 
 
 SALES_RETURN_NOTES_MAX = 1000
@@ -23,6 +24,32 @@ def _shop_for(user):
 # Returns are posted once through the services, which move stock and refunds. A generic
 # edit or delete would skip that (and could point a return at another shop's order).
 RETURN_HTTP_METHODS = ['get', 'post', 'head', 'options']
+
+
+def _return_lines(items_data, price_field, link_field):
+    """
+    Parse return lines. Lines without a product, quantity or price are skipped as before
+    (the return screens only send the rows being returned). A negative quantity or price
+    would move stock and money the wrong way, and a return with no lines is empty, so
+    both are a 400.
+    """
+    lines = []
+    for item in list_of_objects(items_data, 'items'):
+        product_id = item.get('product_id')
+        qty = item.get('quantity')
+        price = item.get(price_field)
+        if not product_id or not qty or price is None:
+            continue
+        lines.append({
+            'product_id': id_value(product_id, 'product_id'),
+            'batch_id': id_value(item['batch_id'], 'batch_id') if item.get('batch_id') else None,
+            'link_id': id_value(item[link_field], link_field) if item.get(link_field) else None,
+            'quantity': quantity_value(qty, 'quantity'),
+            'price': money_value(price, price_field),
+        })
+    if not lines:
+        raise ValidationError({'items': [f'Each item needs product_id, quantity and {price_field}.']})
+    return lines
 
 
 class SalesReturnViewSet(viewsets.ModelViewSet):
@@ -123,6 +150,12 @@ class SalesReturnViewSet(viewsets.ModelViewSet):
 
         if not items_data:
             return Response({'error': 'No items provided for return'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            lines = _return_lines(items_data, 'refund_unit_price', 'order_item_id')
+            if order_id:
+                order_id = id_value(order_id, 'order_id')
+        except ValidationError as exc:
+            return Response({'error': error_message(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         order = None
         if order_id:
@@ -130,31 +163,22 @@ class SalesReturnViewSet(viewsets.ModelViewSet):
 
         # Prepare items data with actual product/batch/order_item objects
         processed_items = []
-        for item in items_data:
-            product_id = item.get('product_id')
-            batch_id = item.get('batch_id')
-            order_item_id = item.get('order_item_id')
-            qty = item.get('quantity')
-            price = item.get('refund_unit_price')
-
-            if not product_id or not qty or price is None:
-                continue
-
-            product = get_object_or_404(Product, id=product_id, retailer=retailer)
+        for line in lines:
+            product = get_object_or_404(Product, id=line['product_id'], retailer=retailer)
             batch = None
-            if batch_id:
-                batch = get_object_or_404(ProductBatch, id=batch_id, product=product)
+            if line['batch_id']:
+                batch = get_object_or_404(ProductBatch, id=line['batch_id'], product=product)
 
             order_item = None
-            if order_item_id:
-                order_item = get_object_or_404(OrderItem, id=order_item_id, order=order)
+            if line['link_id']:
+                order_item = get_object_or_404(OrderItem, id=line['link_id'], order=order)
 
             processed_items.append({
                 'product': product,
                 'batch': batch,
                 'order_item': order_item,
-                'quantity': Decimal(str(qty)),
-                'refund_unit_price': Decimal(str(price))
+                'quantity': line['quantity'],
+                'refund_unit_price': line['price'],
             })
 
         try:
@@ -188,7 +212,11 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
         invoice_id = request.query_params.get('invoice_id')
         if not invoice_id:
             return Response({'error': 'invoice_id is required'}, status=400)
-            
+        try:
+            invoice_id = id_value(invoice_id, 'invoice_id')
+        except ValidationError as exc:
+            return Response({'error': error_message(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
         invoice = get_object_or_404(PurchaseInvoice, id=invoice_id, retailer=retailer)
         
         items_data = []
@@ -220,6 +248,13 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
 
         if not items_data:
             return Response({'error': 'No items provided for return'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            lines = _return_lines(items_data, 'purchase_price', 'purchase_item_id')
+            supplier_id = id_value(supplier_id, 'supplier_id')
+            if invoice_id:
+                invoice_id = id_value(invoice_id, 'invoice_id')
+        except ValidationError as exc:
+            return Response({'error': error_message(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         supplier = get_object_or_404(Supplier, id=supplier_id, retailer=retailer)
         invoice = None
@@ -228,31 +263,22 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
 
         # Prepare items data
         processed_items = []
-        for item in items_data:
-            product_id = item.get('product_id')
-            batch_id = item.get('batch_id')
-            purchase_item_id = item.get('purchase_item_id')
-            qty = item.get('quantity')
-            price = item.get('purchase_price')
-
-            if not product_id or not qty or price is None:
-                continue
-
-            product = get_object_or_404(Product, id=product_id, retailer=retailer)
+        for line in lines:
+            product = get_object_or_404(Product, id=line['product_id'], retailer=retailer)
             batch = None
-            if batch_id:
-                batch = get_object_or_404(ProductBatch, id=batch_id, product=product)
+            if line['batch_id']:
+                batch = get_object_or_404(ProductBatch, id=line['batch_id'], product=product)
 
             purchase_item = None
-            if purchase_item_id:
-                purchase_item = get_object_or_404(PurchaseItem, id=purchase_item_id, invoice=invoice)
+            if line['link_id']:
+                purchase_item = get_object_or_404(PurchaseItem, id=line['link_id'], invoice=invoice)
 
             processed_items.append({
                 'product': product,
                 'batch': batch,
                 'purchase_item': purchase_item,
-                'quantity': Decimal(str(qty)),
-                'purchase_price': Decimal(str(price))
+                'quantity': line['quantity'],
+                'purchase_price': line['price'],
             })
 
         try:

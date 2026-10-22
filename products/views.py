@@ -1,5 +1,6 @@
 from rest_framework import status, permissions
 from rest_framework.decorators import api_view, parser_classes, permission_classes
+from rest_framework.exceptions import APIException, ValidationError
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Q, Avg, Count, Sum, Max
@@ -11,6 +12,7 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 import logging
 import json
+from common.client_input import decimal_value, id_value, money_value
 from common.error_utils import format_exception
 import pandas as pd
 import os
@@ -300,6 +302,24 @@ def smart_product_search(queryset, search_query):
     ).order_by('-in_stock', '-discount_percentage', 'name')
 
 
+SEARCH_LIMIT_DEFAULT = 50
+SEARCH_LIMIT_MAX = 200
+
+
+def _search_limit(request):
+    """?limit= for search results, capped so one call cannot pull a whole catalog with its batches."""
+    raw = request.query_params.get('limit')
+    if raw in (None, ''):
+        return SEARCH_LIMIT_DEFAULT
+    try:
+        limit = int(str(raw).strip())
+    except ValueError:
+        raise ValidationError({'limit': ['Must be a whole number.']}) from None
+    if limit < 1:
+        raise ValidationError({'limit': ['Must be at least 1.']})
+    return min(limit, SEARCH_LIMIT_MAX)
+
+
 class ProductPagination(PageNumberPagination):
     page_size = 20
     page_size_query_param = 'page_size'
@@ -554,6 +574,8 @@ def get_retailer_products(request):
         )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    except (Http404, APIException):
+        raise
     except Exception as e:
         logger.error(f"Error getting retailer products: {str(e)}")
         return Response(
@@ -624,7 +646,7 @@ def search_products(request):
             log_search_telemetry(search, products.count(), retailer=retailer, user=request.user)
 
         # Limit results for search
-        limit = int(request.query_params.get('limit', 50))
+        limit = _search_limit(request)
         products = products.select_related(
             'parent_bulk_product', 'brand', 'category'
         ).prefetch_related(
@@ -655,6 +677,8 @@ def search_products(request):
             'facets': facets
         }, status=status.HTTP_200_OK)
 
+    except (Http404, APIException):
+        raise
     except Exception as e:
         logger.error(f"Error searching retailer products: {str(e)}")
         return Response(
@@ -1128,7 +1152,7 @@ def bulk_update_products(request):
 
         items = request.data.get('items', [])
         
-        if not items or not isinstance(items, list):
+        if not items or not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
             return Response(
                 {'error': 'Invalid payload. "items" array is required.'},
                 status=status.HTTP_400_BAD_REQUEST
@@ -1406,6 +1430,8 @@ def bulk_update_products(request):
             'updated_count': updated_count
         }, status=status.HTTP_200_OK)
 
+    except (Http404, APIException):
+        raise
     except Exception as e:
         logger.error(f"Error bulk updating products: {str(e)}")
         return Response({'error': format_exception(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -1479,8 +1505,8 @@ def get_retailer_products_public(request, retailer_id):
                             products = products.exclude(exclusion_q)
                 else:
                     products = products.none()
-            except Offer.DoesNotExist:
-                pass
+            except (Offer.DoesNotExist, ValueError):
+                pass  # unknown or malformed offer: the list is not filtered, as before
 
         if category:
             if category.isdigit():
@@ -1503,16 +1529,17 @@ def get_retailer_products_public(request, retailer_id):
         if brand:
             products = products.filter(brand__name__icontains=brand)
 
+        # Malformed bounds are ignored, as before; nan / inf count as malformed.
         if min_price:
             try:
-                products = products.filter(price__gte=float(min_price))
-            except ValueError:
+                products = products.filter(price__gte=decimal_value(min_price, 'min_price'))
+            except ValidationError:
                 pass
 
         if max_price:
             try:
-                products = products.filter(price__lte=float(max_price))
-            except ValueError:
+                products = products.filter(price__lte=decimal_value(max_price, 'max_price'))
+            except ValidationError:
                 pass
 
         if in_stock is not None:
@@ -1553,7 +1580,7 @@ def get_retailer_products_public(request, retailer_id):
         serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-    except Http404:
+    except (Http404, APIException):
         raise
     except Exception as e:
         logger.error(f"Error getting retailer products: {str(e)}")
@@ -1609,7 +1636,7 @@ def search_products_public(request, retailer_id):
             log_search_telemetry(search, products.count(), retailer=retailer, user=request.user if request.user.is_authenticated else None)
 
         # Limit results for search
-        limit = int(request.query_params.get('limit', 50))
+        limit = _search_limit(request)
         products = products.select_related('brand', 'category')[:limit]
 
         serializer = ProductSearchSerializer(products, many=True)
@@ -1618,7 +1645,7 @@ def search_products_public(request, retailer_id):
             'facets': facets
         }, status=status.HTTP_200_OK)
 
-    except Http404:
+    except (Http404, APIException):
         raise
     except Exception as e:
         logger.error(f"Error searching public retailer products: {str(e)}")
@@ -1644,7 +1671,7 @@ def get_retailer_categories(request, retailer_id):
         if requested_parent_id == 'null' or requested_parent_id == '':
             requested_parent_id = None
         else:
-            requested_parent_id = int(requested_parent_id) if requested_parent_id else None
+            requested_parent_id = id_value(requested_parent_id, 'parent_id') if requested_parent_id else None
 
         # 1. Get raw counts for all categories that have products for this retailer
         # This gives us {category_id: direct_product_count}
@@ -1709,7 +1736,7 @@ def get_retailer_categories(request, retailer_id):
         
         return Response(data, status=status.HTTP_200_OK)
 
-    except Http404:
+    except (Http404, APIException):
         raise
     except Exception as e:
         logger.error(f"Error getting retailer categories: {str(e)}")
@@ -3782,7 +3809,7 @@ def get_deals_of_the_day(request, retailer_id):
 
         serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
         return Response(serializer.data, status=status.HTTP_200_OK)
-    except Http404:
+    except (Http404, APIException):
         raise
     except Exception as e:
         logger.error(f"Error getting deals of the day: {str(e)}")
@@ -3797,7 +3824,11 @@ def get_budget_buys(request, retailer_id):
     """
     try:
         retailer = get_object_or_404(RetailerProfile.objects.public(), id=retailer_id)
-        limit_price = float(request.query_params.get('max_price', 99))
+        raw_max_price = request.query_params.get('max_price')
+        limit_price = (
+            money_value(raw_max_price, 'max_price')
+            if raw_max_price not in (None, '') else Decimal('99')
+        )
         products = Product.objects.filter(
             retailer=retailer,
             is_active=True,
@@ -3820,7 +3851,7 @@ def get_budget_buys(request, retailer_id):
 
         serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
         return Response(serializer.data, status=status.HTTP_200_OK)
-    except Http404:
+    except (Http404, APIException):
         raise
     except Exception as e:
         logger.error(f"Error getting budget buys: {str(e)}")

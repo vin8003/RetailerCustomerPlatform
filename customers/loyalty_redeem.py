@@ -13,9 +13,11 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import status
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
 from authentication.utils import generate_otp, send_sms_otp
+from common.client_input import error_message, id_value
 from customers.models import CustomerLoyalty, LoyaltyRedeemOTP, LoyaltyTransaction
 from orders.access import PERM_ORDERS_UPDATE, require_retailer_orders_access
 from orders.models import Order
@@ -303,6 +305,10 @@ def staff_order_for_redeem(user, order_id):
             {'error': 'order_id is required'},
             status=status.HTTP_400_BAD_REQUEST,
         )
+    try:
+        order_id = id_value(order_id, 'order_id')
+    except ValidationError as exc:
+        return None, Response({'error': error_message(exc)}, status=status.HTTP_400_BAD_REQUEST)
     order = (
         Order.objects.select_related('customer', 'retailer')
         .filter(id=order_id, retailer__in=locations)
@@ -339,6 +345,13 @@ def staff_customer_for_otp(user, data):
 
     location_id = data.get('location_id')
     customer_id = data.get('customer_id')
+    try:
+        if location_id is not None:
+            location_id = id_value(location_id, 'location_id')
+        if customer_id:
+            customer_id = id_value(customer_id, 'customer_id')
+    except ValidationError as exc:
+        return None, None, Response({'error': error_message(exc)}, status=status.HTTP_400_BAD_REQUEST)
     if location_id is not None:
         retailer = locations.filter(id=location_id).first()
         if retailer is None:

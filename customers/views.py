@@ -1,12 +1,14 @@
 from rest_framework import status, permissions
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.throttling import UserRateThrottle
+from rest_framework.exceptions import APIException
+from rest_framework.generics import get_object_or_404  # malformed ids are a 404, not a 500
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Count, Sum, Q, Avg, DecimalField, IntegerField, Max, Subquery, OuterRef, F
 from django.http import Http404
-from django.shortcuts import get_object_or_404
 from decimal import Decimal
+from common.client_input import id_value
 from common.pagination import StandardResultsSetPagination
 from django.utils import timezone
 from datetime import timedelta
@@ -342,6 +344,8 @@ def get_customer_wishlist(request):
         )
         return Response(serializer.data, status=status.HTTP_200_OK)
     
+    except (Http404, APIException):
+        raise
     except Exception as e:
         logger.error(f"Error getting customer wishlist: {str(e)}")
         return Response(
@@ -460,6 +464,8 @@ def get_customer_notifications(request):
         serializer = CustomerNotificationSerializer(notifications, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
+    except (Http404, APIException):
+        raise
     except Exception as e:
         logger.error(f"Error getting customer notifications: {str(e)}")
         return Response(
@@ -602,6 +608,8 @@ def get_reward_configuration(request):
         serializer = RetailerRewardConfigSerializer(config)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
+    except (Http404, APIException):
+        raise
     except Exception as e:
         logger.error(f"Error getting reward configuration: {str(e)}")
         return Response(
@@ -638,6 +646,8 @@ def get_customer_loyalty(request):
             'retailer_name': retailer.shop_name
         }, status=status.HTTP_200_OK)
     
+    except (Http404, APIException):
+        raise
     except Exception as e:
         logger.error(f"Error getting customer loyalty: {str(e)}")
         return Response(
@@ -754,7 +764,7 @@ def get_loyalty_transactions(request):
     transactions = LoyaltyTransaction.objects.filter(customer=request.user)
     
     if retailer_id:
-        transactions = transactions.filter(retailer_id=retailer_id)
+        transactions = transactions.filter(retailer_id=id_value(retailer_id, 'retailer_id'))
         
     transactions = transactions.select_related('retailer').order_by('-created_at')[:50]
     
@@ -1108,7 +1118,7 @@ def get_retailer_customers(request):
             
         return Response(serializer.data, status=status.HTTP_200_OK)
     
-    except Http404:
+    except (Http404, APIException):
         raise
     except Exception as e:
         logger.error(f"Error getting retailer customers: {str(e)}")
@@ -1436,7 +1446,7 @@ def get_customer_ledger(request, customer_id):
         serializer = CustomerLedgerSerializer(ledger_entries, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
         
-    except Http404:
+    except (Http404, APIException):
         raise
     except Exception as e:
         logger.error(f"Error getting customer ledger: {str(e)}")

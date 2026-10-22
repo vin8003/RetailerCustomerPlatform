@@ -7,6 +7,15 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from common.client_input import (
+    date_value,
+    decimal_value,
+    error_message,
+    id_value,
+    list_of_objects,
+    money_value,
+    quantity_value,
+)
 from rest_framework.decorators import action, api_view, permission_classes
 from django.db import IntegrityError, transaction
 from retailers.credit_lock import (
@@ -261,9 +270,9 @@ class PurchaseInvoiceViewSet(viewsets.ModelViewSet):
         start_date = self.request.query_params.get('start_date')
         end_date = self.request.query_params.get('end_date')
         if start_date:
-            qs = qs.filter(invoice_date__gte=start_date)
+            qs = qs.filter(invoice_date__gte=date_value(start_date, 'start_date'))
         if end_date:
-            qs = qs.filter(invoice_date__lte=end_date)
+            qs = qs.filter(invoice_date__lte=date_value(end_date, 'end_date'))
         return qs
 
     # supplier_name is a serializer alias, not a model field.
@@ -386,11 +395,11 @@ class SupplierLedgerViewSet(viewsets.ModelViewSet):
         start_date = self.request.query_params.get('start_date')
         end_date = self.request.query_params.get('end_date')
         if supplier_id:
-            qs = qs.filter(supplier__id=supplier_id)
+            qs = qs.filter(supplier__id=id_value(supplier_id, 'supplier'))
         if start_date:
-            qs = qs.filter(date__gte=start_date)
+            qs = qs.filter(date__gte=date_value(start_date, 'start_date'))
         if end_date:
-            qs = qs.filter(date__lte=end_date)
+            qs = qs.filter(date__lte=date_value(end_date, 'end_date'))
         return qs
 
     def perform_create(self, serializer):
@@ -434,9 +443,28 @@ def create_pos_order(request):
     items_data = data.get('items', [])
     if not items_data:
         return Response({'error': 'Cart is empty.'}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        # A sale line needs a real product, a quantity above zero and a price; returns
+        # have their own flow, so a negative line cannot put stock back or pay cash out.
+        for row in list_of_objects(items_data, 'items'):
+            id_value(row.get('product_id'), 'product_id')
+            quantity_value(row.get('quantity'), 'quantity')
+            money_value(row.get('unit_price'), 'unit_price')
+            if row.get('batch_id') not in (None, ''):
+                id_value(row.get('batch_id'), 'batch_id')
+        if data.get('discount_amount') not in (None, ''):
+            money_value(data.get('discount_amount'), 'discount_amount')
+        payment_details = data.get('payment_details')
+        if isinstance(payment_details, dict):
+            # Negative credit settles khata, so only the number itself is checked.
+            for mode in ('cash', 'upi', 'card', 'credit'):
+                if payment_details.get(mode) not in (None, ''):
+                    decimal_value(payment_details.get(mode), f'payment_details.{mode}')
+    except ValidationError as exc:
+        return Response({'error': error_message(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
-    customer_name = data.get('customer_name', '').strip()
-    customer_mobile = data.get('customer_mobile', '').strip()
+    customer_name = str(data.get('customer_name') or '').strip()
+    customer_mobile = str(data.get('customer_mobile') or '').strip()
     
     order_customer = None
     if customer_mobile:
@@ -468,7 +496,8 @@ def create_pos_order(request):
             # Create Shadow User for this walk-in
             import secrets
             from django.db import IntegrityError
-            from django.core.exceptions import ValidationError
+            # Aliased: a plain local ValidationError would shadow DRF's for the whole function.
+            from django.core.exceptions import ValidationError as DjangoValidationError
             try:
                 # Use a clean username without prefix if possible
                 username_to_use = customer_mobile
@@ -484,7 +513,7 @@ def create_pos_order(request):
                     )
                     order_customer.set_password(secrets.token_urlsafe(12))
                     order_customer.save()
-            except (IntegrityError, ValidationError):
+            except (IntegrityError, DjangoValidationError):
                 # If creation fails, someone with this number/username exists, find them aggressively
                 order_customer = User.objects.filter(
                     Q(username__endswith=mobile_match_id) | 
@@ -546,8 +575,9 @@ def create_pos_order(request):
         automated_discount = offer_results['total_savings']
         
         # Support cashier's manual discount in addition/override to automated offers
-        raw_discount = Decimal(str(data.get('discount_amount', 0)))
-        final_discount = max(automated_discount, raw_discount)
+        raw_discount = Decimal(str(data.get('discount_amount') or 0))
+        # A discount cannot exceed the bill, or the saved discount would not match the total.
+        final_discount = min(max(automated_discount, raw_discount), subtotal)
 
         with transaction.atomic():
             # Selling below zero stock is a client request, so it needs its own permission.
@@ -796,6 +826,20 @@ def create_pos_order(request):
                     if available_elsewhere >= qty:
                         stock_batch = None
 
+                if (
+                    stock_batch is not None
+                    and product.track_inventory
+                    and product.has_batches
+                    and not product.parent_bulk_product_id
+                    and stock_batch.is_expired()
+                ):
+                    # reduce_quantity refuses an expired lot (OE-149); say so instead of
+                    # "not enough stock", since the units are on the shelf.
+                    raise ValueError(
+                        f"Batch {stock_batch.batch_number or stock_batch.id} of {product.name} has expired "
+                        "and cannot be sold"
+                    )
+
                 # Sale deduct blocks when on-hand would go negative unless
                 # the caller passed allow_negative with orders.oversell (OE-146).
                 try:
@@ -1026,7 +1070,9 @@ def get_inventory_ledger(request):
     product = None
     if product_id:
         try:
-            product = Product.objects.get(id=product_id, retailer=retailer)
+            product = Product.objects.get(id=id_value(product_id, 'product_id'), retailer=retailer)
+        except ValidationError as exc:
+            return Response({'error': error_message(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except Product.DoesNotExist:
             return Response({'error': 'Product not found'}, status=status.HTTP_404_NOT_FOUND)
 
