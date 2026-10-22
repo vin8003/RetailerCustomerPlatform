@@ -505,7 +505,9 @@ def create_pos_order(request):
 
         pos_items = []
         for i, item in enumerate(items_data):
-            product = Product.objects.get(id=item['product_id'], retailer=retailer)
+            product = Product.objects.filter(id=item.get('product_id'), retailer=retailer).first()
+            if product is None:
+                raise ValueError(f"Product id={item.get('product_id')} is not in this shop.")
             if not product.is_active or not product.is_available:
                 raise ValueError(
                     f"Product '{product.name}' (id={product.id}) is inactive or unavailable and cannot be sold."
@@ -513,7 +515,9 @@ def create_pos_order(request):
             batch_id = item.get('batch_id')
             batch = None
             if batch_id:
-                batch = ProductBatch.objects.get(id=batch_id, product=product)
+                batch = ProductBatch.objects.filter(id=batch_id, product=product).first()
+                if batch is None:
+                    raise ValueError(f"Batch id={batch_id} does not belong to {product.name}.")
             
             # Expected price is database price before discount
             expected_price = Decimal(str(batch.price if batch else product.price))

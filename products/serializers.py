@@ -94,6 +94,8 @@ class PurchaseMarginReadMixin:
         data = super().to_representation(instance)
         if not self._include_margin_percent():
             data.pop('margin_percent', None)
+        if self.context.get('hide_purchase_price'):
+            data.pop('purchase_price', None)
         return data
 
 

@@ -511,6 +511,8 @@ def get_retailer_products(request):
             Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
         ).order_by('-priority').prefetch_related('targets'))
 
+        can_see_cost = include_purchase_margin(request.user)
+
         # Pagination
         paginator = ProductPagination()
         page = paginator.paginate_queryset(products, request)
@@ -526,7 +528,9 @@ def get_retailer_products(request):
                     'include_saleable_quantity': True,
                     'include_fractional_children': True,
                     'include_group_variants': True,
-                    'include_margin_percent': include_purchase_margin(request.user),
+                    'include_margin_percent': can_see_cost,
+                    # Cost is the margin's input, so it follows the same purchase-role gate.
+                    'hide_purchase_price': not can_see_cost,
                 },
             )
             return paginator.get_paginated_response(serializer.data)
@@ -542,7 +546,9 @@ def get_retailer_products(request):
                 'include_saleable_quantity': True,
                 'include_fractional_children': True,
                 'include_group_variants': True,
-                'include_margin_percent': include_purchase_margin(request.user),
+                'include_margin_percent': can_see_cost,
+                # Cost is the margin's input, so it follows the same purchase-role gate.
+                'hide_purchase_price': not can_see_cost,
             },
         )
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -628,6 +634,7 @@ def search_products(request):
         )
         products = list(products[:limit])
         Product.cache_saleable_quantities(products)
+        can_see_cost = include_purchase_margin(request.user)
 
         serializer = ProductSearchSerializer(
             products,
@@ -637,7 +644,9 @@ def search_products(request):
                 'include_saleable_quantity': True,
                 'include_fractional_children': True,
                 'include_group_variants': True,
-                'include_margin_percent': include_purchase_margin(request.user),
+                'include_margin_percent': can_see_cost,
+                # Cost is the margin's input, so it follows the same purchase-role gate.
+                'hide_purchase_price': not can_see_cost,
             },
         )
         return Response({

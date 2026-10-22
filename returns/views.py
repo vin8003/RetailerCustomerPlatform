@@ -14,12 +14,18 @@ from products.models import PurchaseInvoice, Product, ProductBatch, PurchaseItem
 
 SALES_RETURN_NOTES_MAX = 1000
 
+
+def _shop_for(user):
+    """The caller's shop profile; 404 (not 500) for customers and profile-less staff."""
+    return get_object_or_404(RetailerProfile, user=user)
+
+
 class SalesReturnViewSet(viewsets.ModelViewSet):
     serializer_class = SalesReturnSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        retailer = RetailerProfile.objects.get(user=self.request.user)
+        retailer = _shop_for(self.request.user)
         return SalesReturn.objects.filter(retailer=retailer).prefetch_related(
             Prefetch(
                 'items',
@@ -29,7 +35,7 @@ class SalesReturnViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'])
     def search_order(self, request):
-        retailer = RetailerProfile.objects.get(user=request.user)
+        retailer = _shop_for(request.user)
         query = request.query_params.get('query')
         if not query:
             return Response({'error': 'Query parameter is required'}, status=400)
@@ -94,7 +100,7 @@ class SalesReturnViewSet(viewsets.ModelViewSet):
         return Response(results)
 
     def create(self, request, *args, **kwargs):
-        retailer = RetailerProfile.objects.get(user=request.user)
+        retailer = _shop_for(request.user)
         order_id = request.data.get('order_id')
         items_data = request.data.get('items', [])
         payment_mode = request.data.get('refund_payment_mode', 'cash')
@@ -166,12 +172,12 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        retailer = RetailerProfile.objects.get(user=self.request.user)
+        retailer = _shop_for(self.request.user)
         return PurchaseReturn.objects.filter(retailer=retailer)
 
     @action(detail=False, methods=['get'])
     def get_invoice_items(self, request):
-        retailer = RetailerProfile.objects.get(user=request.user)
+        retailer = _shop_for(request.user)
         invoice_id = request.query_params.get('invoice_id')
         if not invoice_id:
             return Response({'error': 'invoice_id is required'}, status=400)
@@ -199,7 +205,7 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
         return Response(items_data)
 
     def create(self, request, *args, **kwargs):
-        retailer = RetailerProfile.objects.get(user=request.user)
+        retailer = _shop_for(request.user)
         supplier_id = request.data.get('supplier_id')
         invoice_id = request.data.get('invoice_id')
         items_data = request.data.get('items', [])
