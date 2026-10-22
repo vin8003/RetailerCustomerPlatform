@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from cart.models import Cart, CartItem
+from offers.models import Offer, OfferRedemption, OfferTarget
 from orders.models import Order, OrderItem
 from products.models import Product, ProductBatch, shop_today
 from products.tests.test_catalog_margin_percent_oe169 import (
@@ -744,3 +745,96 @@ class TestDealsAndBudgetUseTheAppPrice:
         assert _ids(api_client.get(base, {"min_price": "90", "max_price": "99"})) == {cheaper_in_app.id}
         ordered = [row["id"] for row in _rows(api_client.get(base, {"ordering": "-price"}))]
         assert ordered == [dearer_in_app.id, cheaper_in_app.id, plain.id]
+
+
+@pytest.mark.django_db
+class TestOfferLimitHeldWhenTheOrderIsSaved:
+    """The engine counts uses before the order's transaction; the count is checked again under a lock."""
+
+    @pytest.fixture(autouse=True)
+    def _quiet(self):
+        with patch("orders.views.send_push_notification"), \
+                patch("orders.views.track_meta_purchase"), \
+                patch("common.notifications.send_silent_update"):
+            yield
+
+    def _shop_cart_and_offer(self, **offer_fields):
+        from orders.tests.test_app_pickup_oe152 import _cart_with_item, _make_customer, _make_retailer
+        from orders.tests.test_app_pickup_oe152 import _product as _widget
+
+        _owner, shop = _make_retailer("qa3_limit_shop", "Limit Shop")
+        customer = _make_customer("qa3_limit_customer")
+        widget = _widget(shop)  # 100.00, 50 in stock
+        _cart_with_item(customer, shop, widget)
+        offer = Offer.objects.create(
+            retailer=shop, name="Flat 30", offer_type="cart_value", value=Decimal("30.00"),
+            value_type="amount", min_order_value=Decimal("50.00"), is_active=True, **offer_fields,
+        )
+        OfferTarget.objects.create(offer=offer, target_type="all_products")
+        return shop, customer, widget, offer
+
+    def _place(self, api_client, customer, shop, **extra):
+        api_client.force_authenticate(user=customer)
+        payload = {"retailer_id": shop.id, "delivery_mode": "pickup", "payment_mode": "cash_pickup", **extra}
+        return api_client.post("/api/orders/place/", payload, format="json")
+
+    def _use_taken_after_pricing(self, take_use):
+        """validate() and create() each price the cart; another order lands right after create() does."""
+        from offers.engine import OfferEngine
+
+        real = OfferEngine.calculate_offers
+        calls = []
+
+        def calculate(engine, *args, **kwargs):
+            result = real(engine, *args, **kwargs)
+            calls.append(1)
+            if len(calls) == 2:
+                take_use()
+            return result
+
+        return patch.object(OfferEngine, "calculate_offers", calculate)
+
+    def test_last_coupon_use_taken_meanwhile_is_refused(self, api_client):
+        shop, customer, widget, offer = self._shop_cart_and_offer(coupon_code="SAVE30", usage_limit_total=1)
+        with self._use_taken_after_pricing(lambda: Offer.objects.filter(pk=offer.pk).update(current_redemptions=1)):
+            resp = self._place(api_client, customer, shop, coupon_code="SAVE30")
+        assert resp.status_code == 400
+        assert resp.data == {"coupon_code": ["This coupon usage limit has been reached"]}
+        assert not Order.objects.filter(customer=customer).exists()
+        widget.refresh_from_db()
+        assert widget.quantity == 50
+        offer.refresh_from_db()
+        assert offer.current_redemptions == 1
+
+    def test_automatic_offer_run_out_meanwhile_is_refused(self, api_client):
+        shop, customer, _widget, offer = self._shop_cart_and_offer(usage_limit_total=1)
+        with self._use_taken_after_pricing(lambda: Offer.objects.filter(pk=offer.pk).update(current_redemptions=1)):
+            resp = self._place(api_client, customer, shop)
+        assert resp.status_code == 400
+        assert resp.data == {"offers": [
+            "The offer 'Flat 30' has just run out. Please review your cart and place the order again."
+        ]}
+        assert not Order.objects.filter(customer=customer).exists()
+
+    def test_per_customer_use_taken_meanwhile_is_refused(self, api_client):
+        shop, customer, _widget, offer = self._shop_cart_and_offer(coupon_code="ONCE", usage_limit_per_user=1)
+
+        def other_order():
+            other = Order.objects.create(
+                customer=customer, retailer=shop, source="app", status="pending", subtotal=Decimal("100"),
+                total_amount=Decimal("70"), payment_mode="cash_pickup", delivery_mode="pickup",
+            )
+            OfferRedemption.objects.create(order=other, customer=customer, offer=offer, discount_amount=Decimal("30"))
+
+        with self._use_taken_after_pricing(other_order):
+            resp = self._place(api_client, customer, shop, coupon_code="ONCE")
+        assert resp.status_code == 400
+        assert Order.objects.filter(customer=customer).count() == 1  # only the other order
+
+    def test_coupon_with_a_use_left_is_redeemed(self, api_client):
+        shop, customer, _widget, offer = self._shop_cart_and_offer(coupon_code="SAVE30", usage_limit_total=1)
+        resp = self._place(api_client, customer, shop, coupon_code="SAVE30")
+        assert resp.status_code == 201, resp.data
+        offer.refresh_from_db()
+        assert offer.current_redemptions == 1
+        assert Order.objects.get(customer=customer).total_amount == Decimal("70.00")

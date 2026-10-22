@@ -894,6 +894,33 @@ class OrderCreateSerializer(serializers.Serializer):
             # Create Offer Redemptions
             from offers.models import OfferRedemption, Offer
             from django.db.models import F
+            # The engine read the usage counts before this transaction. Re-check them under a
+            # row lock (offers before products, in id order), or two orders placed together
+            # could both take the last use of a limited coupon or offer.
+            applied_ids = sorted({applied['offer_id'] for applied in offer_results['applied_offers']})
+            locked_offers = {
+                offer.id: offer
+                for offer in Offer.objects.select_for_update().filter(id__in=applied_ids).order_by('id')
+            }
+            for applied in offer_results['applied_offers']:
+                offer = locked_offers.get(applied['offer_id'])
+                if offer is None:
+                    continue
+                limit_reached = bool(
+                    offer.usage_limit_total
+                    and offer.current_redemptions >= offer.usage_limit_total
+                ) or bool(
+                    offer.usage_limit_per_user
+                    and OfferRedemption.objects.filter(offer=offer, customer=customer).count()
+                    >= offer.usage_limit_per_user
+                )
+                if limit_reached:
+                    message = (
+                        'This coupon usage limit has been reached'
+                        if applied.get('coupon_code')
+                        else f"The offer '{offer.name}' has just run out. Please review your cart and place the order again."
+                    )
+                    raise serializers.ValidationError({'coupon_code' if applied.get('coupon_code') else 'offers': [message]})
             for applied in offer_results['applied_offers']:
                 OfferRedemption.objects.create(
                     order=order,
