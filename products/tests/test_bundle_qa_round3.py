@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
+from cart.models import Cart, CartItem
 from orders.models import Order, OrderItem
 from products.models import Product, ProductBatch, shop_today
 from products.tests.test_catalog_margin_percent_oe169 import (
@@ -600,3 +601,146 @@ def test_models_and_migrations_are_in_sync(settings):
         call_command("makemigrations", "--check", "--dry-run", stdout=out, stderr=StringIO())
     except SystemExit as exc:
         pytest.fail(f"missing migrations (exit {exc.code}):\n{out.getvalue()}")
+
+
+def _expired_lot(product, quantity="2", number=None):
+    return ProductBatch.objects.create(
+        product=product, retailer=product.retailer, batch_number=number or f"{product.name}-OLD",
+        price=product.price, quantity=Decimal(quantity), expiry_date=shop_today() - timedelta(days=1),
+    )
+
+
+@pytest.mark.django_db
+class TestCartShowsSaleableStock:
+    """stock_quantity on a cart line is what the customer can still buy, the figure add/update check."""
+
+    def _rows(self, api_client, customer, retailer, *lines):
+        cart = Cart.objects.create(customer=customer, retailer=retailer)
+        for product, batch in lines:
+            CartItem.objects.create(cart=cart, product=product, batch=batch, quantity=1, unit_price=product.price)
+        api_client.force_authenticate(user=customer)
+        resp = api_client.get("/api/cart/", {"retailer_id": retailer.id})
+        assert resp.status_code == 200
+        return {row["product"]: row for row in resp.data["items"]}
+
+    def test_expired_lots_do_not_count(self, api_client, retailer, customer):
+        paneer = _batch_product(retailer, "Paneer", 5, quantity="3")
+        _expired_lot(paneer)
+        Product.objects.filter(pk=paneer.pk).update(quantity=Decimal("5"))
+        assert self._rows(api_client, customer, retailer, (paneer, None))[paneer.id]["stock_quantity"] == 3
+
+    def test_line_on_an_expired_lot_has_no_stock(self, api_client, retailer, customer):
+        curd = _batch_product(retailer, "Curd", 5, quantity="3")
+        old = _expired_lot(curd)
+        assert self._rows(api_client, customer, retailer, (curd, old))[curd.id]["stock_quantity"] == 0
+
+    def test_pack_child_shows_the_parents_saleable_stock(self, api_client, retailer, customer):
+        parent = _batch_product(retailer, "Rice 25kg", 30, quantity="2", is_parent_bulk=True)
+        _expired_lot(parent, quantity="1")
+        Product.objects.filter(pk=parent.pk).update(quantity=Decimal("3"))
+        parent.refresh_from_db()
+        child = _pack_child(parent, "Rice 1kg")
+        assert child.quantity == Decimal("75")  # on-hand mirror, expired kilo included
+        assert self._rows(api_client, customer, retailer, (child, None))[child.id]["stock_quantity"] == 50
+
+    def test_untracked_product_keeps_the_no_limit_sentinel(self, api_client, retailer, customer):
+        tea = Product.objects.create(retailer=retailer, name="Tea", price=Decimal("10"), track_inventory=False)
+        assert self._rows(api_client, customer, retailer, (tea, None))[tea.id]["stock_quantity"] == 99999
+
+
+@pytest.mark.django_db
+class TestCustomerListsShowSaleableStock:
+    """App list, search and rail rows report saleable stock and only the lots the app may sell."""
+
+    def _paneer(self, retailer):
+        paneer = _batch_product(retailer, "Paneer", 5, quantity="3", is_featured=True)
+        _expired_lot(paneer, number="PANEER-OLD")
+        ProductBatch.objects.create(
+            product=paneer, retailer=retailer, batch_number="PANEER-SHOP", price=Decimal("40.00"),
+            quantity=Decimal("4"), expiry_date=shop_today() + timedelta(days=9), show_on_app=False,
+        )
+        Product.objects.filter(pk=paneer.pk).update(quantity=Decimal("9"))
+        paneer.refresh_from_db()
+        return paneer
+
+    def test_rows_show_saleable_stock_and_sellable_lots(self, api_client, retailer, customer):
+        paneer = self._paneer(retailer)
+        saleable = paneer.saleable_quantity()
+        assert saleable == Decimal("7")  # 3 + 4; the expired 2 are on hand but not for sale
+        api_client.force_authenticate(user=customer)
+        base = f"/api/products/retailer/{retailer.id}"
+        for url in (f"{base}/", f"{base}/search/?search=paneer", f"{base}/featured/"):
+            row = next(r for r in _rows(api_client.get(url)) if r["id"] == paneer.id)
+            assert row["quantity"] == 7, url
+            assert row["is_in_stock"] is True, url
+            assert [b["batch_number"] for b in row["batches"]] == ["Paneer-B1"], url
+
+    def test_owner_screens_keep_on_hand_and_every_lot(self, api_client, retailer, retailer_user):
+        paneer = self._paneer(retailer)
+        api_client.force_authenticate(user=retailer_user)
+        row = next(r for r in _rows(api_client.get("/api/products/", {"page_size": 50})) if r["id"] == paneer.id)
+        assert Decimal(str(row["quantity"])) == Decimal("9")
+        assert Decimal(str(row["saleable_quantity"])) == Decimal("7")
+        assert len(row["batches"]) == 3
+
+    def test_page_stock_is_one_grouped_sum(self, api_client, retailer, customer):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        for n in range(5):
+            _batch_product(retailer, f"Milk {n}", 5, is_featured=True)
+        api_client.force_authenticate(user=customer)
+        base = f"/api/products/retailer/{retailer.id}"
+        for url in (f"{base}/", f"{base}/search/?search=milk", f"{base}/featured/"):
+            with CaptureQueriesContext(connection) as ctx:
+                assert api_client.get(url).status_code == 200
+            batch_sums = [
+                q["sql"] for q in ctx.captured_queries
+                if "SUM(" in q["sql"].upper() and '"product_batch"' in q["sql"]
+            ]
+            assert len(batch_sums) == 1, (url, batch_sums)  # not one per product
+
+
+@pytest.mark.django_db
+class TestDealsAndBudgetUseTheAppPrice:
+    """Deals and budget rails judge the price the app sells at (app_price, else the store price)."""
+
+    def _product(self, retailer, name, price, mrp=None, app_price=None):
+        product = Product.objects.create(
+            retailer=retailer, name=name, price=Decimal(price), quantity=Decimal("10"),
+            original_price=Decimal(mrp) if mrp else None,
+        )
+        if app_price:
+            Product.objects.filter(pk=product.pk).update(app_price=Decimal(app_price))
+        return product
+
+    def test_deals_rank_by_the_app_saving(self, api_client, retailer, customer):
+        no_app_saving = self._product(retailer, "Atta", "90", mrp="100", app_price="100")
+        app_only_deal = self._product(retailer, "Dal", "100", mrp="100", app_price="80")
+        store_deal = self._product(retailer, "Rice", "95", mrp="100")
+        api_client.force_authenticate(user=customer)
+        resp = api_client.get(f"/api/products/retailer/{retailer.id}/deals-of-the-day/")
+        assert resp.status_code == 200
+        ids = [row["id"] for row in resp.data]
+        assert ids == [app_only_deal.id, store_deal.id]
+        assert no_app_saving.id not in ids
+
+    def test_budget_buys_use_the_app_price(self, api_client, retailer, customer):
+        dearer_in_app = self._product(retailer, "Ghee", "95", app_price="120")
+        cheaper_in_app = self._product(retailer, "Oil", "120", app_price="95")
+        plain = self._product(retailer, "Salt", "50")
+        api_client.force_authenticate(user=customer)
+        base = f"/api/products/retailer/{retailer.id}/budget-buys/"
+        assert [row["id"] for row in api_client.get(base).data] == [plain.id, cheaper_in_app.id]
+        assert [row["id"] for row in api_client.get(base, {"max_price": "60"}).data] == [plain.id]
+        assert dearer_in_app.id not in {row["id"] for row in api_client.get(base, {"max_price": "100"}).data}
+
+    def test_list_price_filters_and_sort_use_the_app_price(self, api_client, retailer, customer):
+        dearer_in_app = self._product(retailer, "Ghee", "95", app_price="120")
+        cheaper_in_app = self._product(retailer, "Oil", "120", app_price="95")
+        plain = self._product(retailer, "Salt", "50")
+        api_client.force_authenticate(user=customer)
+        base = f"/api/products/retailer/{retailer.id}/"
+        assert _ids(api_client.get(base, {"min_price": "90", "max_price": "99"})) == {cheaper_in_app.id}
+        ordered = [row["id"] for row in _rows(api_client.get(base, {"ordering": "-price"}))]
+        assert ordered == [dearer_in_app.id, cheaper_in_app.id, plain.id]

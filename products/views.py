@@ -40,7 +40,6 @@ from .serializers import (
     ProductSearchSerializer,
     cache_group_siblings,
     fractional_children_payload,
-    json_qty,
     safe_group_variants_payload,
 )
 from retailers.models import OrgAuditLog, RetailerProfile
@@ -318,6 +317,11 @@ def _search_limit(request):
     if limit < 1:
         raise ValidationError({'limit': ['Must be at least 1.']})
     return min(limit, SEARCH_LIMIT_MAX)
+
+
+def _app_list_price():
+    """The price the app sells at (OE-106): app_price, else the store price."""
+    return Coalesce('app_price', 'price')
 
 
 class ProductPagination(PageNumberPagination):
@@ -1450,7 +1454,9 @@ def get_retailer_products_public(request, retailer_id):
             'retailer', 'category', 'brand', 'master_product'
         ).annotate(
             average_rating_annotated=Avg('reviews__rating'),
-            review_count_annotated=Count('reviews')
+            review_count_annotated=Count('reviews'),
+            # Price filters and sorting use the price this list shows (the app price).
+            app_list_price=_app_list_price(),
         ).filter(
             retailer=retailer,
             is_active=True,
@@ -1532,13 +1538,13 @@ def get_retailer_products_public(request, retailer_id):
         # Malformed bounds are ignored, as before; nan / inf count as malformed.
         if min_price:
             try:
-                products = products.filter(price__gte=decimal_value(min_price, 'min_price'))
+                products = products.filter(app_list_price__gte=decimal_value(min_price, 'min_price'))
             except ValidationError:
                 pass
 
         if max_price:
             try:
-                products = products.filter(price__lte=decimal_value(max_price, 'max_price'))
+                products = products.filter(app_list_price__lte=decimal_value(max_price, 'max_price'))
             except ValidationError:
                 pass
 
@@ -1556,7 +1562,7 @@ def get_retailer_products_public(request, retailer_id):
         # Ordering
         ordering = request.query_params.get('ordering', '-created_at')
         if ordering in ['name', '-name', 'price', '-price', 'created_at', '-created_at']:
-            products = products.order_by(ordering)
+            products = products.order_by(ordering.replace('price', 'app_list_price'))
 
         # Pre-fetch active offers for N+1 optimization in serializer
         from offers.models import Offer
@@ -1889,13 +1895,8 @@ def get_product_detail_public(request, retailer_id, product_id):
                 'wishlisted_product_ids': wishlisted_product_ids
             }
         )
-        data = serializer.data
-        if product.track_inventory:
-            # Expired batch stock cannot be sold (OE-149), so the customer page shows the
-            # stock it can actually sell and treats expired-only stock as out of stock (KAN-63).
-            data['quantity'] = json_qty(product.saleable_quantity())
-            data['is_in_stock'] = product.is_saleable_in_stock()
-        return Response(data, status=status.HTTP_200_OK)
+        # Saleable stock and app-sellable batches come from show_customer_stock (app channel).
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
     except Http404:
         raise
@@ -3787,15 +3788,21 @@ def get_deals_of_the_day(request, retailer_id):
     """
     try:
         retailer = get_object_or_404(RetailerProfile.objects.public(), id=retailer_id)
+        # A deal is what the customer saves at the app price; the stored
+        # discount_percentage is off the shop counter price (OE-106).
         products = Product.objects.filter(
             retailer=retailer,
             is_active=True,
             is_available=True,
-            discount_percentage__gt=0
+        ).annotate(
+            app_list_price=_app_list_price(),
+        ).filter(
+            original_price__gt=F('app_list_price'),
         ).select_related('master_product', 'category', 'brand', 'retailer').annotate(
             average_rating_annotated=Avg('reviews__rating'),
-            review_count_annotated=Count('reviews')
-        ).order_by('-discount_percentage')[:10]
+            review_count_annotated=Count('reviews'),
+            app_discount=(F('original_price') - F('app_list_price')) / F('original_price'),
+        ).order_by('-app_discount')[:10]
 
         from offers.models import Offer
         from django.utils import timezone
@@ -3829,15 +3836,19 @@ def get_budget_buys(request, retailer_id):
             money_value(raw_max_price, 'max_price')
             if raw_max_price not in (None, '') else Decimal('99')
         )
+        # Budget is judged on the price the customer pays: the app price (OE-106).
         products = Product.objects.filter(
             retailer=retailer,
             is_active=True,
             is_available=True,
-            price__lte=limit_price
+        ).annotate(
+            app_list_price=_app_list_price(),
+        ).filter(
+            app_list_price__lte=limit_price
         ).select_related('master_product', 'category', 'brand', 'retailer').annotate(
             average_rating_annotated=Avg('reviews__rating'),
             review_count_annotated=Count('reviews')
-        ).order_by('price')[:10]
+        ).order_by('app_list_price')[:10]
 
         from offers.models import Offer
         from django.utils import timezone

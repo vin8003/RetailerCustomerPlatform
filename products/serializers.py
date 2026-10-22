@@ -103,6 +103,26 @@ class PurchaseMarginReadMixin:
         return data
 
 
+def show_customer_stock(data, product):
+    """
+    App callers see the stock they can buy (OE-149 / KAN-63): ``quantity`` is saleable
+    stock (expired batches left out; pack children follow their parent), and batch rows
+    the app may not sell (expired, or show_on_app off) are dropped.
+    """
+    if product.track_inventory and 'quantity' in data:
+        data['quantity'] = json_qty(product.saleable_quantity())
+    if 'is_in_stock' in data:
+        data['is_in_stock'] = product.is_saleable_in_stock()
+    batches = data.get('batches')
+    if isinstance(batches, list):
+        data['batches'] = [
+            row for row in batches
+            if not isinstance(row, dict)
+            or (row.get('show_on_app', True) and not row.get('is_expired'))
+        ]
+    return data
+
+
 class SaleableQuantityReadMixin:
     """Retailer/POS reads expose saleable qty; customer/public omit the field."""
 
@@ -120,6 +140,8 @@ class SaleableQuantityReadMixin:
         data = super().to_representation(instance)
         if not self._include_saleable_quantity():
             data.pop('saleable_quantity', None)
+            if channel_from_context(self.context) == CHANNEL_APP:
+                show_customer_stock(data, instance)
         elif 'is_in_stock' in data:
             # Same source as saleable_quantity, so expired-only stock is not "in stock".
             data['is_in_stock'] = instance.is_saleable_in_stock()
@@ -276,10 +298,13 @@ def safe_group_variants_payload(obj, context):
 
 
 class GroupVariantsListSerializer(serializers.ListSerializer):
-    """Prefetch group siblings once for a multi-product payload."""
+    """Prefetch group siblings (and app stock) once for a multi-product payload."""
 
     def to_representation(self, data):
         products = list(data)
+        if channel_from_context(self.context) == CHANNEL_APP:
+            # App rows report saleable stock: one grouped batch sum for the whole page.
+            Product.cache_saleable_quantities(products)
         if (
             self.context.get('include_group_variants')
             and self.context.get('group_siblings_by_key') is None

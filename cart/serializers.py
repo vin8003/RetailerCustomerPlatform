@@ -47,7 +47,12 @@ class CartItemSerializer(serializers.ModelSerializer):
         if not obj.product.track_inventory:
             return 99999
 
-        qty = obj.batch.quantity if obj.batch else obj.product.quantity
+        # The stock this customer can still buy, the same figure add/update check (OE-149):
+        # expired batches do not count, and a pack child sells from its parent's stock.
+        if obj.batch:
+            qty = Decimal('0') if obj.batch.is_expired() else obj.batch.quantity
+        else:
+            qty = obj.product.saleable_quantity()
         if qty is not None:
             # If it's a whole number (e.g. 10.000), return as int 10
             # If it's a fractional number (e.g. 10.500), return 10.5

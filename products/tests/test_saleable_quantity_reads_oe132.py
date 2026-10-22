@@ -215,7 +215,9 @@ class TestSaleableQuantityRetailerReads:
         assert public.status_code == status.HTTP_200_OK
         row = _row_by_id(public.data, product.id)
         assert "saleable_quantity" not in row
-        assert _qty(row["quantity"]) == Decimal("13.000")
+        # Customer rows show the stock the app can sell (OE-149), as the customer detail
+        # does: the 8 expired units are on hand but not for sale.
+        assert _qty(row["quantity"]) == Decimal("5.000")
 
     def test_unauthenticated_and_customer_denied(self, api_client):
         owner, shop = _make_retailer("oe132_auth_own", "OE132 Auth Shop")
