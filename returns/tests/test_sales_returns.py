@@ -123,7 +123,7 @@ class TestSalesReturns:
         order_item.tax_type = "IGST"
         order_item.unit_price = Decimal("118.00")
         order_item.save()
-        product.hsn_code = "DIFFERENT"
+        product.hsn_code = "99999999"  # 8 chars: PostgreSQL enforces max_length
         product.gst_rate = Decimal("5.00")
         product.save()
 

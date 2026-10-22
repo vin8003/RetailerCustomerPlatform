@@ -231,7 +231,9 @@ def apply_pending_order_redeem(order, otp_code=None, requested_points=None):
 
     with transaction.atomic():
         locked = (
-            Order.objects.select_for_update()
+            # customer is nullable (guest orders), so the join is outer; PostgreSQL
+            # refuses FOR UPDATE on that side. Lock the order row only.
+            Order.objects.select_for_update(of=('self',))
             .select_related('customer', 'retailer')
             .get(pk=order.pk)
         )
