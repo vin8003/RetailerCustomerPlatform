@@ -57,6 +57,7 @@ def get_frequently_bought_together(request, retailer_id):
         if not seed_ids:
             return Response([], status=status.HTTP_200_OK)
 
+        from products.customer_stock import customer_in_stock_q
         from products.models import Product
         from products.serializers import ProductListSerializer
         from orders.models import OrderItem
@@ -77,7 +78,7 @@ def get_frequently_bought_together(request, retailer_id):
             is_active=True,
             is_available=True,
         ).exclude(id__in=seed_ids)
-        catalog = catalog.filter(Q(track_inventory=False) | Q(quantity__gt=0))
+        catalog = catalog.filter(customer_in_stock_q())
 
         affinity = Q()
         if category_ids:

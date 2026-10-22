@@ -51,6 +51,22 @@ class TestCustomerHidesExpiredOnlyStock:
         api_client.force_authenticate(user=customer)
         assert today.id in _ids(api_client.get(f"/api/products/retailer/{retailer.id}/"))
 
+    def test_expired_only_product_is_not_suggested_as_frequently_bought(
+        self, api_client, retailer, customer
+    ):
+        seed = Product.objects.create(retailer=retailer, name="Milk", price=Decimal("56"), quantity=Decimal("9"), product_group="dairy")
+        expired = _batch_product(retailer, "Curd", -2)
+        fresh = _batch_product(retailer, "Paneer", 5)
+        Product.objects.filter(retailer=retailer).update(product_group="dairy")
+        api_client.force_authenticate(user=customer)
+        resp = api_client.get(
+            f"/api/products/retailer/{retailer.id}/frequently-bought-together/", {"product_ids": seed.id}
+        )
+        assert resp.status_code == 200
+        ids = {row["id"] for row in resp.data}
+        assert fresh.id in ids
+        assert expired.id not in ids
+
     def test_retailer_still_sees_expired_only_product(self, api_client, retailer, retailer_user):
         expired = _batch_product(retailer, "Curd", -2)
         api_client.force_authenticate(user=retailer_user)
