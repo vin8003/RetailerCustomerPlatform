@@ -11,7 +11,15 @@ from unittest.mock import patch
 import pytest
 
 from orders.models import Order, OrderItem
-from products.models import Product, ProductBatch, ProductInventoryLog, shop_today
+from products.models import (
+    Product,
+    ProductBatch,
+    ProductInventoryLog,
+    PurchaseInvoice,
+    PurchaseItem,
+    SupplierLedger,
+    shop_today,
+)
 from retailers.models import RetailerCustomerMapping, Supplier
 from retailers.organization import ensure_organization_for_profile
 from returns.models import PurchaseReturn, SalesReturn
@@ -209,6 +217,105 @@ class TestReturnsRefuseBadLines:
         api_client.force_authenticate(user=retailer_user)
         resp = api_client.get("/api/returns/purchase/get_invoice_items/", {"invoice_id": "x"})
         assert resp.status_code == 400
+
+
+@pytest.mark.django_db
+class TestReturnsFollowTheBill:
+    """The Return button on a purchase bill sends no supplier_id: the bill names the supplier."""
+
+    def _bill(self, retailer, product, supplier_name="Agro"):
+        supplier = Supplier.objects.create(retailer=retailer, company_name=supplier_name)
+        invoice = PurchaseInvoice.objects.create(
+            retailer=retailer, supplier=supplier, invoice_number=f"{supplier_name}-1",
+            invoice_date=shop_today(), total_amount=Decimal("600.00"),
+        )
+        line = PurchaseItem.objects.create(
+            invoice=invoice, product=product, quantity=10, purchase_price=Decimal("60.00"), total=Decimal("600.00"),
+        )
+        return supplier, invoice, line
+
+    def _purchase_return(self, api_client, user, payload):
+        api_client.force_authenticate(user=user)
+        return api_client.post("/api/returns/purchase/", payload, format="json")
+
+    def _bill_line(self, product, bill_line, **extra):
+        return {
+            "product_id": product.id, "purchase_item_id": bill_line.id, "batch_id": None,
+            "quantity": 2, "purchase_price": "60.00", **extra,
+        }
+
+    def test_return_from_the_bill_goes_to_its_supplier(self, api_client, retailer, retailer_user, product):
+        supplier, invoice, bill_line = self._bill(retailer, product)
+        resp = self._purchase_return(api_client, retailer_user, {
+            "invoice_id": invoice.id, "items": [self._bill_line(product, bill_line)], "notes": "",
+        })
+        assert resp.status_code == 201, resp.data
+        purchase_return = PurchaseReturn.objects.get()
+        assert purchase_return.supplier == supplier
+        assert purchase_return.invoice == invoice
+        assert SupplierLedger.objects.get(transaction_type="DEBIT").supplier == supplier
+        product.refresh_from_db()
+        assert product.quantity == 48
+
+    def test_matching_supplier_id_is_still_accepted(self, api_client, retailer, retailer_user, product):
+        supplier, invoice, bill_line = self._bill(retailer, product)
+        resp = self._purchase_return(api_client, retailer_user, {
+            "supplier_id": supplier.id, "invoice_id": invoice.id, "items": [self._bill_line(product, bill_line)],
+        })
+        assert resp.status_code == 201, resp.data
+
+    def test_supplier_other_than_the_bills_is_refused(self, api_client, retailer, retailer_user, product):
+        _supplier, invoice, bill_line = self._bill(retailer, product)
+        other = Supplier.objects.create(retailer=retailer, company_name="Other Traders")
+        resp = self._purchase_return(api_client, retailer_user, {
+            "supplier_id": other.id, "invoice_id": invoice.id, "items": [self._bill_line(product, bill_line)],
+        })
+        assert resp.status_code == 400
+        assert resp.data == {"error": "This bill is from a different supplier"}
+        assert not PurchaseReturn.objects.exists()
+        assert not SupplierLedger.objects.filter(supplier=other).exists()
+        product.refresh_from_db()
+        assert product.quantity == 50
+
+    def test_manual_return_still_needs_a_supplier(self, api_client, retailer, retailer_user, product):
+        resp = self._purchase_return(api_client, retailer_user, {
+            "items": [{"product_id": product.id, "quantity": 1, "purchase_price": "60.00"}],
+        })
+        assert resp.status_code == 400
+        assert resp.data == {"error": "supplier_id is required"}
+
+    def test_bill_line_must_be_the_same_product(self, api_client, retailer, retailer_user, product, product2):
+        _supplier, invoice, bill_line = self._bill(retailer, product)
+        resp = self._purchase_return(api_client, retailer_user, {
+            "invoice_id": invoice.id, "items": [self._bill_line(product2, bill_line)],
+        })
+        assert resp.status_code == 400
+        assert resp.data == {"error": "Test Wheat Flour is not the product on that bill line"}
+        assert not PurchaseReturn.objects.exists()
+        product2.refresh_from_db()
+        assert product2.quantity == 30
+
+    def test_order_line_must_be_the_same_product(
+        self, api_client, retailer, retailer_user, customer, product, product2
+    ):
+        order = Order.objects.create(
+            retailer=retailer, customer=customer, source="app", status="delivered", subtotal=Decimal("90"),
+            total_amount=Decimal("90"), payment_mode="cash", delivery_mode="pickup",
+        )
+        rice = OrderItem.objects.create(
+            order=order, product=product, product_name=product.name, product_price=product.price,
+            quantity=1, unit_price=product.price, total_price=product.price,
+        )
+        api_client.force_authenticate(user=retailer_user)
+        resp = api_client.post("/api/returns/sales/", {
+            "order_id": order.id, "refund_payment_mode": "cash",
+            "items": [{"product_id": product2.id, "order_item_id": rice.id, "quantity": 1, "refund_unit_price": "50.00"}],
+        }, format="json")
+        assert resp.status_code == 400
+        assert resp.data == {"error": "Test Wheat Flour is not the product on that order line"}
+        assert not SalesReturn.objects.exists()
+        product2.refresh_from_db()
+        assert product2.quantity == 30
 
 
 @pytest.mark.django_db

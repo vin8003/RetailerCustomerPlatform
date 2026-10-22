@@ -172,6 +172,11 @@ class SalesReturnViewSet(viewsets.ModelViewSet):
             order_item = None
             if line['link_id']:
                 order_item = get_object_or_404(OrderItem, id=line['link_id'], order=order)
+                if order_item.product_id != product.id:
+                    return Response(
+                        {'error': f'{product.name} is not the product on that order line'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
 
             processed_items.append({
                 'product': product,
@@ -250,16 +255,28 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
             return Response({'error': 'No items provided for return'}, status=status.HTTP_400_BAD_REQUEST)
         try:
             lines = _return_lines(items_data, 'purchase_price', 'purchase_item_id')
-            supplier_id = id_value(supplier_id, 'supplier_id')
+            if supplier_id:
+                supplier_id = id_value(supplier_id, 'supplier_id')
             if invoice_id:
                 invoice_id = id_value(invoice_id, 'invoice_id')
         except ValidationError as exc:
             return Response({'error': error_message(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
-        supplier = get_object_or_404(Supplier, id=supplier_id, retailer=retailer)
         invoice = None
         if invoice_id:
             invoice = get_object_or_404(PurchaseInvoice, id=invoice_id, retailer=retailer)
+        # A return against a bill goes to that bill's supplier. The bill's own Return button
+        # sends no supplier_id, and a different one would debit the wrong supplier's ledger.
+        if invoice is not None and invoice.supplier_id:
+            if supplier_id and supplier_id != invoice.supplier_id:
+                return Response(
+                    {'error': 'This bill is from a different supplier'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            supplier_id = invoice.supplier_id
+        if not supplier_id:
+            return Response({'error': 'supplier_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+        supplier = get_object_or_404(Supplier, id=supplier_id, retailer=retailer)
 
         # Prepare items data
         processed_items = []
@@ -272,6 +289,11 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
             purchase_item = None
             if line['link_id']:
                 purchase_item = get_object_or_404(PurchaseItem, id=line['link_id'], invoice=invoice)
+                if purchase_item.product_id != product.id:
+                    return Response(
+                        {'error': f'{product.name} is not the product on that bill line'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
 
             processed_items.append({
                 'product': product,
