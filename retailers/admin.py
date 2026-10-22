@@ -81,8 +81,8 @@ class RetailerProfileAdmin(admin.ModelAdmin):
     """
     Admin configuration for retailer profiles
     """
-    list_display = ['shop_name', 'organization', 'user', 'city', 'state', 'is_verified', 'is_active', 'average_rating', 'created_at']
-    list_filter = ['is_verified', 'is_active', 'city', 'state', 'offers_delivery', 'offers_pickup']
+    list_display = ['shop_name', 'organization', 'user', 'city', 'state', 'verification_status', 'is_verified', 'is_active', 'average_rating', 'created_at']
+    list_filter = ['verification_status', 'is_verified', 'is_active', 'city', 'state', 'offers_delivery', 'offers_pickup']
     search_fields = ['shop_name', 'user__username', 'city', 'state', 'business_type', 'organization__name']
     ordering = ['-created_at']
     readonly_fields = ['average_rating', 'total_ratings', 'created_at', 'updated_at']
@@ -104,7 +104,7 @@ class RetailerProfileAdmin(admin.ModelAdmin):
             'fields': ('offers_delivery', 'offers_pickup', 'delivery_radius', 'minimum_order_amount')
         }),
         ('Status', {
-            'fields': ('is_verified', 'is_active', 'average_rating', 'total_ratings')
+            'fields': ('verification_status', 'rejection_reason', 'is_verified', 'is_active', 'average_rating', 'total_ratings')
         }),
     )
 

@@ -16,6 +16,8 @@ def _make_retailer(username, shop_name):
         is_active=True,
     )
     return RetailerProfile.objects.create(
+        is_verified=True,
+        verification_status='approved',
         user=owner,
         shop_name=shop_name,
         address_line1="1 Shop St",

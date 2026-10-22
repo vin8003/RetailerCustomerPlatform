@@ -515,6 +515,12 @@ class OrgNotificationDelivery(models.Model):
         )
 
 
+class RetailerProfileQuerySet(models.QuerySet):
+    def public(self):
+        """Retailers visible to customers: live and approved by a platform admin."""
+        return self.filter(is_active=True, is_verified=True, verification_status='approved')
+
+
 class RetailerProfile(models.Model):
     """
     Extended profile for retailer users (operational shop / location record).
@@ -593,6 +599,17 @@ class RetailerProfile(models.Model):
     )
     
     # Status and ratings
+    VERIFICATION_STATUS_CHOICES = [
+        ('pending', 'Pending Verification'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+    verification_status = models.CharField(
+        max_length=20,
+        choices=VERIFICATION_STATUS_CHOICES,
+        default='pending'
+    )
+    rejection_reason = models.TextField(blank=True, null=True)
     is_verified = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
     average_rating = models.DecimalField(max_digits=3, decimal_places=2, default=0)
@@ -613,6 +630,8 @@ class RetailerProfile(models.Model):
         help_text="Paper size for thermal receipts"
     )
     
+    objects = RetailerProfileQuerySet.as_manager()
+
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

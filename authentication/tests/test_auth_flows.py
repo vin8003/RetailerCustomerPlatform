@@ -28,7 +28,8 @@ class TestAuthFlows:
         user = User.objects.get(username="new_retailer")
         assert hasattr(user, 'retailer_profile')
 
-    def test_retailer_signup_invalid_access_code(self, api_client):
+    def test_retailer_signup_ignores_legacy_access_code(self, api_client):
+        """Signup is open; a legacy access_code is accepted but not required or checked."""
         url = reverse('retailer_signup')
         payload = {
             "username": "fake_retailer",
@@ -37,9 +38,11 @@ class TestAuthFlows:
             "access_code": "WRONG_CODE"
         }
         response = api_client.post(url, payload)
-        
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
-        assert response.data['error'] == 'Invalid Access Code'
+
+        assert response.status_code == status.HTTP_201_CREATED, response.data
+        profile = User.objects.get(username="fake_retailer").retailer_profile
+        assert profile.verification_status == 'pending'
+        assert not profile.is_active
 
     def test_customer_signup_success(self, api_client, mock_email_send):
         url = reverse('customer_signup')

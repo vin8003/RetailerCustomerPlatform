@@ -39,6 +39,7 @@ from orders.access import (
     retailer_location_ids,
     retailer_served_location_ids,
 )
+from common.meta_tracking import track_meta_purchase
 
 logger = logging.getLogger(__name__)
 _patch_order_list_rating()
@@ -94,6 +95,7 @@ def place_order(request):
 
             order = serializer.save()
             order = order_detail_queryset().get(pk=order.pk)
+            track_meta_purchase(order, request)
 
             # Notify Retailer
             if order.retailer and order.retailer.user:
@@ -804,6 +806,7 @@ def modify_order(request, order_id):
                         pass
                 
                 # Fetch fresh detail to return
+                order.refresh_from_db()
                 detail_serializer = OrderDetailSerializer(order)
                 return Response(detail_serializer.data)
             
