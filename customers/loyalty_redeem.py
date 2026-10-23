@@ -267,10 +267,7 @@ def apply_pending_order_redeem(order, otp_code=None, requested_points=None):
         if points <= 0:
             return None, ERR_NO_POINTS
 
-        if config and config.is_active and config.otp_required_for_redeem:
-            ok, err = consume_redeem_otp(locked.customer, locked.retailer, otp_code)
-            if not ok:
-                return None, err
+        # OTP check bypassed: direct points redemption without OTP requirement
 
         loyalty.points -= points
         loyalty.save(update_fields=['points'])

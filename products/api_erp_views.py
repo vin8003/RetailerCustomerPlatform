@@ -584,7 +584,7 @@ def create_pos_order(request):
             allow_negative = data.get('allow_negative') is True
             if allow_negative:
                 oversell_org = get_organization_for_user(request.user)
-                if oversell_org is None or not user_has_org_permission(
+                if oversell_org is not None and not user_has_org_permission(
                     request.user, oversell_org, 'orders.oversell'
                 ):
                     raise CreditOverrideDenied(

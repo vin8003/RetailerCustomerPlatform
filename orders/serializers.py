@@ -730,21 +730,7 @@ class OrderCreateSerializer(serializers.Serializer):
             except RetailerProfile.DoesNotExist:
                 retailer = None
             if retailer is not None:
-                config = RetailerRewardConfig.objects.filter(retailer=retailer).first()
-                has_points = CustomerLoyalty.objects.filter(
-                    customer=customer, retailer=retailer, points__gt=0
-                ).exists()
-                if (
-                    config
-                    and config.is_active
-                    and config.otp_required_for_redeem
-                    and has_points
-                ):
-                    ok, err = peek_redeem_otp(
-                        customer, retailer, data.get('redeem_otp')
-                    )
-                    if not ok:
-                        raise serializers.ValidationError({'redeem_otp': err})
+                pass
 
         return data
     
@@ -1065,16 +1051,7 @@ class OrderCreateSerializer(serializers.Serializer):
                     raise serializers.ValidationError(
                         {'use_reward_points': 'Not enough reward points'}
                     )
-                if (
-                    redeem_config
-                    and redeem_config.is_active
-                    and redeem_config.otp_required_for_redeem
-                ):
-                    ok, err = consume_redeem_otp(
-                        customer, retailer, validated_data.get('redeem_otp')
-                    )
-                    if not ok:
-                        raise serializers.ValidationError({'redeem_otp': err})
+                # OTP check bypassed: direct points redemption without OTP requirement
                 loyalty.points -= points_to_redeem
                 loyalty.save()
 
