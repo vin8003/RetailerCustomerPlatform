@@ -165,7 +165,7 @@ class TestGroupVariantsRetailerList:
 
         api_client.force_authenticate(user=owner)
         detail = api_client.get(reverse("get_product_detail", args=[rice_1.id]))
-        listed = api_client.get(reverse("get_retailer_products"))
+        listed = api_client.get(reverse("get_retailer_products"), {"include_group_variants": "true"})
 
         assert detail.status_code == status.HTTP_200_OK
         assert listed.status_code == status.HTTP_200_OK
@@ -189,7 +189,7 @@ class TestGroupVariantsRetailerList:
         )
 
         api_client.force_authenticate(user=owner)
-        listed = api_client.get(reverse("get_retailer_products"))
+        listed = api_client.get(reverse("get_retailer_products"), {"include_group_variants": "true"})
         detail_lone = api_client.get(reverse("get_product_detail", args=[lone.id]))
         detail_solo = api_client.get(
             reverse("get_product_detail", args=[only_member.id])
@@ -207,8 +207,8 @@ class TestGroupVariantsRetailerList:
         product, _sibling = _make_group(shop, category, "OE192 Auth", "oe192-auth")
         customer = _make_customer("oe192_auth_cust")
 
-        anon_list = api_client.get(reverse("get_retailer_products"))
-        anon_search = api_client.get(reverse("search_products"))
+        anon_list = api_client.get(reverse("get_retailer_products"), {"include_group_variants": "true"})
+        anon_search = api_client.get(reverse("search_products"), {"include_group_variants": "true"})
         anon_pos = api_client.get(
             reverse("get_retailer_products"), {"no_page": "true"}
         )
@@ -217,8 +217,8 @@ class TestGroupVariantsRetailerList:
         assert anon_pos.status_code == status.HTTP_401_UNAUTHORIZED
 
         api_client.force_authenticate(user=customer)
-        cust_list = api_client.get(reverse("get_retailer_products"))
-        cust_search = api_client.get(reverse("search_products"))
+        cust_list = api_client.get(reverse("get_retailer_products"), {"include_group_variants": "true"})
+        cust_search = api_client.get(reverse("search_products"), {"include_group_variants": "true"})
         cust_pos = api_client.get(
             reverse("get_retailer_products"), {"no_page": "true"}
         )
@@ -235,7 +235,7 @@ class TestGroupVariantsRetailerList:
         b1, b2 = _make_group(shop_b, category_b, "OE192 B", "shared-grain")
 
         api_client.force_authenticate(user=owner_b)
-        listed = api_client.get(reverse("get_retailer_products"))
+        listed = api_client.get(reverse("get_retailer_products"), {"include_group_variants": "true"})
         detail = api_client.get(reverse("get_product_detail", args=[a1.id]))
 
         assert listed.status_code == status.HTTP_200_OK
@@ -259,7 +259,7 @@ class TestGroupVariantsRetailerList:
 
         api_client.force_authenticate(user=owner)
         with CaptureQueriesContext(connection) as list_ctx:
-            listed = api_client.get(reverse("get_retailer_products"))
+            listed = api_client.get(reverse("get_retailer_products"), {"include_group_variants": "true"})
 
         assert listed.status_code == status.HTTP_200_OK
         lookups = _group_sibling_lookups(list_ctx.captured_queries)
@@ -288,7 +288,7 @@ class TestGroupVariantsSearchAndPos:
         api_client.force_authenticate(user=owner)
         detail = api_client.get(reverse("get_product_detail", args=[rice_1.id]))
         search = api_client.get(
-            reverse("search_products"), {"search": "OE192 Atta 1kg"}
+            reverse("search_products"), {"search": "OE192 Atta 1kg", "include_group_variants": "true"}
         )
         pos = api_client.get(
             reverse("get_retailer_products"),
@@ -312,7 +312,7 @@ class TestGroupVariantsSearchAndPos:
 
         api_client.force_authenticate(user=owner)
         search = api_client.get(
-            reverse("search_products"), {"search": "OE192 POS Lone"}
+            reverse("search_products"), {"search": "OE192 POS Lone", "include_group_variants": "true"}
         )
         pos = api_client.get(
             reverse("get_retailer_products"), {"no_page": "true"}
@@ -332,7 +332,7 @@ class TestGroupVariantsSearchAndPos:
 
         api_client.force_authenticate(user=owner_b)
         search = api_client.get(
-            reverse("search_products"), {"search": "OE192 POSB"}
+            reverse("search_products"), {"search": "OE192 POSB", "include_group_variants": "true"}
         )
         pos = api_client.get(
             reverse("get_retailer_products"),
@@ -360,7 +360,7 @@ class TestGroupVariantsSearchAndPos:
 
         api_client.force_authenticate(user=owner)
         with CaptureQueriesContext(connection) as search_ctx:
-            search = api_client.get(reverse("search_products"))
+            search = api_client.get(reverse("search_products"), {"include_group_variants": "true"})
 
         assert search.status_code == status.HTTP_200_OK
         lookups = _group_sibling_lookups(search_ctx.captured_queries)
