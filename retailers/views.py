@@ -364,14 +364,18 @@ def list_retailers(request):
         min_rating = request.query_params.get('min_rating')
         has_referral = request.query_params.get('has_referral')
         
+        # City/state/pincode are where a customer is when we have no pin for
+        # them. With coordinates they only decide for shops that have no pin
+        # themselves (see the radius block below).
+        place_q = Q()
         if city:
-            queryset = queryset.filter(city__iexact=city)
+            place_q &= Q(city__iexact=city)
         
         if state:
-            queryset = queryset.filter(_state_filter_q(state))
+            place_q &= _state_filter_q(state)
         
         if pincode:
-            queryset = queryset.filter(pincode=pincode)
+            place_q &= Q(pincode=pincode)
         
         if category:
             queryset = queryset.filter(categories__category__name__icontains=category)
@@ -416,57 +420,45 @@ def list_retailers(request):
             request.query_params.get('filter_by_radius'), default=True
         )
 
+        from retailers.delivery_pricing import (
+            has_coordinates,
+            retailer_ids_within_radius,
+            retailer_ids_without_coordinates,
+        )
+
+        coords = None
         if lat and lng:
             try:
-                lat = float(lat)
-                lng = float(lng)
+                coords = (float(lat), float(lng))
             except ValueError:
-                lat = lng = None
+                coords = None
+            if coords is not None and not has_coordinates(*coords):
+                coords = None
 
-            if lat is not None and lng is not None:
-                request.user_location = (lat, lng)
+        if coords is not None:
+            request.user_location = coords
 
-                if filter_by_radius:
-                    # Filter by distance and serviceable pincodes
-                    filtered_retailer_ids = []
-                    for retailer in queryset:
-                        # 1. Check Pincode Specific Restriction
-                        if user_pincode and isinstance(retailer.serviceable_pincodes, list):
-                            if user_pincode in retailer.serviceable_pincodes:
-                                filtered_retailer_ids.append(retailer.id)
-                                continue
-                            elif retailer.pincode != user_pincode and retailer.serviceable_pincodes:
-                                 # If pincodes are restricted and user's pincode is not in it, skip
-                                 # unless it's their own pincode (which is always serviceable?)
-                                 # Actually if they specify serviceable_pincodes, it overrides?
-                                 # Let's say: if serviceable_pincodes is set, it MUST be in it.
-                                 pass
-                        elif user_pincode and isinstance(retailer.serviceable_pincodes, str):
-                            if user_pincode == retailer.serviceable_pincodes:
-                                filtered_retailer_ids.append(retailer.id)
-                                continue
-                            elif retailer.pincode != user_pincode and retailer.serviceable_pincodes:
-                                 # If pincodes are restricted and user's pincode is not in it, skip
-                                 # unless it's their own pincode (which is always serviceable?)
-                                 # Actually if they specify serviceable_pincodes, it overrides?
-                                 # Let's say: if serviceable_pincodes is set, it MUST be in it.
-                                 pass
-
-                        # 2. Check Distance Restriction
-                        distance = retailer.get_distance_from(lat, lng)
-                        if distance is not None:
-                             # Use retailer's specific radius or default to 5km
-                             radius = retailer.delivery_radius or 5
-                             if distance <= radius:
-                                 filtered_retailer_ids.append(retailer.id)
-
-                    queryset = queryset.filter(id__in=filtered_retailer_ids)
-        elif user_pincode:
-            # If coordinates not provided but pincode is, filter by pincode
-            queryset = queryset.filter(
-                Q(pincode=user_pincode) | 
-                Q(serviceable_pincodes__contains=user_pincode)
-            )
+            if filter_by_radius:
+                # A shop with a pin is listed when the customer is inside its
+                # delivery radius. A shop without one cannot be measured, so the
+                # old place/pincode rules decide for it.
+                in_radius_ids, _ = retailer_ids_within_radius(queryset, *coords)
+                unpinned_ids = []
+                if place_q or user_pincode:
+                    unpinned_ids = retailer_ids_without_coordinates(
+                        queryset.filter(place_q), user_pincode=user_pincode
+                    )
+                queryset = queryset.filter(id__in=in_radius_ids + unpinned_ids)
+            else:
+                queryset = queryset.filter(place_q)
+        else:
+            queryset = queryset.filter(place_q)
+            if user_pincode:
+                # If coordinates not provided but pincode is, filter by pincode
+                queryset = queryset.filter(
+                    Q(pincode=user_pincode) |
+                    Q(serviceable_pincodes__contains=user_pincode)
+                )
         
         # Pagination
         paginator = RetailerPagination()
@@ -2213,6 +2205,53 @@ def list_fulfillment_slots(request, retailer_id):
             {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+@throttle_classes([FulfillmentSlotsThrottle])
+def get_delivery_quote(request, retailer_id):
+    """
+    Delivery fee and serviceability for a drop point (checkout preview).
+
+    Query: ``address_id`` (the signed-in customer's saved address) or
+    ``lat``/``lng``; optional ``order_total`` for the free-delivery threshold.
+    Order placement prices with the same function, so the preview matches.
+    """
+    from common.client_input import id_value
+    from customers.models import CustomerAddress
+    from retailers.delivery_pricing import quote_delivery
+
+    retailer = get_object_or_404(RetailerProfile.objects.public(), id=retailer_id)
+
+    lat = lng = None
+    address_id = request.query_params.get('address_id')
+    if address_id:
+        if not (request.user.is_authenticated and getattr(request.user, 'user_type', None) == 'customer'):
+            return Response(
+                {'error': 'Sign in as a customer to price a saved address'},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+        address = CustomerAddress.objects.filter(
+            id=id_value(address_id, 'address_id'), customer=request.user, is_active=True
+        ).first()
+        if address is None:
+            return Response({'error': 'Address not found'}, status=status.HTTP_404_NOT_FOUND)
+        lat, lng = address.latitude, address.longitude
+    elif request.query_params.get('lat') or request.query_params.get('lng'):
+        lat = decimal_value(request.query_params.get('lat'), 'lat')
+        lng = decimal_value(request.query_params.get('lng'), 'lng')
+
+    order_total = None
+    if request.query_params.get('order_total') not in (None, ''):
+        order_total = decimal_value(request.query_params.get('order_total'), 'order_total')
+
+    quote = quote_delivery(retailer, lat, lng, order_total=order_total)
+    body = quote.as_dict()
+    body['retailer_id'] = retailer.id
+    body['delivery_radius'] = str(retailer.delivery_radius)
+    body['free_delivery_threshold'] = str(retailer.free_delivery_threshold)
+    return Response(body, status=status.HTTP_200_OK)
 
 
 def _org_locations(org):

@@ -1,8 +1,13 @@
 from decimal import Decimal
 from django.db import models
 from django.conf import settings
-from django.core.validators import RegexValidator
+from django.core.validators import MinValueValidator, RegexValidator
 from common.utils import generate_upload_path, resize_image
+
+DELIVERY_FEE_MODE_CHOICES = [
+    ("flat", "Flat fee"),
+    ("distance", "Distance-based tiers"),
+]
 
 
 class Organization(models.Model):
@@ -584,11 +589,32 @@ class RetailerProfile(models.Model):
     offers_pickup = models.BooleanField(default=True)
     accepts_cod = models.BooleanField(default=True)
     accepts_upi = models.BooleanField(default=True)
-    delivery_radius = models.PositiveIntegerField(default=5)  # in kilometers
+    delivery_radius = models.PositiveIntegerField(
+        default=5,
+        help_text='Kilometres (straight line) the shop delivers to and is listed within',
+    )  # in kilometers
     serviceable_pincodes = models.JSONField(default=list, blank=True)  # List of pincodes
     minimum_order_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     delivery_charge = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     free_delivery_threshold = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    # Distance pricing (see retailers/delivery_pricing.py). 'flat' keeps delivery_charge.
+    delivery_fee_mode = models.CharField(
+        max_length=10,
+        choices=DELIVERY_FEE_MODE_CHOICES,
+        default='flat',
+    )
+    delivery_fee_tiers = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='[{"up_to_km": "3.00", "fee": "20.00"}, ...] in ascending km',
+    )
+    delivery_fee_per_km = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text='Charged per started km beyond the last tier (0 = last tier fee holds)',
+    )
     pickup_uncollected_hours = models.PositiveIntegerField(
         default=48,
         help_text='Hours after pickup-ready before uncollected orders expire and ATP is restored',
@@ -668,25 +694,9 @@ class RetailerProfile(models.Model):
         return ', '.join(filter(None, address_parts))
     
     def get_distance_from(self, lat, lng):
-        """Calculate distance from given coordinates"""
-        if not self.latitude or not self.longitude:
-            return None
-        
-        import math
-        
-        # Haversine formula
-        R = 6371  # Earth's radius in kilometers
-        
-        lat1, lon1 = math.radians(float(self.latitude)), math.radians(float(self.longitude))
-        lat2, lon2 = math.radians(lat), math.radians(lng)
-        
-        dlat = lat2 - lat1
-        dlon = lon2 - lon1
-        
-        a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
-        c = 2 * math.asin(math.sqrt(a))
-        
-        return R * c
+        """Haversine km from the shop to (lat, lng); None when either has no pin."""
+        from retailers.delivery_pricing import retailer_distance_km
+        return retailer_distance_km(self, lat, lng)
 
 
 class RetailerOperatingHours(models.Model):
