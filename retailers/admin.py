@@ -101,7 +101,11 @@ class RetailerProfileAdmin(admin.ModelAdmin):
             'fields': ('business_type', 'gst_number', 'pan_number')
         }),
         ('Service Settings', {
-            'fields': ('offers_delivery', 'offers_pickup', 'delivery_radius', 'minimum_order_amount')
+            'fields': (
+                'offers_delivery', 'offers_pickup', 'delivery_radius', 'minimum_order_amount',
+                'delivery_charge', 'free_delivery_threshold',
+                'delivery_fee_mode', 'delivery_fee_tiers', 'delivery_fee_per_km',
+            )
         }),
         ('Status', {
             'fields': ('verification_status', 'rejection_reason', 'is_verified', 'is_active', 'average_rating', 'total_ratings')

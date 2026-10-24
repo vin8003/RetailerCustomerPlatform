@@ -530,6 +530,7 @@ class RetailerProfileSerializer(serializers.ModelSerializer):
             'offers_delivery', 'offers_pickup', 'accepts_cod', 'accepts_upi',
             'delivery_radius', 'serviceable_pincodes', 'minimum_order_amount',
             'delivery_charge', 'free_delivery_threshold',
+            'delivery_fee_mode', 'delivery_fee_tiers', 'delivery_fee_per_km',
             'is_verified', 'verification_status', 'rejection_reason', 'is_active', 'average_rating', 'total_ratings',
             'is_reward_active', 'is_referral_enabled', 'referral_reward_points', 'min_referral_order_amount', 
             'cashback_percentage', 'loyalty_earning_type', 'loyalty_earning_value', 'loyalty_min_order_value',
@@ -647,6 +648,32 @@ class RetailerProfileUpdateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError('Pincode must be exactly 6 digits.')
         return value
 
+    def validate_delivery_fee_tiers(self, value):
+        from retailers.delivery_pricing import TierConfigError, normalize_tiers
+        try:
+            return normalize_tiers(value)
+        except TierConfigError as exc:
+            raise serializers.ValidationError(str(exc))
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+
+        def current(name):
+            if name in attrs:
+                return attrs[name]
+            if self.instance is not None:
+                return getattr(self.instance, name)
+            return None
+
+        if current('delivery_fee_mode') == 'distance':
+            tiers = current('delivery_fee_tiers') or []
+            per_km = current('delivery_fee_per_km') or 0
+            if not tiers and not per_km:
+                raise serializers.ValidationError({
+                    'delivery_fee_tiers': 'Add at least one distance tier or a per-km rate.'
+                })
+        return attrs
+
     class Meta:
         model = RetailerProfile
         fields = [
@@ -657,6 +684,7 @@ class RetailerProfileUpdateSerializer(serializers.ModelSerializer):
             'offers_delivery', 'offers_pickup', 'accepts_cod', 'accepts_upi',
             'delivery_radius', 'serviceable_pincodes', 'minimum_order_amount',
             'delivery_charge', 'free_delivery_threshold',
+            'delivery_fee_mode', 'delivery_fee_tiers', 'delivery_fee_per_km',
             'receipt_footer', 'show_gst_on_receipt', 'print_upi_qr_on_receipt', 'printer_size',
             'categories'
         ]
@@ -721,7 +749,9 @@ class RetailerListSerializer(serializers.ModelSerializer):
             'city', 'state', 'pincode', 'latitude', 'longitude',
             'average_rating', 'total_ratings',
             'offers_delivery', 'offers_pickup', 'delivery_radius',
-            'minimum_order_amount', 'categories', 'distance', 'is_currently_open', 'next_open_time'
+            'minimum_order_amount', 'delivery_charge', 'free_delivery_threshold',
+            'delivery_fee_mode', 'delivery_fee_tiers', 'delivery_fee_per_km',
+            'categories', 'distance', 'is_currently_open', 'next_open_time'
         ]
     
     def get_is_currently_open(self, obj):
@@ -741,6 +771,20 @@ class RetailerListSerializer(serializers.ModelSerializer):
             lat, lng = request.user_location
             return obj.get_distance_from(lat, lng)
         return None
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Delivery fee for the customer's location, when the list was asked
+        # with coordinates (null for shops without a pin: flat fee applies).
+        request = self.context.get('request')
+        data['delivery_fee_estimate'] = None
+        if request is not None and hasattr(request, 'user_location') and instance.offers_delivery:
+            from retailers.delivery_pricing import quote_delivery
+            lat, lng = request.user_location
+            quote = quote_delivery(instance, lat, lng)
+            if quote.deliverable:
+                data['delivery_fee_estimate'] = str(quote.base_fee)
+        return data
 
     def get_categories(self, obj):
         mappings = obj.categories.all()

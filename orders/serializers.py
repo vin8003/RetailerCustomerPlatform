@@ -307,6 +307,10 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     customer_average_rating = serializers.FloatField(source='customer.customer_profile.average_rating', read_only=True)
     retailer_delivery_charge = serializers.DecimalField(source='retailer.delivery_charge', max_digits=10, decimal_places=2, read_only=True)
     retailer_free_delivery_threshold = serializers.DecimalField(source='retailer.free_delivery_threshold', max_digits=10, decimal_places=2, read_only=True)
+    # The delivery fee this order's address prices at before the free-delivery
+    # threshold (distance tiers or flat), for the retailer's modify preview.
+    delivery_fee_before_free_delivery = serializers.SerializerMethodField()
+    delivery_distance_km = serializers.SerializerMethodField()
     
     applied_offers = serializers.SerializerMethodField()
     sales_returns = serializers.SerializerMethodField()
@@ -343,12 +347,29 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'has_customer_feedback', 'has_retailer_rating', 'feedback',
             'preparation_time_minutes', 'estimated_ready_time', 'expected_processing_start', 'customer_average_rating', 'source',
             'retailer_delivery_charge', 'retailer_free_delivery_threshold',
+            'delivery_fee_before_free_delivery', 'delivery_distance_km',
             'pickup_code', 'pickup_ready_at',
             'fulfillment_slot_start', 'fulfillment_slot_end',
             'delivery_info',
         ]
 
     fulfillment_slot_end = serializers.SerializerMethodField()
+
+    def _delivery_quote(self, obj):
+        if obj.delivery_mode != 'delivery':
+            return None
+        from retailers.delivery_pricing import quote_for_address
+        return quote_for_address(obj.retailer, obj.delivery_address, check_serviceable=False)
+
+    def get_delivery_fee_before_free_delivery(self, obj):
+        quote = self._delivery_quote(obj)
+        return str(quote.base_fee) if quote is not None else None
+
+    def get_delivery_distance_km(self, obj):
+        quote = self._delivery_quote(obj)
+        if quote is None or quote.distance_km is None:
+            return None
+        return str(quote.distance_km)
 
     def get_fulfillment_slot_end(self, obj):
         if not obj.fulfillment_slot_start:
@@ -587,6 +608,14 @@ class OrderCreateSerializer(serializers.Serializer):
                 raise serializers.ValidationError("This retailer does not accept Cash on Delivery.")
             if data['payment_mode'] == 'upi' and not retailer.accepts_upi:
                 raise serializers.ValidationError("This retailer does not accept UPI payments.")
+
+            if data['delivery_mode'] == 'delivery' and data.get('address_id'):
+                from retailers.delivery_pricing import quote_for_address
+                address = CustomerAddress.objects.filter(id=data['address_id']).first()
+                self._validated_address = address  # create() reuses it
+                quote = quote_for_address(retailer, address)
+                if not quote.deliverable:
+                    raise serializers.ValidationError({'address_id': [quote.reason]})
         except RetailerProfile.DoesNotExist:
             pass # Handled by other validators
 
@@ -779,21 +808,22 @@ class OrderCreateSerializer(serializers.Serializer):
         items_total = offer_results['discounted_total']
         total_points_offer = offer_results.get('total_points', 0)
         
-        delivery_fee = 0
+        delivery_fee = Decimal('0.00')
+        delivery_address = None
+        if validated_data.get('address_id'):
+            delivery_address = getattr(self, '_validated_address', None)
+            if delivery_address is None or delivery_address.id != validated_data['address_id']:
+                delivery_address = CustomerAddress.objects.get(id=validated_data['address_id'])
         if validated_data['delivery_mode'] == 'delivery':
-            # Dynamic Delivery Charge Logic
-            if retailer.delivery_charge > 0:
-                # Check for free delivery threshold (Usually based on subtotal or discounted total? 
-                # Standard is usually discounted subtotal but let's stick to subtotal if that's policy. 
-                # Actually commonly it is post-discount value.)
-                # Let's use items_total (discounted) to be safe for retailer.
-                if retailer.free_delivery_threshold > 0 and items_total >= retailer.free_delivery_threshold:
-                    delivery_fee = 0
-                else:
-                    delivery_fee = retailer.delivery_charge
-            else:
-                 # Default logic if not set (or 0 means free)
-                 delivery_fee = 0
+            # Same quote the checkout preview shows (retailers/delivery_pricing.py):
+            # distance tiers when shop and address are pinned, else the flat
+            # delivery_charge; free at or above free_delivery_threshold, compared
+            # with the post-offer items total.
+            from retailers.delivery_pricing import quote_for_address
+            quote = quote_for_address(retailer, delivery_address, order_total=items_total)
+            if not quote.deliverable:
+                raise serializers.ValidationError({'address_id': [quote.reason]})
+            delivery_fee = quote.fee
         
         total_amount = quantize_2(items_total + delivery_fee)
         
@@ -866,10 +896,8 @@ class OrderCreateSerializer(serializers.Serializer):
                 'payment_status': 'pending_payment' if validated_data['payment_mode'] != 'upi' else 'pending_verification'
             }
             
-            if validated_data.get('address_id'):
-                order_data['delivery_address'] = CustomerAddress.objects.get(
-                    id=validated_data['address_id']
-                )
+            if delivery_address is not None:
+                order_data['delivery_address'] = delivery_address
             
             order = Order.objects.create(**order_data)
 
@@ -1591,14 +1619,15 @@ class OrderModificationSerializer(serializers.Serializer):
             current_subtotal = line_total
             
             if instance.delivery_mode == 'delivery':
-                if retailer.delivery_charge > 0:
-                    # Check free delivery threshold
-                    if retailer.free_delivery_threshold > 0 and current_subtotal >= retailer.free_delivery_threshold:
-                        instance.delivery_fee = Decimal('0.00')
-                    else:
-                        instance.delivery_fee = retailer.delivery_charge
-                else:
-                    instance.delivery_fee = Decimal('0.00')
+                # Distance pricing from the order's address, as at placement.
+                # The radius is not re-checked: the shop already accepted it.
+                from retailers.delivery_pricing import quote_for_address
+                instance.delivery_fee = quote_for_address(
+                    retailer,
+                    instance.delivery_address,
+                    order_total=current_subtotal,
+                    check_serviceable=False,
+                ).fee
             else:
                 instance.delivery_fee = Decimal('0.00')
             

@@ -118,6 +118,11 @@ urlpatterns = [
         views.list_fulfillment_slots,
         name='list_fulfillment_slots',
     ),
+    path(
+        '<int:retailer_id>/delivery-quote/',
+        views.get_delivery_quote,
+        name='get_delivery_quote',
+    ),
 
     # Reviews
     path('<int:retailer_id>/reviews/', views.get_retailer_reviews, name='get_retailer_reviews'),
