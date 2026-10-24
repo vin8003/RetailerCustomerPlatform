@@ -291,7 +291,8 @@ class TestGroupVariantsSearchAndPos:
             reverse("search_products"), {"search": "OE192 Atta 1kg"}
         )
         pos = api_client.get(
-            reverse("get_retailer_products"), {"no_page": "true"}
+            reverse("get_retailer_products"),
+            {"no_page": "true", "include_group_variants": "true"},
         )
 
         assert detail.status_code == status.HTTP_200_OK
@@ -334,7 +335,8 @@ class TestGroupVariantsSearchAndPos:
             reverse("search_products"), {"search": "OE192 POSB"}
         )
         pos = api_client.get(
-            reverse("get_retailer_products"), {"no_page": "true"}
+            reverse("get_retailer_products"),
+            {"no_page": "true", "include_group_variants": "true"},
         )
         assert search.status_code == status.HTTP_200_OK
         assert pos.status_code == status.HTTP_200_OK
@@ -380,7 +382,8 @@ class TestGroupVariantsSearchAndPos:
         api_client.force_authenticate(user=owner)
         with CaptureQueriesContext(connection) as pos_ctx:
             pos = api_client.get(
-                reverse("get_retailer_products"), {"no_page": "true"}
+                reverse("get_retailer_products"),
+                {"no_page": "true", "include_group_variants": "true"},
             )
 
         assert pos.status_code == status.HTTP_200_OK
@@ -390,3 +393,19 @@ class TestGroupVariantsSearchAndPos:
         for product in grouped:
             row = _row_by_id(pos.data, product.id)
             assert len(row["group_variants"]) == 1
+
+    def test_pos_omits_group_variants_unless_asked(self, api_client):
+        owner, shop = _make_retailer("oe192_pos_default", "OE192 POS Default")
+        category = _make_category(shop, "OE192 POS Default Cat")
+        p1, p2 = _make_group(shop, category, "OE192 PD", "oe192-pd")
+
+        api_client.force_authenticate(user=owner)
+        with CaptureQueriesContext(connection) as pos_ctx:
+            pos = api_client.get(
+                reverse("get_retailer_products"), {"no_page": "true"}
+            )
+
+        assert pos.status_code == status.HTTP_200_OK
+        assert _group_sibling_lookups(pos_ctx.captured_queries) == []
+        assert _row_by_id(pos.data, p1.id)["group_variants"] == []
+        assert _row_by_id(pos.data, p2.id)["group_variants"] == []

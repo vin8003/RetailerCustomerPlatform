@@ -433,9 +433,16 @@ def get_retailer_products(request):
                 )[:10000]
             )  # OOM safety limit
             Product.cache_saleable_quantities(pos_products)
+            # Every row of a group lists all its siblings, so the payload grows with the
+            # square of the group size; the POS does not read it, so it is opt-in here.
+            include_group_variants = (
+                request.query_params.get('include_group_variants') == 'true'
+            )
             pos_variant_context = {
                 'request': request,
-                'group_siblings_by_key': cache_group_siblings(pos_products),
+                'group_siblings_by_key': (
+                    cache_group_siblings(pos_products) if include_group_variants else {}
+                ),
             }
             include_margin = include_purchase_margin(request.user)
             last_pi_costs = (
@@ -492,7 +499,11 @@ def get_retailer_products(request):
                     'product_group': p.product_group,
                     'has_batches': p.has_batches,
                     'batches': batches,
-                    'group_variants': safe_group_variants_payload(p, pos_variant_context),
+                    'group_variants': (
+                        safe_group_variants_payload(p, pos_variant_context)
+                        if include_group_variants
+                        else []
+                    ),
                     'is_parent_bulk': p.is_parent_bulk,
                     'parent_bulk_product': p.parent_bulk_product_id,
                     'conversion_factor': p.conversion_factor,
