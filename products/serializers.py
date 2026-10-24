@@ -706,8 +706,20 @@ class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin
             'quantity', 'saleable_quantity', 'margin_percent', 'has_batches', 'batches',
             'is_parent_bulk', 'parent_bulk_product', 'conversion_factor',
             'fractional_children', 'group_variants',
+            'purchase_price', 'hsn_code', 'gst_rate',
         ]
-        
+
+    # The purchase bill adds a search hit straight to its rows, so the retailer search also sends
+    # cost and tax fields. The public search (no context) keeps its pinned customer payload.
+    PURCHASE_BILL_FIELDS = ('purchase_price', 'hsn_code', 'gst_rate')
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if not self.context.get('include_purchase_bill_fields'):
+            for name in self.PURCHASE_BILL_FIELDS:
+                data.pop(name, None)
+        return data
+
     def get_batches(self, obj):
         if obj.has_batches:
             active_batches = obj.batches.filter(is_active=True).order_by('id')
