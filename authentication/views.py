@@ -189,22 +189,25 @@ def retailer_login(request):
 def customer_signup(request):
     """
     Register a new customer user with password.
-    If a stale unverified account with the same phone/email/username exists
-    (e.g. from a previous failed signup attempt), it is deleted before re-creating.
+    If a stale account with the same phone/email/username exists (a previous signup
+    that never verified anything and never ordered), it is deleted before re-creating.
     """
     try:
         data = request.data.copy()
         data['user_type'] = 'customer'
 
-        incoming_username   = data.get('username', '').strip()
-        incoming_phone      = data.get('phone_number', '').strip()
-        incoming_email      = data.get('email', '').strip()
+        incoming_username   = str(data.get('username') or '').strip()
+        incoming_phone      = str(data.get('phone_number') or '').strip()
+        incoming_email      = str(data.get('email') or '').strip()
 
-        # Match on username, phone_number, or email for customer accounts that
-        # have never verified email (is_email_verified=False) AND are not POS shadow users.
+        # Match on username, phone_number, or email for customer accounts that never
+        # verified an email or a phone and have no orders, and are not POS shadow users.
+        # An account that verified anything or placed an order is never replaced.
         stale_qs = User.objects.filter(
-            user_type='customer', 
-            is_email_verified=False
+            user_type='customer',
+            is_email_verified=False,
+            is_phone_verified=False,
+            orders__isnull=True,
         ).exclude(registration_status='shadow')
         if incoming_username:
             stale_qs = stale_qs.filter(username=incoming_username)
