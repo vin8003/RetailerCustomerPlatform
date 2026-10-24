@@ -13,8 +13,12 @@ The platform supports two related concepts:
 
 Each retailer-customer relationship tracks:
 
-- `credit_limit` – maximum amount the customer is allowed to owe
+- `credit_limit` – maximum amount the customer is allowed to owe (`0` = unset, no limit lock)
 - `current_balance` – current outstanding amount
+- `credit_due_days` – optional days after outstanding opens before new credit sales lock (`null` = no due-days lock)
+- `outstanding_since` – when running balance last became positive (cleared at zero; not bill-wise)
+
+Server-side lock on POS credit finalize (OE-143 / F-0052): block if this credit amount would exceed `credit_limit`, or if outstanding is older than `credit_due_days`. Explicit `credit_override` requires `orders.update` and writes `OrgAuditLog`. Payments stay allowed while locked. See [khata-credit-lock.md](../requirements/khata-credit-lock.md).
 
 ### Ledger Entries
 
@@ -35,12 +39,13 @@ All movements are recorded in `CustomerLedger`:
 
 ```mermaid
 flowchart LR
-    Map[RetailerCustomerMapping<br/>credit_limit + current_balance]
-    Sale[Order with payment_mode = credit] --> L1[CustomerLedger: SALE]
+    Map[RetailerCustomerMapping<br/>credit_limit + current_balance<br/>credit_due_days + outstanding_since]
+    Sale[POS credit finalize] --> Eval[Limit or overdue lock]
+    Eval -->|blocked| Block[400 unless credit_override + orders.update]
+    Eval -->|allowed or override| L1[CustomerLedger: SALE]
     Pay[Customer payment] --> L2[CustomerLedger: PAYMENT]
     Ret[Return / Adjustment] --> L3[CustomerLedger: RETURN / ADJUSTMENT]
     L1 & L2 & L3 --> Map
-    Map -->|balance > credit_limit| Block[Warn or block further credit]
 ```
 
 ## Supplier Khata
@@ -48,11 +53,13 @@ flowchart LR
 - `PurchaseInvoice` increases the amount owed to the supplier.
 - Payments to the supplier decrease the balance.
 - Tracked via `SupplierLedger`.
+- Vendor master is `retailers.Supplier` (OE-100 / F-0041): optional GSTIN, org-scoped duplicate GSTIN flag, `payment_terms` gated by `purchasing.terms`. Inactive suppliers cannot be selected on new purchase invoices. PO/GRN create is OE-102 and must reuse the same inactive gate — see [suppliers.md](../requirements/suppliers.md).
 
 ## Key Rules
 
 - Balance is always updated in real time.
-- Credit limit can be used to block or warn on further credit sales.
+- Credit limit and optional due days lock further **credit** sales on POS finalize; cash/UPI and khata payments are not locked.
+- Override of a lock is audited (`OrgAuditLog`, `orders.update`).
 - Full history is available through the ledger entries.
 - Customer-facing credit lives on the **profile**, retailer by retailer, including when `credit_limit` is 0 ([customer-profile-credit.md](../requirements/customer-profile-credit.md), KAN-70). Remaining is `credit_limit - current_balance`.
 - Order detail in the customer app does not show a Credit / Khata remaining block (KAN-61 UI was limited to limit > 0 and was removed by KAN-70).

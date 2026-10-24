@@ -4,6 +4,12 @@ from . import views
 urlpatterns = [
     # Order management
     path('place/', views.place_order, name='place_order'),
+    path('inbox/', views.list_retailer_inbox, name='list_retailer_inbox'),
+    path(
+        'inbox/<int:order_id>/actions/',
+        views.retailer_inbox_action,
+        name='retailer_inbox_action',
+    ),
     path('current/', views.get_current_orders, name='get_current_orders'),
     path('history/', views.get_order_history, name='get_order_history'),
     path('<int:order_id>/', views.get_order_detail, name='get_order_detail'),
@@ -14,6 +20,17 @@ urlpatterns = [
     path('<int:order_id>/submit_payment/', views.submit_payment, name='submit_payment'),
     path('<int:order_id>/verify_payment/', views.verify_payment, name='verify_payment'),
     path('<int:order_id>/estimated-time/', views.update_estimated_time, name='update_estimated_time'),
+    path('<int:order_id>/notes/', views.update_order_notes, name='update_order_notes'),
+    path(
+        '<int:order_id>/fulfillment-slot/',
+        views.reschedule_order_fulfillment_slot,
+        name='reschedule_order_fulfillment_slot',
+    ),
+    path(
+        'inbox/<int:order_id>/fulfillment-slot/',
+        views.retailer_reschedule_order_fulfillment_slot,
+        name='retailer_reschedule_order_fulfillment_slot',
+    ),
     path('stats/', views.get_order_stats, name='get_order_stats'),
     path('retailer-reviews/', views.get_retailer_reviews, name='get_retailer_reviews'),
     

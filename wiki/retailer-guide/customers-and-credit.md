@@ -11,7 +11,7 @@ Open **Customers** to see:
 - Credit balance (if any)
 - Notes or flags (e.g. blacklist)
 
-Search by name or phone when billing at POS or reviewing accounts.
+Search by name or phone when billing at POS or reviewing accounts. A phone lookup shows the same person and their recent counter and app orders together. Full history export is limited to roles that can read orders.
 
 ## Adding customers
 
@@ -21,7 +21,7 @@ Customers are often created automatically when:
 - Staff attaches a new person at POS
 - You add manually from Customers → Add
 
-Keep phone numbers accurate for OTP login and delivery calls.
+Keep phone numbers accurate for OTP login, delivery calls, and loyalty redeem codes when you require OTP to burn points.
 
 ## Customer credit (udhaar / khata)
 
@@ -41,7 +41,7 @@ Trusted regulars often buy **on credit** and settle later — classic kirana kha
 
 ### Credit limit
 
-You can set a **maximum credit** per customer. POS blocks new credit sales above limit (unless you change policy).
+You can set a **maximum credit** and optional **due days** per customer. POS blocks new **credit** sales above the limit, or when an unpaid balance has been open longer than the due days. A permitted role can override; that override is recorded. Customers can still **pay** outstanding while credit sales are locked. Cash or UPI at the counter is not blocked.
 
 ### Recording payment
 
@@ -57,7 +57,7 @@ Payments happen **offline** (cash/UPI to you) — OrderEasy tracks the ledger, n
 
 From a customer profile you can see:
 
-- Order history
+- Order history (POS and app on one list)
 - Credit ledger entries
 - Contact info
 - Nickname (how staff know them)

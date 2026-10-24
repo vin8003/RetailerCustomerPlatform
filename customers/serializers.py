@@ -1,6 +1,11 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from .models import CustomerProfile, CustomerAddress, CustomerWishlist, CustomerNotification
+from products.channel_price import (
+    channel_from_context,
+    format_money,
+    resolve_channel_price,
+)
 from products.models import Product
 from retailers.models import CustomerLedger
 
@@ -95,14 +100,25 @@ class CustomerWishlistSerializer(serializers.ModelSerializer):
     product_image = serializers.CharField(source='product.image_display_url', read_only=True)
     retailer_name = serializers.CharField(source='product.retailer.shop_name', read_only=True)
     retailer_id = serializers.IntegerField(source='product.retailer.id', read_only=True)
+    brand_name = serializers.CharField(
+        source='product.brand.name', read_only=True, allow_null=True, default=None
+    )
     
     class Meta:
         model = CustomerWishlist
         fields = [
-            'id', 'product', 'product_name', 'product_price', 'product_image',
+            'id', 'product', 'product_name', 'brand_name', 'product_price', 'product_image',
             'retailer_name', 'retailer_id', 'created_at'
         ]
-        read_only_fields = ['id', 'product_name', 'product_price', 'product_image', 'retailer_name', 'retailer_id', 'created_at']
+        read_only_fields = ['id', 'product_name', 'brand_name', 'product_price', 'product_image', 'retailer_name', 'retailer_id', 'created_at']
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        product = getattr(instance, 'product', None)
+        if product is not None:
+            selling = resolve_channel_price(product, channel_from_context(self.context))
+            data['product_price'] = format_money(selling)
+        return data
     
     def create(self, validated_data):
         """Create wishlist item with customer from context"""
@@ -185,6 +201,12 @@ class RetailerCustomerListSerializer(serializers.Serializer):
     is_phone_verified = serializers.BooleanField(required=False)
     nickname = serializers.CharField(required=False, allow_null=True)
     current_balance = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
+    email = serializers.EmailField(allow_blank=True, allow_null=True, required=False)
+    notes = serializers.CharField(allow_null=True, allow_blank=True, required=False)
+    credit_limit = serializers.DecimalField(
+        max_digits=12, decimal_places=2, allow_null=True, required=False
+    )
+    credit_due_days = serializers.IntegerField(allow_null=True, required=False)
 
 
 class RetailerCustomerDetailSerializer(serializers.Serializer):
@@ -209,6 +231,7 @@ class RetailerCustomerDetailSerializer(serializers.Serializer):
     notes = serializers.CharField(allow_null=True)
     credit_limit = serializers.DecimalField(max_digits=12, decimal_places=2)
     current_balance = serializers.DecimalField(max_digits=12, decimal_places=2)
+    credit_due_days = serializers.IntegerField(allow_null=True, required=False)
     
     # Additional detail fields
     recent_orders = serializers.ListField()

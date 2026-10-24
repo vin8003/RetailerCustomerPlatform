@@ -1,9 +1,14 @@
 """Product search matching, including multi-batch barcodes (KAN-72)."""
+import logging
+
+from django.db import DatabaseError, transaction
 from django.db.models import (
     Q, Value, Case, When, TextField, IntegerField,
 )
 from django.db.models.functions import Cast
 from django.contrib.postgres.search import SearchVector, SearchQuery, SearchRank
+
+logger = logging.getLogger(__name__)
 
 
 def product_barcode_match_q(query):
@@ -15,6 +20,25 @@ def product_barcode_match_q(query):
         Q(additional_barcodes__icontains=query) |
         Q(batches__barcode__icontains=query) |
         Q(batches__additional_barcodes__icontains=query)
+    )
+
+
+def product_barcode_exact_q(query):
+    """Whole-code match for scans. A quoted needle matches one JSON list element, not a fragment."""
+    element = f'"{query}"'
+    return (
+        Q(barcode__iexact=query) |
+        Q(additional_barcodes__icontains=element) |
+        Q(batches__barcode__iexact=query) |
+        Q(batches__additional_barcodes__icontains=element)
+    )
+
+
+def _exact_barcode_rank(query):
+    return Case(
+        When(product_barcode_exact_q(query), then=Value(1)),
+        default=Value(0),
+        output_field=IntegerField(),
     )
 
 
@@ -48,6 +72,7 @@ def smart_product_search(queryset, search_query):
     search_query_obj = SearchQuery(query)
 
     qs_smart = queryset.annotate(
+        is_barcode_exact=_exact_barcode_rank(query),
         rank_score=SearchRank(vector, search_query_obj),
         trigram_score=TrigramSimilarity('name', query),
         is_barcode=Case(
@@ -79,6 +104,7 @@ def smart_product_search(queryset, search_query):
     ).distinct()
 
     qs_smart = qs_smart.order_by(
+        '-is_barcode_exact',
         '-is_barcode',
         '-is_exact',
         '-is_startswith',
@@ -89,20 +115,28 @@ def smart_product_search(queryset, search_query):
         'name'
     )
 
-    if not qs_smart.exists():
-        return queryset.annotate(
-            in_stock=Case(
-                When(quantity__gt=0, then=Value(1)),
-                default=Value(0),
-                output_field=IntegerField(),
-            )
-        ).filter(
-            Q(name__icontains=query) |
-            Q(description__icontains=query) |
-            Q(tags__icontains=query) |
-            Q(category__name__icontains=query) |
-            Q(product_group__icontains=query) |
-            product_barcode_match_q(query)
-        ).distinct().order_by('-in_stock', '-discount_percentage', 'name')
+    # Fall back to basic search when FTS/trigram finds nothing or is unavailable
+    # (no pg_trgm, SQLite). The savepoint keeps a failed probe from aborting an
+    # outer transaction, which PostgreSQL would otherwise do.
+    try:
+        with transaction.atomic():
+            if qs_smart.exists():
+                return qs_smart
+    except DatabaseError:
+        logger.warning('Smart product search failed; using the basic search', exc_info=True)
 
-    return qs_smart
+    return queryset.annotate(
+        is_barcode_exact=_exact_barcode_rank(query),
+        in_stock=Case(
+            When(quantity__gt=0, then=Value(1)),
+            default=Value(0),
+            output_field=IntegerField(),
+        )
+    ).filter(
+        Q(name__icontains=query) |
+        Q(description__icontains=query) |
+        Q(tags__icontains=query) |
+        Q(category__name__icontains=query) |
+        Q(product_group__icontains=query) |
+        product_barcode_match_q(query)
+    ).distinct().order_by('-is_barcode_exact', '-in_stock', '-discount_percentage', 'name')

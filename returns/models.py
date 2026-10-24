@@ -40,6 +40,8 @@ class SalesReturn(models.Model):
     tax_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     refund_payment_mode = models.CharField(max_length=20, choices=PAYMENT_MODE_CHOICES)
     reason = models.TextField(blank=True)
+    # Free-text staff notes, separate from the customer-facing reason (OE-327).
+    notes = models.TextField(blank=True, default='')
     
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,

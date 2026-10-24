@@ -1,27 +1,74 @@
 from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
-from django.db.models import Q, Sum
-from decimal import Decimal
+from django.db.models import Prefetch, Q, Sum
 from .models import SalesReturn, PurchaseReturn, SalesReturnItem, PurchaseReturnItem
 from .serializers import SalesReturnSerializer, PurchaseReturnSerializer
 from .services import process_sales_return, process_purchase_return
 from retailers.models import RetailerProfile, Supplier
 from orders.models import Order, OrderItem
 from products.models import PurchaseInvoice, Product, ProductBatch, PurchaseItem
+from common.client_input import error_message, id_value, list_of_objects, money_value, quantity_value
+
+
+SALES_RETURN_NOTES_MAX = 1000
+
+
+def _shop_for(user):
+    """The caller's shop profile; 404 (not 500) for customers and profile-less staff."""
+    return get_object_or_404(RetailerProfile, user=user)
+
+
+# Returns are posted once through the services, which move stock and refunds. A generic
+# edit or delete would skip that (and could point a return at another shop's order).
+RETURN_HTTP_METHODS = ['get', 'post', 'head', 'options']
+
+
+def _return_lines(items_data, price_field, link_field):
+    """
+    Parse return lines. Lines without a product, quantity or price are skipped as before
+    (the return screens only send the rows being returned). A negative quantity or price
+    would move stock and money the wrong way, and a return with no lines is empty, so
+    both are a 400.
+    """
+    lines = []
+    for item in list_of_objects(items_data, 'items'):
+        product_id = item.get('product_id')
+        qty = item.get('quantity')
+        price = item.get(price_field)
+        if not product_id or not qty or price is None:
+            continue
+        lines.append({
+            'product_id': id_value(product_id, 'product_id'),
+            'batch_id': id_value(item['batch_id'], 'batch_id') if item.get('batch_id') else None,
+            'link_id': id_value(item[link_field], link_field) if item.get(link_field) else None,
+            'quantity': quantity_value(qty, 'quantity'),
+            'price': money_value(price, price_field),
+        })
+    if not lines:
+        raise ValidationError({'items': [f'Each item needs product_id, quantity and {price_field}.']})
+    return lines
+
 
 class SalesReturnViewSet(viewsets.ModelViewSet):
     serializer_class = SalesReturnSerializer
     permission_classes = [permissions.IsAuthenticated]
+    http_method_names = RETURN_HTTP_METHODS
 
     def get_queryset(self):
-        retailer = RetailerProfile.objects.get(user=self.request.user)
-        return SalesReturn.objects.filter(retailer=retailer)
+        retailer = _shop_for(self.request.user)
+        return SalesReturn.objects.filter(retailer=retailer).prefetch_related(
+            Prefetch(
+                'items',
+                queryset=SalesReturnItem.objects.select_related('product', 'batch'),
+            )
+        )
 
     @action(detail=False, methods=['get'])
     def search_order(self, request):
-        retailer = RetailerProfile.objects.get(user=request.user)
+        retailer = _shop_for(request.user)
         query = request.query_params.get('query')
         if not query:
             return Response({'error': 'Query parameter is required'}, status=400)
@@ -37,16 +84,24 @@ class SalesReturnViewSet(viewsets.ModelViewSet):
             retailer=retailer,
             status='delivered'
         ).prefetch_related('items__product').order_by('-created_at')[:20] # Limit to 20 results
+        orders = list(orders)
         
-        if not orders.exists():
+        if not orders:
             return Response({'error': 'No matching orders found'}, status=404)
+
+        returned_by_item = dict(
+            SalesReturnItem.objects.filter(order_item__order__in=orders)
+            .values('order_item_id')
+            .annotate(total=Sum('quantity'))
+            .values_list('order_item_id', 'total')
+        )
             
         results = []
         for order in orders:
             items_data = []
             for item in order.items.all():
                 # Calculate how much already returned for this specific row
-                returned_qty = SalesReturnItem.objects.filter(order_item=item).aggregate(total=Sum('quantity'))['total'] or 0
+                returned_qty = returned_by_item.get(item.id) or 0
                 items_data.append({
                     'id': item.id,
                     'product_id': item.product.id,
@@ -56,6 +111,7 @@ class SalesReturnViewSet(viewsets.ModelViewSet):
                     'available_qty': max(0, item.quantity - returned_qty),
                     'unit_price': item.unit_price,
                     'batch_id': item.batch_id,
+                    'unit': item.product.unit,
                     'hsn_code': item.hsn_code,
                     'gst_rate': item.gst_rate,
                     'product_gst_rate': item.product.gst_rate,
@@ -77,14 +133,29 @@ class SalesReturnViewSet(viewsets.ModelViewSet):
         return Response(results)
 
     def create(self, request, *args, **kwargs):
-        retailer = RetailerProfile.objects.get(user=request.user)
+        retailer = _shop_for(request.user)
         order_id = request.data.get('order_id')
         items_data = request.data.get('items', [])
         payment_mode = request.data.get('refund_payment_mode', 'cash')
         reason = request.data.get('reason', '')
+        notes = request.data.get('notes') or ''
+        if not isinstance(notes, str):
+            return Response({'error': 'notes must be text'}, status=status.HTTP_400_BAD_REQUEST)
+        notes = notes.strip()
+        if len(notes) > SALES_RETURN_NOTES_MAX:
+            return Response(
+                {'error': f'notes must be at most {SALES_RETURN_NOTES_MAX} characters'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         if not items_data:
             return Response({'error': 'No items provided for return'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            lines = _return_lines(items_data, 'refund_unit_price', 'order_item_id')
+            if order_id:
+                order_id = id_value(order_id, 'order_id')
+        except ValidationError as exc:
+            return Response({'error': error_message(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         order = None
         if order_id:
@@ -92,31 +163,27 @@ class SalesReturnViewSet(viewsets.ModelViewSet):
 
         # Prepare items data with actual product/batch/order_item objects
         processed_items = []
-        for item in items_data:
-            product_id = item.get('product_id')
-            batch_id = item.get('batch_id')
-            order_item_id = item.get('order_item_id')
-            qty = item.get('quantity')
-            price = item.get('refund_unit_price')
-
-            if not product_id or not qty or price is None:
-                continue
-
-            product = get_object_or_404(Product, id=product_id, retailer=retailer)
+        for line in lines:
+            product = get_object_or_404(Product, id=line['product_id'], retailer=retailer)
             batch = None
-            if batch_id:
-                batch = get_object_or_404(ProductBatch, id=batch_id, product=product)
+            if line['batch_id']:
+                batch = get_object_or_404(ProductBatch, id=line['batch_id'], product=product)
 
             order_item = None
-            if order_item_id:
-                order_item = get_object_or_404(OrderItem, id=order_item_id, order=order)
+            if line['link_id']:
+                order_item = get_object_or_404(OrderItem, id=line['link_id'], order=order)
+                if order_item.product_id != product.id:
+                    return Response(
+                        {'error': f'{product.name} is not the product on that order line'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
 
             processed_items.append({
                 'product': product,
                 'batch': batch,
                 'order_item': order_item,
-                'quantity': Decimal(str(qty)),
-                'refund_unit_price': Decimal(str(price))
+                'quantity': line['quantity'],
+                'refund_unit_price': line['price'],
             })
 
         try:
@@ -126,6 +193,7 @@ class SalesReturnViewSet(viewsets.ModelViewSet):
                 items_data=processed_items,
                 refund_payment_mode=payment_mode,
                 reason=reason,
+                notes=notes,
                 created_by=request.user
             )
             serializer = self.get_serializer(sales_return)
@@ -137,18 +205,23 @@ class SalesReturnViewSet(viewsets.ModelViewSet):
 class PurchaseReturnViewSet(viewsets.ModelViewSet):
     serializer_class = PurchaseReturnSerializer
     permission_classes = [permissions.IsAuthenticated]
+    http_method_names = RETURN_HTTP_METHODS
 
     def get_queryset(self):
-        retailer = RetailerProfile.objects.get(user=self.request.user)
+        retailer = _shop_for(self.request.user)
         return PurchaseReturn.objects.filter(retailer=retailer)
 
     @action(detail=False, methods=['get'])
     def get_invoice_items(self, request):
-        retailer = RetailerProfile.objects.get(user=request.user)
+        retailer = _shop_for(request.user)
         invoice_id = request.query_params.get('invoice_id')
         if not invoice_id:
             return Response({'error': 'invoice_id is required'}, status=400)
-            
+        try:
+            invoice_id = id_value(invoice_id, 'invoice_id')
+        except ValidationError as exc:
+            return Response({'error': error_message(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
         invoice = get_object_or_404(PurchaseInvoice, id=invoice_id, retailer=retailer)
         
         items_data = []
@@ -172,7 +245,7 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
         return Response(items_data)
 
     def create(self, request, *args, **kwargs):
-        retailer = RetailerProfile.objects.get(user=request.user)
+        retailer = _shop_for(request.user)
         supplier_id = request.data.get('supplier_id')
         invoice_id = request.data.get('invoice_id')
         items_data = request.data.get('items', [])
@@ -180,39 +253,54 @@ class PurchaseReturnViewSet(viewsets.ModelViewSet):
 
         if not items_data:
             return Response({'error': 'No items provided for return'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            lines = _return_lines(items_data, 'purchase_price', 'purchase_item_id')
+            if supplier_id:
+                supplier_id = id_value(supplier_id, 'supplier_id')
+            if invoice_id:
+                invoice_id = id_value(invoice_id, 'invoice_id')
+        except ValidationError as exc:
+            return Response({'error': error_message(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
-        supplier = get_object_or_404(Supplier, id=supplier_id, retailer=retailer)
         invoice = None
         if invoice_id:
             invoice = get_object_or_404(PurchaseInvoice, id=invoice_id, retailer=retailer)
+        # A return against a bill goes to that bill's supplier. The bill's own Return button
+        # sends no supplier_id, and a different one would debit the wrong supplier's ledger.
+        if invoice is not None and invoice.supplier_id:
+            if supplier_id and supplier_id != invoice.supplier_id:
+                return Response(
+                    {'error': 'This bill is from a different supplier'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            supplier_id = invoice.supplier_id
+        if not supplier_id:
+            return Response({'error': 'supplier_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+        supplier = get_object_or_404(Supplier, id=supplier_id, retailer=retailer)
 
         # Prepare items data
         processed_items = []
-        for item in items_data:
-            product_id = item.get('product_id')
-            batch_id = item.get('batch_id')
-            purchase_item_id = item.get('purchase_item_id')
-            qty = item.get('quantity')
-            price = item.get('purchase_price')
-
-            if not product_id or not qty or price is None:
-                continue
-
-            product = get_object_or_404(Product, id=product_id, retailer=retailer)
+        for line in lines:
+            product = get_object_or_404(Product, id=line['product_id'], retailer=retailer)
             batch = None
-            if batch_id:
-                batch = get_object_or_404(ProductBatch, id=batch_id, product=product)
+            if line['batch_id']:
+                batch = get_object_or_404(ProductBatch, id=line['batch_id'], product=product)
 
             purchase_item = None
-            if purchase_item_id:
-                purchase_item = get_object_or_404(PurchaseItem, id=purchase_item_id, invoice=invoice)
+            if line['link_id']:
+                purchase_item = get_object_or_404(PurchaseItem, id=line['link_id'], invoice=invoice)
+                if purchase_item.product_id != product.id:
+                    return Response(
+                        {'error': f'{product.name} is not the product on that bill line'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
 
             processed_items.append({
                 'product': product,
                 'batch': batch,
                 'purchase_item': purchase_item,
-                'quantity': Decimal(str(qty)),
-                'purchase_price': Decimal(str(price))
+                'quantity': line['quantity'],
+                'purchase_price': line['price'],
             })
 
         try:

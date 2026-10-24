@@ -13,7 +13,7 @@ Online orders use the **Orders** section instead — but they draw from the **sa
 ## Starting a new bill
 
 1. Open **POS Billing** from the sidebar
-2. Search for a product by **name** or scan **barcode**
+2. Search for a product by **name** or scan **barcode** (including extra barcodes on the product)
 3. Tap product to add to bill — adjust quantity as needed
 4. Repeat for all items
 
@@ -54,7 +54,7 @@ Credit sales require the customer to be attached and within their **credit limit
 3. **Complete** the sale
 4. **Print receipt** if you use a printer
 
-Stock reduces immediately for sold items.
+Stock reduces immediately for sold items. A sale that would take on-hand below zero is blocked.
 
 ## Returns at POS
 

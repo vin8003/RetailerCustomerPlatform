@@ -39,6 +39,7 @@ class Order(models.Model):
     CANCELLED_BY_CHOICES = [
         ('customer', 'Customer'),
         ('retailer', 'Retailer'),
+        ('system', 'System'),
     ]
 
     PAYMENT_STATUS_CHOICES = [
@@ -140,12 +141,21 @@ class Order(models.Model):
     # Additional info
     coupon_code = models.CharField(max_length=50, blank=True, null=True)
     special_instructions = models.TextField(blank=True)
+    # Internal shop notes on the order; never sent to the customer (OE-325).
+    notes = models.TextField(blank=True, default='')
     cancellation_reason = models.TextField(blank=True)
     cancelled_by = models.CharField(max_length=50, blank=True, null=True)
     payment_reference_id = models.CharField(max_length=100, blank=True, null=True)
     payment_status = models.CharField(max_length=50, choices=PAYMENT_STATUS_CHOICES, default='pending_payment')
     payment_edit_count = models.IntegerField(default=0)
     is_payment_locked = models.BooleanField(default=False)
+
+    # Shop pickup (OE-152) — verification + uncollected window anchor on unified Order
+    pickup_code = models.CharField(max_length=6, blank=True, default='')
+    pickup_ready_at = models.DateTimeField(null=True, blank=True)
+
+    # Fulfillment window (OE-243) — customer-chosen 30-minute slot start (retailer TZ)
+    fulfillment_slot_start = models.DateTimeField(null=True, blank=True)
     
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
@@ -281,9 +291,6 @@ class Order(models.Model):
             changed_by=user
         )
         
-        # Create notification for customer
-        from customers.models import CustomerNotification
-        
         status_messages = {
             'confirmed': 'Your order has been confirmed',
             'processing': 'Your order is being processed',
@@ -296,40 +303,21 @@ class Order(models.Model):
         }
         
         if new_status in status_messages and self.customer:
-            msg = status_messages[new_status]
-            CustomerNotification.objects.create(
-                customer=self.customer,
-                notification_type='order_update',
-                title=f'Order #{self.order_number} Update',
-                message=msg
-            )
-            
-            # Send Push Notification
-            from common.notifications import send_push_notification, send_silent_update
-            send_push_notification(
-                user=self.customer,
-                title=f"Order Update: #{self.order_number}",
-                message=msg,
-                data={
-                    'type': 'order_status_update',
-                    'order_id': str(self.id),
-                    'status': new_status
-                }
-            )
-            
-            # Send silent update to refresh UI
-            send_silent_update(
-                user=self.customer,
-                event_type='order_refresh',
-                data={'order_id': str(self.id)}
-            )
-            
-            # Also notify and refresh Retailer UI
-            send_silent_update(
-                user=self.retailer.user,
-                event_type='order_refresh',
-                data={'order_id': str(self.id)}
-            )
+            from common.notification_dispatcher import dispatch_order_status_notification
+            from common.notifications import send_push_notification
+
+            try:
+                dispatch_order_status_notification(
+                    order=self,
+                    new_status=new_status,
+                    old_status=old_status,
+                )
+            except Exception:
+                # A notification problem must never roll back or block the status change.
+                import logging
+                logging.getLogger(__name__).exception(
+                    'Order status notification failed for order %s', self.pk
+                )
             
             # If customer updated the status (accepted/rejected), 
             # send a visible push to the retailer

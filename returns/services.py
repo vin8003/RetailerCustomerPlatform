@@ -12,7 +12,7 @@ from .models import SalesReturn, SalesReturnItem, PurchaseReturn, PurchaseReturn
 from django.db.models import Sum
 from decimal import Decimal
 
-def process_sales_return(retailer, order, items_data, refund_payment_mode, reason, created_by):
+def process_sales_return(retailer, order, items_data, refund_payment_mode, reason, created_by, notes=''):
     """
     Atomic logic to process a sales return:
     1. Validate quantities
@@ -29,6 +29,7 @@ def process_sales_return(retailer, order, items_data, refund_payment_mode, reaso
             customer=order.customer if order else None,
             refund_payment_mode=refund_payment_mode,
             reason=reason,
+            notes=notes or '',
             created_by=created_by
         )
         
@@ -226,7 +227,6 @@ def process_purchase_return(retailer, supplier, invoice, items_data, notes, crea
             # 1. Update Inventory (- quantity)
             prev_qty = product.quantity
             new_qty = apply_stock_decrease(product, qty, batch=batch, allow_negative=True)
-
             # 2. Log Change
             log_inventory_change(
                 product=product,

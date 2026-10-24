@@ -135,7 +135,7 @@ class TestPurchaseReturns:
         purchase_item.tax_type = "IGST"
         purchase_item.purchase_price = Decimal("105.00")
         purchase_item.save()
-        product.hsn_code = "DIFFERENT"
+        product.hsn_code = "99999999"  # 8 chars: PostgreSQL enforces max_length
         product.gst_rate = Decimal("18.00")
         product.save()
 

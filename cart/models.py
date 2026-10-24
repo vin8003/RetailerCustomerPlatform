@@ -61,7 +61,8 @@ class Cart(models.Model):
             cart_item.save()
             return cart_item
         except CartItem.DoesNotExist:
-            unit_price = batch.price if batch else product.price
+            from products.channel_price import CHANNEL_APP, resolve_channel_price
+            unit_price = resolve_channel_price(product, CHANNEL_APP, batch=batch)
             cart_item = CartItem.objects.create(
                 cart=self,
                 product=product,
@@ -105,8 +106,18 @@ class Cart(models.Model):
         
         total_required_parent_qty = Decimal('0.000')
         product_found_in_cart = False
+
+        from products.models import Product
+        items = list(
+            self.items.select_related(
+                'product', 'product__parent_bulk_product'
+            ).all()
+        )
+        Product.cache_saleable_quantities(
+            [item.product for item in items] + [product, master_product]
+        )
         
-        for item in self.items.select_related('product').all():
+        for item in items:
             item_prod = item.product
             qty_to_consider = item.quantity
             
@@ -130,8 +141,12 @@ class Cart(models.Model):
                 if product.conversion_factor:
                     total_required_parent_qty += (qty_to_consider * product.conversion_factor)
                     
-        if total_required_parent_qty > master_product.quantity:
-            return False, f"Total combined cart items require {total_required_parent_qty} of {master_product.name}, but only {master_product.quantity} is available."
+        available = master_product.saleable_quantity()
+        if total_required_parent_qty > available:
+            return False, (
+                f"Total combined cart items require {total_required_parent_qty} of "
+                f"{master_product.name}, but only {available} is available."
+            )
             
         return True, ""
 
@@ -193,7 +208,10 @@ class CartItem(models.Model):
     def save(self, *args, **kwargs):
         """Override save to update unit price from product/batch"""
         if not self.unit_price:
-            self.unit_price = self.batch.price if self.batch else self.product.price
+            from products.channel_price import CHANNEL_APP, resolve_channel_price
+            self.unit_price = resolve_channel_price(
+                self.product, CHANNEL_APP, batch=self.batch
+            )
         super().save(*args, **kwargs)
         
         # Update cart's updated_at timestamp

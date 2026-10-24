@@ -2,6 +2,7 @@ from rest_framework import status, permissions
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle, AnonRateThrottle
+from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from django.contrib.auth import authenticate
@@ -24,6 +25,39 @@ from .serializers import (
 from .utils import generate_otp, send_sms_otp, verify_otp_helper, verify_firebase_id_token, send_email_otp
 
 logger = logging.getLogger(__name__)
+
+
+class OrgAwareTokenRefreshView(TokenRefreshView):
+    """
+    Refresh that refuses new access tokens when the retailer's org is disabled.
+    """
+
+    def post(self, request, *args, **kwargs):
+        refresh_value = request.data.get('refresh')
+        if refresh_value:
+            try:
+                token = RefreshToken(refresh_value)
+            except TokenError:
+                # An invalid or expired refresh token is rejected by the parent view.
+                token = None
+            if token is not None:
+                try:
+                    user = User.objects.filter(pk=token.get('user_id')).first()
+                    if user is not None:
+                        from retailers.organization import organization_is_session_blocked
+                        if organization_is_session_blocked(user):
+                            return Response(
+                                {'error': 'Organization is disabled'},
+                                status=status.HTTP_403_FORBIDDEN,
+                            )
+                except Exception:
+                    # Fail closed: if the tenant check itself breaks, do not mint a token.
+                    logger.exception('Organization check failed during token refresh')
+                    return Response(
+                        {'error': 'Could not verify organization status'},
+                        status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    )
+        return super().post(request, *args, **kwargs)
 
 
 class LoginThrottle(UserRateThrottle):
@@ -67,6 +101,9 @@ def retailer_signup(request):
                 verification_status='pending',
                 is_active=False,  # Not live to customers until Admin approves
             )
+            # Implicit 1:1 org↔location for new single-shop tenants (OE-97)
+            from retailers.organization import ensure_organization_for_profile
+            ensure_organization_for_profile(profile)
 
             # (Removed manual hours creation to test for duplicates)
 
@@ -112,6 +149,14 @@ def retailer_login(request):
                 return Response(
                     {'error': 'Invalid user type for retailer login'},
                     status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Disabled tenant blocks new sessions; history is retained (OE-97)
+            from retailers.organization import organization_is_session_blocked
+            if organization_is_session_blocked(user):
+                return Response(
+                    {'error': 'Organization is disabled'},
+                    status=status.HTTP_403_FORBIDDEN
                 )
 
             # Generate JWT tokens
@@ -438,6 +483,16 @@ def verify_otp(request):
                                         closing_time='21:00'
                                     )
                                 logger.info(f"Created RetailerProfile for user: {user.username}")
+                            from retailers.organization import (
+                                ensure_organization_for_profile,
+                                organization_is_session_blocked,
+                            )
+                            ensure_organization_for_profile(profile)
+                            if organization_is_session_blocked(user):
+                                return Response(
+                                    {'error': 'Organization is disabled'},
+                                    status=status.HTTP_403_FORBIDDEN,
+                                )
                         
                         # Generate JWT tokens
                         refresh = RefreshToken.for_user(user)
@@ -536,6 +591,16 @@ def verify_otp(request):
                                 closing_time='21:00'
                             )
                         logger.info(f"Created RetailerProfile for user: {user.username}")
+                    from retailers.organization import (
+                        ensure_organization_for_profile,
+                        organization_is_session_blocked,
+                    )
+                    ensure_organization_for_profile(profile)
+                    if organization_is_session_blocked(user):
+                        return Response(
+                            {'error': 'Organization is disabled'},
+                            status=status.HTTP_403_FORBIDDEN,
+                        )
 
                 # Generate JWT tokens
                 refresh = RefreshToken.for_user(user)

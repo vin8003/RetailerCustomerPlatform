@@ -57,6 +57,7 @@ def get_frequently_bought_together(request, retailer_id):
         if not seed_ids:
             return Response([], status=status.HTTP_200_OK)
 
+        from products.customer_stock import customer_in_stock_q
         from products.models import Product
         from products.serializers import ProductListSerializer
         from orders.models import OrderItem
@@ -77,7 +78,7 @@ def get_frequently_bought_together(request, retailer_id):
             is_active=True,
             is_available=True,
         ).exclude(id__in=seed_ids)
-        catalog = catalog.filter(Q(track_inventory=False) | Q(quantity__gt=0))
+        catalog = catalog.filter(customer_in_stock_q())
 
         affinity = Q()
         if category_ids:
@@ -86,10 +87,12 @@ def get_frequently_bought_together(request, retailer_id):
             affinity |= Q(product_group__in=groups)
         related = catalog.filter(affinity) if affinity else catalog.none()
 
+        # Rank only sellable products, so hidden ones do not use up the FBT_LIMIT slots.
         co_purchased_ids = list(
             OrderItem.objects.filter(
                 order__retailer=retailer,
                 order__items__product_id__in=seed_ids,
+                product__in=catalog,
             ).exclude(
                 product_id__in=seed_ids
             ).values('product_id').annotate(

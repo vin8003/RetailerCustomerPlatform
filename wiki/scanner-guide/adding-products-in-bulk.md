@@ -57,6 +57,8 @@ If you have a spreadsheet instead of scanner:
 
 Use scanner for shelf walk; use Excel if you already maintain master data in sheets.
 
+Already-live products can also get photos later from a zip (or CSV + files) named by barcode or product id. Bad rows are listed; the rest still apply. That uses the same product photo field — not a second media library.
+
 ## When to use which method
 
 | Method | Best for |

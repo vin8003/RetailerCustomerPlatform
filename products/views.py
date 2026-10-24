@@ -1,9 +1,10 @@
 from rest_framework import status, permissions
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, parser_classes, permission_classes
+from rest_framework.exceptions import APIException, ValidationError
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Q, Avg, Count, Sum, Max
-from django.db.models import Q, Avg, Count, Sum, Max, F, Value, Case, When, FloatField, TextField, IntegerField, DecimalField
+from django.db.models import Q, Avg, Count, Sum, Max, F, Value, Case, When, FloatField, TextField, IntegerField, DecimalField, Prefetch
 from django.db.models.functions import Coalesce, Greatest, Cast
 from django.contrib.postgres.search import SearchVector, SearchQuery, SearchRank
 from django.http import Http404
@@ -11,6 +12,7 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 import logging
 import json
+from common.client_input import decimal_value, id_value, money_value
 from common.error_utils import format_exception
 import pandas as pd
 import os
@@ -19,7 +21,7 @@ from datetime import datetime
 
 from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser
-from django.db import transaction
+from django.db import DatabaseError, transaction
 from decimal import Decimal, InvalidOperation
 
 from .models import (
@@ -35,10 +37,54 @@ from .serializers import (
     ProductReviewSerializer, ProductUploadSerializer, ProductBulkUploadSerializer,
     ProductStatsSerializer, MasterProductSerializer,
     ProductUploadSessionSerializer, UploadSessionItemSerializer,
-    ProductSearchSerializer
+    ProductSearchSerializer,
+    cache_group_siblings,
+    fractional_children_payload,
+    safe_group_variants_payload,
 )
-from retailers.models import RetailerProfile
+from retailers.models import OrgAuditLog, RetailerProfile
 from common.permissions import IsRetailerOwner
+from products.channel_price import (
+    app_price_summary,
+    bulk_items_set_app_price,
+    bulk_items_would_change_app_price,
+    create_payload_sets_app_price,
+    payload_sets_app_price,
+    record_channel_price_audit,
+    require_catalog_price,
+    submitted_app_price_differs,
+)
+from products.inventory_adjust import (
+    bulk_items_set_on_hand_quantity,
+    bulk_items_would_change_on_hand,
+    bulk_write_quantity,
+    create_payload_sets_pack_link,
+    payload_has_invalid_expiry,
+    payload_sets_batch_expiry,
+    payload_sets_on_hand_quantity,
+    payload_sets_pack_link,
+    require_inventory_adjust,
+    submitted_batch_expiry_differs,
+    submitted_on_hand_differs,
+    submitted_pack_link_differs,
+)
+from products.photo_import import (
+    import_product_photos_for_retailer,
+    require_catalog_image,
+)
+from products.write_off import (
+    WriteOffError,
+    parse_write_off_batch_id,
+    parse_write_off_quantity,
+    write_off_stock,
+)
+from products.supplier_last_costs import (
+    include_purchase_margin,
+    last_pi_unit_costs_by_product_id,
+    selling_margin_percent,
+)
+
+from retailers.module_flags import module_required
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +177,18 @@ def log_search_telemetry(query, result_count, retailer=None, user=None):
         logger.error(f"Failed to log search telemetry: {str(e)}")
 
 
+def annotate_additional_barcodes_text(queryset):
+    """Cast JSON additional_barcodes so search can use the same icontains as barcode."""
+    return queryset.annotate(
+        additional_barcodes_text=Cast('additional_barcodes', TextField()),
+    )
+
+
+def product_barcode_q(query):
+    """Primary barcode and additional_barcodes share icontains match (OE-170)."""
+    return Q(barcode__icontains=query) | Q(additional_barcodes_text__icontains=query)
+
+
 def smart_product_search(queryset, search_query):
     """
     Hybrid Smart Search optimized for grocery data.
@@ -157,6 +215,9 @@ def smart_product_search(queryset, search_query):
     if not query:
         return queryset
 
+    queryset = annotate_additional_barcodes_text(queryset)
+    barcode_q = product_barcode_q(query)
+
     # STEP 2 & 3: Primary Search (FTS) & Exact Match Boost
     # Define Weighted Search Vector
     vector = (
@@ -174,7 +235,7 @@ def smart_product_search(queryset, search_query):
         rank_score=SearchRank(vector, search_query_obj),
         trigram_score=TrigramSimilarity('name', query),
         is_barcode=Case(
-            When(barcode__icontains=query, then=Value(1)),
+            When(barcode_q, then=Value(1)),
             default=Value(0),
             output_field=IntegerField(),
         ),
@@ -214,25 +275,53 @@ def smart_product_search(queryset, search_query):
         'name'
     )
 
-    # STEP 6: Fallback logic if FTS/Trigram yields nothing
-    if not qs_smart.exists():
-        # Fallback to original icontains logic
-        return queryset.annotate(
-            in_stock=Case(
-                When(quantity__gt=0, then=Value(1)),
-                default=Value(0),
-                output_field=IntegerField(),
-            )
-        ).filter(
-            Q(name__icontains=query) |
-            Q(description__icontains=query) |
-            Q(tags__icontains=query) |
-            Q(category__name__icontains=query) |
-            Q(product_group__icontains=query) |
-            Q(barcode__icontains=query)
-        ).order_by('-in_stock', '-discount_percentage', 'name')
-    
-    return qs_smart
+    # STEP 6: Fallback logic if FTS/Trigram yields nothing (or is unavailable)
+    try:
+        # A savepoint keeps a failing FTS/trigram query from aborting an outer transaction
+        # (PostgreSQL would reject the fallback query otherwise).
+        with transaction.atomic():
+            if qs_smart.exists():
+                return qs_smart
+    except DatabaseError:
+        logger.warning('Smart product search failed; using the basic search', exc_info=True)
+
+    return queryset.annotate(
+        in_stock=Case(
+            When(quantity__gt=0, then=Value(1)),
+            default=Value(0),
+            output_field=IntegerField(),
+        )
+    ).filter(
+        Q(name__icontains=query) |
+        Q(description__icontains=query) |
+        Q(tags__icontains=query) |
+        Q(category__name__icontains=query) |
+        Q(product_group__icontains=query) |
+        barcode_q
+    ).order_by('-in_stock', '-discount_percentage', 'name')
+
+
+SEARCH_LIMIT_DEFAULT = 50
+SEARCH_LIMIT_MAX = 200
+
+
+def _search_limit(request):
+    """?limit= for search results, capped so one call cannot pull a whole catalog with its batches."""
+    raw = request.query_params.get('limit')
+    if raw in (None, ''):
+        return SEARCH_LIMIT_DEFAULT
+    try:
+        limit = int(str(raw).strip())
+    except ValueError:
+        raise ValidationError({'limit': ['Must be a whole number.']}) from None
+    if limit < 1:
+        raise ValidationError({'limit': ['Must be at least 1.']})
+    return min(limit, SEARCH_LIMIT_MAX)
+
+
+def _app_list_price():
+    """The price the app sells at (OE-106): app_price, else the store price."""
+    return Coalesce('app_price', 'price')
 
 
 class ProductPagination(PageNumberPagination):
@@ -253,6 +342,12 @@ def get_retailer_products(request):
                 {'error': 'Only retailers can access this endpoint'},
                 status=status.HTTP_403_FORBIDDEN
             )
+
+        from retailers.module_flags import require_module_enabled
+
+        _org, module_err = require_module_enabled(request.user, 'catalog')
+        if module_err is not None:
+            return module_err
 
         try:
             retailer = RetailerProfile.objects.get(user=request.user)
@@ -326,8 +421,29 @@ def get_retailer_products(request):
 
         # Fast path for POS / Bulk Select All (all products, no pagination, lightweight serialization)
         if request.query_params.get('no_page') == 'true':
-            pos_products = products.select_related('category').prefetch_related('batches')[:10000]  # OOM safety limit
-            
+            pos_products = list(
+                products.select_related(
+                    'category', 'parent_bulk_product', 'brand'
+                ).prefetch_related(
+                    'batches',
+                    Prefetch(
+                        'fractional_children',
+                        queryset=Product.objects.filter(is_active=True).order_by('id'),
+                    ),
+                )[:10000]
+            )  # OOM safety limit
+            Product.cache_saleable_quantities(pos_products)
+            pos_variant_context = {
+                'request': request,
+                'group_siblings_by_key': cache_group_siblings(pos_products),
+            }
+            include_margin = include_purchase_margin(request.user)
+            last_pi_costs = (
+                last_pi_unit_costs_by_product_id(pos_products)
+                if include_margin
+                else {}
+            )
+
             data = []
             for p in pos_products:
                 batches = []
@@ -342,7 +458,9 @@ def get_retailer_products(request):
                                 'original_price': b.original_price,
                                 'quantity': b.quantity,
                                 'is_active': b.is_active,
-                                'show_on_app': b.show_on_app
+                                'show_on_app': b.show_on_app,
+                                'expiry_date': b.expiry_date,
+                                'is_expired': b.is_expired(),
                             })
                 
                 img_url = None
@@ -351,27 +469,57 @@ def get_retailer_products(request):
                 except Exception:
                     img_url = p.image_url
 
-                data.append({
+                row = {
                     'id': p.id,
                     'name': p.name,
                     'price': p.price,
+                    'app_price': p.app_price,
                     'discounted_price': p.discounted_price or p.price,
                     'original_price': p.original_price,
                     'quantity': p.quantity,
+                    'saleable_quantity': p.saleable_quantity(),
                     'track_inventory': p.track_inventory,
+                    'unit': p.unit,
                     'image': img_url,
                     'category_name': p.category.name if p.category else 'Uncategorized',
+                    'brand_name': p.brand.name if p.brand else None,
                     'barcode': p.barcode,
                     'is_active': p.is_active,
+                    'is_featured': p.is_featured,
+                    'is_available': p.is_available,
+                    'is_in_stock': p.is_saleable_in_stock(),
                     'is_seasonal': p.is_seasonal,
+                    'product_group': p.product_group,
                     'has_batches': p.has_batches,
-                    'batches': batches
-                })
+                    'batches': batches,
+                    'group_variants': safe_group_variants_payload(p, pos_variant_context),
+                    'is_parent_bulk': p.is_parent_bulk,
+                    'parent_bulk_product': p.parent_bulk_product_id,
+                    'conversion_factor': p.conversion_factor,
+                    'fractional_children': fractional_children_payload(
+                        p, pos_variant_context
+                    ),
+                }
+                if include_margin:
+                    if p.purchase_price is not None:
+                        cost = p.purchase_price
+                    else:
+                        cost = last_pi_costs.get(p.id)
+                    margin = selling_margin_percent(p.price, cost)
+                    row['margin_percent'] = (
+                        format(margin, 'f') if margin is not None else None
+                    )
+                data.append(row)
             return Response(data, status=status.HTTP_200_OK)
 
         # Apply expensive annotations for normal paginated path
         products = products.select_related(
             'retailer', 'category', 'brand', 'master_product'
+        ).prefetch_related(
+            Prefetch(
+                'fractional_children',
+                queryset=Product.objects.filter(is_active=True).order_by('id'),
+            )
         ).annotate(
             average_rating_annotated=Avg('reviews__rating'),
             review_count_annotated=Count('reviews')
@@ -388,17 +536,50 @@ def get_retailer_products(request):
             Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
         ).order_by('-priority').prefetch_related('targets'))
 
+        can_see_cost = include_purchase_margin(request.user)
+
         # Pagination
         paginator = ProductPagination()
         page = paginator.paginate_queryset(products, request)
 
         if page is not None:
-            serializer = ProductListSerializer(page, many=True, context={'request': request, 'active_offers': active_offers})
+            Product.cache_saleable_quantities(page)
+            serializer = ProductListSerializer(
+                page,
+                many=True,
+                context={
+                    'request': request,
+                    'active_offers': active_offers,
+                    'include_saleable_quantity': True,
+                    'include_fractional_children': True,
+                    'include_group_variants': True,
+                    'include_margin_percent': can_see_cost,
+                    # Cost is the margin's input, so it follows the same purchase-role gate.
+                    'hide_purchase_price': not can_see_cost,
+                },
+            )
             return paginator.get_paginated_response(serializer.data)
 
-        serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
+        products = list(products)
+        Product.cache_saleable_quantities(products)
+        serializer = ProductListSerializer(
+            products,
+            many=True,
+            context={
+                'request': request,
+                'active_offers': active_offers,
+                'include_saleable_quantity': True,
+                'include_fractional_children': True,
+                'include_group_variants': True,
+                'include_margin_percent': can_see_cost,
+                # Cost is the margin's input, so it follows the same purchase-role gate.
+                'hide_purchase_price': not can_see_cost,
+            },
+        )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    except (Http404, APIException):
+        raise
     except Exception as e:
         logger.error(f"Error getting retailer products: {str(e)}")
         return Response(
@@ -469,15 +650,39 @@ def search_products(request):
             log_search_telemetry(search, products.count(), retailer=retailer, user=request.user)
 
         # Limit results for search
-        limit = int(request.query_params.get('limit', 50))
-        products = products[:limit]
+        limit = _search_limit(request)
+        products = products.select_related(
+            'parent_bulk_product', 'brand', 'category'
+        ).prefetch_related(
+            Prefetch(
+                'fractional_children',
+                queryset=Product.objects.filter(is_active=True).order_by('id'),
+            )
+        )
+        products = list(products[:limit])
+        Product.cache_saleable_quantities(products)
+        can_see_cost = include_purchase_margin(request.user)
 
-        serializer = ProductSearchSerializer(products, many=True)
+        serializer = ProductSearchSerializer(
+            products,
+            many=True,
+            context={
+                'request': request,
+                'include_saleable_quantity': True,
+                'include_fractional_children': True,
+                'include_group_variants': True,
+                'include_margin_percent': can_see_cost,
+                # Cost is the margin's input, so it follows the same purchase-role gate.
+                'hide_purchase_price': not can_see_cost,
+            },
+        )
         return Response({
             'results': serializer.data,
             'facets': facets
         }, status=status.HTTP_200_OK)
 
+    except (Http404, APIException):
+        raise
     except Exception as e:
         logger.error(f"Error searching retailer products: {str(e)}")
         return Response(
@@ -488,6 +693,7 @@ def search_products(request):
 
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('catalog')
 def create_product(request):
     """
     Create a new product for authenticated retailer
@@ -500,12 +706,28 @@ def create_product(request):
             )
 
         try:
-            retailer = RetailerProfile.objects.get(user=request.user)
+            retailer = RetailerProfile.objects.select_related('organization').get(
+                user=request.user
+            )
         except RetailerProfile.DoesNotExist:
             return Response(
                 {'error': 'Retailer profile not found'},
                 status=status.HTTP_404_NOT_FOUND
             )
+
+        if create_payload_sets_pack_link(request.data):
+            adjust_err = require_inventory_adjust(
+                request.user, organization=retailer.organization
+            )
+            if adjust_err is not None:
+                return adjust_err
+
+        if create_payload_sets_app_price(request.data):
+            price_err = require_catalog_price(
+                request.user, organization=retailer.organization
+            )
+            if price_err is not None:
+                return price_err
 
         serializer = ProductCreateSerializer(
             data=request.data,
@@ -536,6 +758,17 @@ def create_product(request):
             ).filter(
                 Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
             ).order_by('-priority').prefetch_related('targets'))
+
+            if product.app_price is not None:
+                record_channel_price_audit(
+                    product=product,
+                    actor=request.user,
+                    organization=retailer.organization,
+                    location=retailer,
+                    summary_before=app_price_summary(product, app_price=None),
+                    summary_after=app_price_summary(product),
+                    action=OrgAuditLog.ACTION_CREATE,
+                )
 
             response_serializer = ProductDetailSerializer(product, context={'request': request, 'active_offers': active_offers})
             logger.info(f"Product created: {product.name} by {retailer.shop_name}")
@@ -574,12 +807,22 @@ def get_product_detail(request, product_id):
 
         # Optimize query with select_related and prefetch_related
         queryset = Product.objects.select_related(
-            'retailer', 'category', 'brand'
+            'retailer', 'category', 'brand', 'parent_bulk_product'
         ).prefetch_related(
-            'additional_images', 'reviews', 'reviews__customer'
+            'additional_images', 'reviews', 'reviews__customer', 'batches',
+            Prefetch(
+                'fractional_children',
+                queryset=Product.objects.filter(is_active=True).order_by('id'),
+            ),
         )
-        
-        product = get_object_or_404(queryset, id=product_id, retailer=retailer)
+
+        try:
+            product = queryset.get(id=product_id, retailer=retailer)
+        except Product.DoesNotExist:
+            return Response(
+                {'error': 'Product not found'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
         # Pre-fetch active offers for optimization
         from offers.models import Offer
         from django.utils import timezone
@@ -591,7 +834,17 @@ def get_product_detail(request, product_id):
             Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
         ).order_by('-priority').prefetch_related('targets'))
 
-        serializer = ProductDetailSerializer(product, context={'request': request, 'active_offers': active_offers, 'include_inactive_batches': True})
+        serializer = ProductDetailSerializer(
+            product,
+            context={
+                'request': request,
+                'active_offers': active_offers,
+                'include_inactive_batches': True,
+                'include_saleable_quantity': True,
+                'include_fractional_children': True,
+                'include_margin_percent': include_purchase_margin(request.user),
+            },
+        )
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     except Exception as e:
@@ -604,6 +857,7 @@ def get_product_detail(request, product_id):
 
 @api_view(['PUT', 'PATCH'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('catalog')
 def update_product(request, product_id):
     """
     Update product for authenticated retailer
@@ -616,16 +870,75 @@ def update_product(request, product_id):
             )
 
         try:
-            retailer = RetailerProfile.objects.get(user=request.user)
+            retailer = RetailerProfile.objects.select_related('organization').get(
+                user=request.user
+            )
         except RetailerProfile.DoesNotExist:
+            retailer = None
+
+        if retailer is None:
+            if payload_sets_app_price(request.data):
+                price_err = require_catalog_price(request.user)
+                if price_err is not None:
+                    return price_err
+            if (
+                payload_sets_on_hand_quantity(request.data)
+                or payload_sets_pack_link(request.data)
+                or payload_sets_batch_expiry(request.data)
+            ):
+                adjust_err = require_inventory_adjust(request.user)
+                if adjust_err is not None:
+                    return adjust_err
             return Response(
                 {'error': 'Retailer profile not found'},
                 status=status.HTTP_404_NOT_FOUND
             )
 
         with transaction.atomic():
-            product = Product.objects.select_for_update().get(id=product_id, retailer=retailer)
+            try:
+                product = Product.objects.select_for_update().get(
+                    id=product_id, retailer=retailer
+                )
+            except Product.DoesNotExist:
+                return Response(
+                    {'error': 'Product not found'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
             old_quantity = product.quantity
+            old_app_price = product.app_price
+
+            if payload_has_invalid_expiry(request.data):
+                return Response(
+                    {'error': 'Invalid expiry_date'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            needs_adjust = (
+                payload_sets_on_hand_quantity(request.data)
+                and submitted_on_hand_differs(product, request.data)
+            ) or (
+                payload_sets_pack_link(request.data)
+                and submitted_pack_link_differs(product, request.data)
+            ) or (
+                payload_sets_batch_expiry(request.data)
+                and submitted_batch_expiry_differs(product, request.data)
+            )
+            if needs_adjust:
+                adjust_err = require_inventory_adjust(
+                    request.user, organization=retailer.organization
+                )
+                if adjust_err is not None:
+                    return adjust_err
+
+            if (
+                payload_sets_app_price(request.data)
+                and submitted_app_price_differs(product, request.data)
+            ):
+                price_err = require_catalog_price(
+                    request.user, organization=retailer.organization
+                )
+                if price_err is not None:
+                    return price_err
 
             serializer = ProductUpdateSerializer(
                 product,
@@ -663,6 +976,18 @@ def update_product(request, product_id):
                     Q(end_date__isnull=True) | Q(end_date__gte=timezone.now())
                 ).order_by('-priority').prefetch_related('targets'))
 
+                if old_app_price != product.app_price:
+                    record_channel_price_audit(
+                        product=product,
+                        actor=request.user,
+                        organization=retailer.organization,
+                        location=retailer,
+                        summary_before=app_price_summary(
+                            product, app_price=old_app_price
+                        ),
+                        summary_after=app_price_summary(product),
+                    )
+
                 response_serializer = ProductDetailSerializer(product, context={'request': request, 'active_offers': active_offers, 'include_inactive_batches': True})
                 logger.info(f"Product updated: {product.name} by {retailer.shop_name}")
                 return Response(response_serializer.data, status=status.HTTP_200_OK)
@@ -677,8 +1002,102 @@ def update_product(request, product_id):
         )
 
 
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def write_off_product(request, product_id):
+    """
+    OE-141 / F-0032 — decrease on-hand for damage / expiry / spoilage.
+    Requires inventory.adjust. Tenancy is retailer-scoped (404 deny).
+    """
+    if request.user.user_type != 'retailer':
+        return Response(
+            {'error': 'Only retailers can write off stock'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    from orders.access import staff_served_location_ids
+    from retailers.organization import get_organization_for_user
+
+    org = get_organization_for_user(request.user)
+    adjust_err = require_inventory_adjust(request.user, organization=org)
+    if adjust_err is not None:
+        return adjust_err
+
+    # The shop is taken from the product, limited to the locations this user serves, so staff
+    # without their own shop profile can write off stock too.
+    served_ids = staff_served_location_ids(request.user, org)
+    target = (
+        Product.objects.filter(pk=product_id, retailer_id__in=served_ids)
+        .select_related('retailer')
+        .first()
+    )
+    if target is None:
+        return Response({'error': 'Product not found'}, status=status.HTTP_404_NOT_FOUND)
+    retailer = target.retailer
+
+    data = request.data if isinstance(request.data, dict) else {}
+    quantity = parse_write_off_quantity(data.get('quantity'))
+    if quantity is None:
+        return Response(
+            {'error': 'quantity must be greater than 0'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    batch_id = parse_write_off_batch_id(data.get('batch_id'))
+    if batch_id is False:
+        return Response(
+            {'error': 'Invalid batch_id'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        log = write_off_stock(
+            product_id=product_id,
+            retailer=retailer,
+            quantity=quantity,
+            reason=data.get('reason'),
+            batch_id=batch_id,
+            created_by=request.user,
+        )
+    except WriteOffError as exc:
+        return Response({'error': exc.message}, status=exc.status_code)
+
+    from retailers.audit_log import record_org_audit_event
+    from retailers.models import OrgAuditLog
+
+    record_org_audit_event(
+        organization=org,
+        actor=request.user,
+        action=OrgAuditLog.ACTION_UPDATE,
+        object_type=OrgAuditLog.OBJECT_STOCK_WRITE_OFF,
+        object_id=log.id,
+        location=retailer,
+        summary_before={'product_id': log.product_id, 'quantity': str(log.previous_quantity)},
+        summary_after={
+            'quantity': str(log.new_quantity),
+            'written_off': str(log.quantity_change),
+            'reason': log.reason,
+            'batch_id': log.batch_id,
+        },
+    )
+
+    return Response(
+        {
+            'id': log.id,
+            'product_id': log.product_id,
+            'batch_id': log.batch_id,
+            'reason': log.reason,
+            'log_type': log.log_type,
+            'quantity_change': str(log.quantity_change),
+            'previous_quantity': str(log.previous_quantity),
+            'new_quantity': str(log.new_quantity),
+        },
+        status=status.HTTP_201_CREATED,
+    )
+
+
 @api_view(['DELETE'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('catalog')
 def delete_product(request, product_id):
     """
     Delete product for authenticated retailer
@@ -711,6 +1130,8 @@ def delete_product(request, product_id):
             status=status.HTTP_200_OK
         )
 
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error deleting product: {str(e)}")
         return Response(
@@ -721,6 +1142,7 @@ def delete_product(request, product_id):
 
 @api_view(['PATCH'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('catalog')
 def bulk_update_products(request):
     """
     Update multiple products efficiently for authenticated retailer
@@ -732,13 +1154,31 @@ def bulk_update_products(request):
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        retailer, _ = RetailerProfile.objects.get_or_create(user=request.user)
         items = request.data.get('items', [])
         
-        if not items or not isinstance(items, list):
+        if not items or not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
             return Response(
                 {'error': 'Invalid payload. "items" array is required.'},
                 status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            retailer = RetailerProfile.objects.select_related('organization').get(
+                user=request.user
+            )
+        except RetailerProfile.DoesNotExist:
+            # Never create a shop profile as a side effect of a bulk edit.
+            if bulk_items_set_on_hand_quantity(items):
+                adjust_err = require_inventory_adjust(request.user)
+                if adjust_err is not None:
+                    return adjust_err
+            if bulk_items_set_app_price(items):
+                price_err = require_catalog_price(request.user)
+                if price_err is not None:
+                    return price_err
+            return Response(
+                {'error': 'Retailer profile not found'},
+                status=status.HTTP_404_NOT_FOUND,
             )
 
         product_ids = [item.get('id') for item in items if item.get('id')]
@@ -776,6 +1216,25 @@ def bulk_update_products(request):
         with transaction.atomic():
             products = Product.objects.select_for_update().filter(id__in=product_ids, retailer=retailer)
             product_dict = {p.id: p for p in products}
+            # Compare after lock so a concurrent sale cannot sneak a stale echo.
+            if (
+                bulk_items_set_on_hand_quantity(items)
+                and bulk_items_would_change_on_hand(items, product_dict)
+            ):
+                adjust_err = require_inventory_adjust(
+                    request.user, organization=retailer.organization
+                )
+                if adjust_err is not None:
+                    return adjust_err
+            if (
+                bulk_items_set_app_price(items)
+                and bulk_items_would_change_app_price(items, product_dict)
+            ):
+                price_err = require_catalog_price(
+                    request.user, organization=retailer.organization
+                )
+                if price_err is not None:
+                    return price_err
             logs_to_create = []
             
             from collections import defaultdict
@@ -795,6 +1254,7 @@ def bulk_update_products(request):
                 
                 changed = False
                 old_quantity = product.quantity
+                old_app_price = product.app_price
                 
                 if 'price' in item:
                     try:
@@ -805,8 +1265,9 @@ def bulk_update_products(request):
                         
                 if 'quantity' in item:
                     try:
-                        new_quantity = Decimal(str(item['quantity']))
-                        if new_quantity >= 0:
+                        new_quantity = bulk_write_quantity(item['quantity'])
+                        if new_quantity is not None and new_quantity >= 0:
+                            changed = True
                             if old_quantity != new_quantity:
                                 old_qty = Decimal(str(old_quantity))
                                 if product.has_batches:
@@ -871,6 +1332,18 @@ def bulk_update_products(request):
                     except Exception:
                         pass
                 
+                if 'app_price' in item:
+                    raw_app = item.get('app_price')
+                    if raw_app in (None, ''):
+                        product.app_price = None
+                        changed = True
+                    else:
+                        try:
+                            product.app_price = Decimal(str(raw_app))
+                            changed = True
+                        except Exception:
+                            pass
+
                 if 'original_price' in item:
                     try:
                         product.original_price = Decimal(str(item['original_price']))
@@ -901,6 +1374,17 @@ def bulk_update_products(request):
 
                 if changed:
                     product.save()
+                    if old_app_price != product.app_price:
+                        record_channel_price_audit(
+                            product=product,
+                            actor=request.user,
+                            organization=retailer.organization,
+                            location=retailer,
+                            summary_before=app_price_summary(
+                                product, app_price=old_app_price
+                            ),
+                            summary_after=app_price_summary(product),
+                        )
                     
                     # Keep the first batch in sync with product fields if multi-batch is OFF
                     if not product.has_batches:
@@ -950,6 +1434,8 @@ def bulk_update_products(request):
             'updated_count': updated_count
         }, status=status.HTTP_200_OK)
 
+    except (Http404, APIException):
+        raise
     except Exception as e:
         logger.error(f"Error bulk updating products: {str(e)}")
         return Response({'error': format_exception(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -968,7 +1454,9 @@ def get_retailer_products_public(request, retailer_id):
             'retailer', 'category', 'brand', 'master_product'
         ).annotate(
             average_rating_annotated=Avg('reviews__rating'),
-            review_count_annotated=Count('reviews')
+            review_count_annotated=Count('reviews'),
+            # Price filters and sorting use the price this list shows (the app price).
+            app_list_price=_app_list_price(),
         ).filter(
             retailer=retailer,
             is_active=True,
@@ -1023,8 +1511,8 @@ def get_retailer_products_public(request, retailer_id):
                             products = products.exclude(exclusion_q)
                 else:
                     products = products.none()
-            except Offer.DoesNotExist:
-                pass
+            except (Offer.DoesNotExist, ValueError):
+                pass  # unknown or malformed offer: the list is not filtered, as before
 
         if category:
             if category.isdigit():
@@ -1047,16 +1535,17 @@ def get_retailer_products_public(request, retailer_id):
         if brand:
             products = products.filter(brand__name__icontains=brand)
 
+        # Malformed bounds are ignored, as before; nan / inf count as malformed.
         if min_price:
             try:
-                products = products.filter(price__gte=float(min_price))
-            except ValueError:
+                products = products.filter(app_list_price__gte=decimal_value(min_price, 'min_price'))
+            except ValidationError:
                 pass
 
         if max_price:
             try:
-                products = products.filter(price__lte=float(max_price))
-            except ValueError:
+                products = products.filter(app_list_price__lte=decimal_value(max_price, 'max_price'))
+            except ValidationError:
                 pass
 
         if in_stock is not None:
@@ -1073,7 +1562,7 @@ def get_retailer_products_public(request, retailer_id):
         # Ordering
         ordering = request.query_params.get('ordering', '-created_at')
         if ordering in ['name', '-name', 'price', '-price', 'created_at', '-created_at']:
-            products = products.order_by(ordering)
+            products = products.order_by(ordering.replace('price', 'app_list_price'))
 
         # Pre-fetch active offers for N+1 optimization in serializer
         from offers.models import Offer
@@ -1097,7 +1586,7 @@ def get_retailer_products_public(request, retailer_id):
         serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-    except Http404:
+    except (Http404, APIException):
         raise
     except Exception as e:
         logger.error(f"Error getting retailer products: {str(e)}")
@@ -1153,8 +1642,8 @@ def search_products_public(request, retailer_id):
             log_search_telemetry(search, products.count(), retailer=retailer, user=request.user if request.user.is_authenticated else None)
 
         # Limit results for search
-        limit = int(request.query_params.get('limit', 50))
-        products = products[:limit]
+        limit = _search_limit(request)
+        products = products.select_related('brand', 'category')[:limit]
 
         serializer = ProductSearchSerializer(products, many=True)
         return Response({
@@ -1162,7 +1651,7 @@ def search_products_public(request, retailer_id):
             'facets': facets
         }, status=status.HTTP_200_OK)
 
-    except Http404:
+    except (Http404, APIException):
         raise
     except Exception as e:
         logger.error(f"Error searching public retailer products: {str(e)}")
@@ -1188,7 +1677,7 @@ def get_retailer_categories(request, retailer_id):
         if requested_parent_id == 'null' or requested_parent_id == '':
             requested_parent_id = None
         else:
-            requested_parent_id = int(requested_parent_id) if requested_parent_id else None
+            requested_parent_id = id_value(requested_parent_id, 'parent_id') if requested_parent_id else None
 
         # 1. Get raw counts for all categories that have products for this retailer
         # This gives us {category_id: direct_product_count}
@@ -1253,7 +1742,7 @@ def get_retailer_categories(request, retailer_id):
         
         return Response(data, status=status.HTTP_200_OK)
 
-    except Http404:
+    except (Http404, APIException):
         raise
     except Exception as e:
         logger.error(f"Error getting retailer categories: {str(e)}")
@@ -1406,6 +1895,7 @@ def get_product_detail_public(request, retailer_id, product_id):
                 'wishlisted_product_ids': wishlisted_product_ids
             }
         )
+        # Saleable stock and app-sellable batches come from show_customer_stock (app channel).
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     except Http404:
@@ -1420,6 +1910,7 @@ def get_product_detail_public(request, retailer_id, product_id):
 
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('catalog')
 def upload_products_excel(request):
     """
     Upload products via Excel file for authenticated retailer
@@ -1496,6 +1987,67 @@ def upload_products_excel(request):
             {'error': format_exception(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+@api_view(['POST'])
+@parser_classes([MultiPartParser, FormParser])
+@permission_classes([permissions.IsAuthenticated])
+def import_product_photos(request):
+    """
+    OE-124: attach zip/csv+files images to matching shop SKUs.
+    Failed rows are reported; they do not abort the rest.
+    """
+    if request.user.user_type != 'retailer':
+        return Response(
+            {'error': 'Only retailers can import product photos'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    try:
+        retailer = RetailerProfile.objects.select_related('organization').get(
+            user=request.user
+        )
+    except RetailerProfile.DoesNotExist:
+        return Response(
+            {'error': 'Retailer profile not found'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    denied = require_catalog_image(
+        request.user, organization=retailer.organization
+    )
+    if denied is not None:
+        return denied
+
+    archive = request.FILES.get('archive') or request.FILES.get('file')
+    csv_file = request.FILES.get('csv')
+    uploaded_files = []
+    uploaded_files.extend(request.FILES.getlist('images'))
+    uploaded_files.extend(request.FILES.getlist('image'))
+    if archive is not None:
+        archive_name = (archive.name or '').lower()
+        if archive_name.endswith('.csv') and csv_file is None:
+            csv_file = archive
+            archive = None
+        elif not archive_name.endswith('.zip'):
+            return Response(
+                {'error': 'Archive must be a zip file'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    try:
+        report = import_product_photos_for_retailer(
+            retailer=retailer,
+            actor=request.user,
+            organization=retailer.organization,
+            archive=archive,
+            csv_file=csv_file,
+            uploaded_files=uploaded_files,
+        )
+    except ValueError as exc:
+        return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    return Response(report, status=status.HTTP_200_OK)
 
 
 @api_view(['GET'])
@@ -1962,8 +2514,7 @@ def update_product_category(request, category_id):
         category = get_object_or_404(ProductCategory, id=category_id)
         
         if hasattr(request.user, 'user_type') and request.user.user_type == 'retailer':
-            from retailers.models import RetailerProfile
-            retailer = RetailerProfile.objects.get(user=request.user)
+            retailer = get_object_or_404(RetailerProfile, user=request.user)
             if category.retailer != retailer:
                 if category.retailer is None:
                     # Clone generic category for this specific retailer to ensure isolation
@@ -1993,6 +2544,8 @@ def update_product_category(request, category_id):
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error updating category: {str(e)}")
         return Response(
@@ -2016,8 +2569,7 @@ def delete_product_category(request, category_id):
         category = get_object_or_404(ProductCategory, id=category_id)
         
         if hasattr(request.user, 'user_type') and request.user.user_type == 'retailer':
-            from retailers.models import RetailerProfile
-            retailer = RetailerProfile.objects.get(user=request.user)
+            retailer = get_object_or_404(RetailerProfile, user=request.user)
             if category.retailer != retailer:
                 if category.retailer is None:
                     return Response({'error': 'Cannot delete generic global categories. They will disappear when no longer used by your products.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -2034,6 +2586,8 @@ def delete_product_category(request, category_id):
         logger.info(f"Category deleted: {category_name} by {request.user.username}")
         return Response({'message': 'Category deleted successfully'}, status=status.HTTP_200_OK)
 
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error deleting category: {str(e)}")
         return Response(
@@ -3234,15 +3788,21 @@ def get_deals_of_the_day(request, retailer_id):
     """
     try:
         retailer = get_object_or_404(RetailerProfile.objects.public(), id=retailer_id)
+        # A deal is what the customer saves at the app price; the stored
+        # discount_percentage is off the shop counter price (OE-106).
         products = Product.objects.filter(
             retailer=retailer,
             is_active=True,
             is_available=True,
-            discount_percentage__gt=0
+        ).annotate(
+            app_list_price=_app_list_price(),
+        ).filter(
+            original_price__gt=F('app_list_price'),
         ).select_related('master_product', 'category', 'brand', 'retailer').annotate(
             average_rating_annotated=Avg('reviews__rating'),
-            review_count_annotated=Count('reviews')
-        ).order_by('-discount_percentage')[:10]
+            review_count_annotated=Count('reviews'),
+            app_discount=(F('original_price') - F('app_list_price')) / F('original_price'),
+        ).order_by('-app_discount')[:10]
 
         from offers.models import Offer
         from django.utils import timezone
@@ -3256,7 +3816,7 @@ def get_deals_of_the_day(request, retailer_id):
 
         serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
         return Response(serializer.data, status=status.HTTP_200_OK)
-    except Http404:
+    except (Http404, APIException):
         raise
     except Exception as e:
         logger.error(f"Error getting deals of the day: {str(e)}")
@@ -3271,16 +3831,24 @@ def get_budget_buys(request, retailer_id):
     """
     try:
         retailer = get_object_or_404(RetailerProfile.objects.public(), id=retailer_id)
-        limit_price = float(request.query_params.get('max_price', 99))
+        raw_max_price = request.query_params.get('max_price')
+        limit_price = (
+            money_value(raw_max_price, 'max_price')
+            if raw_max_price not in (None, '') else Decimal('99')
+        )
+        # Budget is judged on the price the customer pays: the app price (OE-106).
         products = Product.objects.filter(
             retailer=retailer,
             is_active=True,
             is_available=True,
-            price__lte=limit_price
+        ).annotate(
+            app_list_price=_app_list_price(),
+        ).filter(
+            app_list_price__lte=limit_price
         ).select_related('master_product', 'category', 'brand', 'retailer').annotate(
             average_rating_annotated=Avg('reviews__rating'),
             review_count_annotated=Count('reviews')
-        ).order_by('price')[:10]
+        ).order_by('app_list_price')[:10]
 
         from offers.models import Offer
         from django.utils import timezone
@@ -3294,7 +3862,7 @@ def get_budget_buys(request, retailer_id):
 
         serializer = ProductListSerializer(products, many=True, context={'request': request, 'active_offers': active_offers})
         return Response(serializer.data, status=status.HTTP_200_OK)
-    except Http404:
+    except (Http404, APIException):
         raise
     except Exception as e:
         logger.error(f"Error getting budget buys: {str(e)}")

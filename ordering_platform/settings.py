@@ -77,6 +77,7 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'common.middleware.RequestLoggingMiddleware',
+    'common.middleware.RejectNulCharactersMiddleware',
 ]
 
 ROOT_URLCONF = 'ordering_platform.urls'
@@ -160,6 +161,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # REST Framework settings
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
+        # Partner API keys are NOT a default: /api/v1/partner/* sets OrgApiKeyAuthentication per view.
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
@@ -182,7 +184,27 @@ REST_FRAMEWORK = {
         'login': '5/minute',
         'otp': '3/minute',
         'geo_estimate': '20/hour',
+        'fulfillment_slots': '120/hour',
+        'customer_lookup': '60/minute',
+        # Partner org API keys (OE-182 / F-0006)
+        'api_key': '600/hour',
     }
+}
+
+# Partner / public versioned API policy (OE-182). Breaking changes → new prefix.
+API_VERSIONING = {
+    'current': 'v1',
+    'supported': ['v1'],
+    'sunset': {
+        # v1 remains until an explicit sunset date is published here.
+        'v1': None,
+    },
+    'notes': (
+        'Breaking changes ship under a new version prefix (e.g. /api/v2/). '
+        'Unversioned /api/retailer/ and /api/customer/ JWT routes remain for '
+        'retailer_ordereasy_njs and customer_ordereasy_njs; partners use '
+        '/api/v1/partner/ with org-scoped API keys.'
+    ),
 }
 
 # JWT Settings
@@ -415,11 +437,14 @@ if 'test' in sys.argv or 'pytest' in sys.modules:
         ],
         'DEFAULT_THROTTLE_CLASSES': [],
         'DEFAULT_THROTTLE_RATES': {
+            'fulfillment_slots': '10000/minute',
+            'customer_lookup': '10000/minute',
             'login': '10000/minute',
             'otp': '10000/minute',
             'anon': '10000/minute',
             'user': '10000/minute',
             'geo_estimate': '10000/minute',
+            'api_key': '10000/minute',
         },
         'DEFAULT_PAGINATION_CLASS': 'common.pagination.StandardResultsSetPagination',
         'PAGE_SIZE': 20,

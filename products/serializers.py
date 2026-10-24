@@ -9,6 +9,18 @@ from .models import (
     ProductUploadSession, UploadSessionItem,
     PurchaseInvoice, PurchaseItem, SupplierLedger, ProductInventoryLog
 )
+from products.inventory_adjust import UNPARSEABLE_EXPIRY, parse_expiry_date
+from products.channel_price import (
+    CHANNEL_APP,
+    apply_channel_price_representation,
+    channel_from_context,
+    resolve_channel_price,
+)
+from products.supplier_last_costs import (
+    draft_or_last_pi_cost,
+    last_pi_unit_costs_by_product_id,
+    selling_margin_percent,
+)
 from products.inventory_service import (
     apply_stock_decrease,
     apply_stock_increase,
@@ -26,6 +38,363 @@ from .customer_stock import filter_in_stock_for_customer
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+class ChannelPriceRepresentationMixin:
+    """POS/retailer sees store price + app_price; app callers see app list only."""
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        return apply_channel_price_representation(data, instance, self.context)
+
+
+def json_qty(val):
+    """Match existing quantity SerializerMethodField JSON shape."""
+    if val is None:
+        return 0
+    if isinstance(val, Decimal):
+        if val == val.to_integral_value():
+            return int(val)
+        return float(val.normalize())
+    return val
+
+
+_MARGIN_PERCENT = serializers.DecimalField(
+    max_digits=10, decimal_places=2, allow_null=True
+)
+
+
+class PurchaseMarginReadMixin:
+    """Purchase-role catalog reads expose margin%; cashiers/public omit it.
+
+    Subclasses must redeclare ``margin_percent`` as a SerializerMethodField.
+    """
+
+    margin_percent = serializers.SerializerMethodField()
+
+    def _include_margin_percent(self):
+        return bool(self.context.get('include_margin_percent'))
+
+    def get_margin_percent(self, obj):
+        if not self._include_margin_percent():
+            return None
+        cache = self.context.get('last_pi_cost_by_product_id')
+        if obj.purchase_price is not None:
+            cost = obj.purchase_price
+        elif cache is not None:
+            cost = cache.get(obj.id)
+        else:
+            cost, _source = draft_or_last_pi_cost(obj)
+        margin = selling_margin_percent(obj.price, cost)
+        if margin is None:
+            return None
+        return _MARGIN_PERCENT.to_representation(margin)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if not self._include_margin_percent():
+            data.pop('margin_percent', None)
+        if self.context.get('hide_purchase_price'):
+            data.pop('purchase_price', None)
+            # Batch rows carry their own cost; hide it with the product cost.
+            for row in data.get('batches') or []:
+                if isinstance(row, dict):
+                    row.pop('purchase_price', None)
+        return data
+
+
+def show_customer_stock(data, product):
+    """
+    App callers see the stock they can buy (OE-149 / KAN-63): ``quantity`` is saleable
+    stock (expired batches left out; pack children follow their parent), and batch rows
+    the app may not sell (expired, or show_on_app off) are dropped.
+    """
+    if product.track_inventory and 'quantity' in data:
+        data['quantity'] = json_qty(product.saleable_quantity())
+    if 'is_in_stock' in data:
+        data['is_in_stock'] = product.is_saleable_in_stock()
+    batches = data.get('batches')
+    if isinstance(batches, list):
+        data['batches'] = [
+            row for row in batches
+            if not isinstance(row, dict)
+            or (row.get('show_on_app', True) and not row.get('is_expired'))
+        ]
+    return data
+
+
+class SaleableQuantityReadMixin:
+    """Retailer/POS reads expose saleable qty; customer/public omit the field."""
+
+    saleable_quantity = serializers.SerializerMethodField()
+
+    def _include_saleable_quantity(self):
+        return bool(self.context.get('include_saleable_quantity'))
+
+    def get_saleable_quantity(self, obj):
+        if not self._include_saleable_quantity():
+            return None
+        return json_qty(obj.saleable_quantity())
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if not self._include_saleable_quantity():
+            data.pop('saleable_quantity', None)
+            if channel_from_context(self.context) == CHANNEL_APP:
+                show_customer_stock(data, instance)
+        elif 'is_in_stock' in data:
+            # Same source as saleable_quantity, so expired-only stock is not "in stock".
+            data['is_in_stock'] = instance.is_saleable_in_stock()
+        return data
+
+
+class FractionalChildReadSerializer(serializers.ModelSerializer):
+    """Active pack child on a parent SKU retailer read (OE-191)."""
+
+    saleable_quantity = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Product
+        fields = ('id', 'name', 'conversion_factor', 'saleable_quantity')
+
+    def get_saleable_quantity(self, obj):
+        parent = self.context.get('pack_parent')
+        if parent is not None and obj.conversion_factor and obj.conversion_factor > 0:
+            return json_qty(parent.saleable_quantity() / obj.conversion_factor)
+        return json_qty(obj.saleable_quantity())
+
+
+def active_fractional_children(obj):
+    """Same-shop active pack children; uses prefetch when present."""
+    cached = getattr(obj, '_prefetched_objects_cache', {}).get(
+        'fractional_children'
+    )
+    if cached is not None:
+        children = cached
+    else:
+        children = obj.fractional_children.filter(is_active=True)
+    return [
+        child
+        for child in children
+        if child.is_active and child.retailer_id == obj.retailer_id
+    ]
+
+
+def fractional_children_payload(obj, context=None):
+    """Same child rows list/detail return. Non-parent → []."""
+    if not obj.is_parent_bulk:
+        return []
+    return FractionalChildReadSerializer(
+        active_fractional_children(obj),
+        many=True,
+        context={**(context or {}), 'pack_parent': obj},
+    ).data
+
+
+class FractionalChildrenReadMixin:
+    """Retailer reads expose active pack children on parent SKUs; else [].
+
+    Subclasses must redeclare ``fractional_children`` as a
+    SerializerMethodField. A plain mixin attribute is not collected by DRF.
+    """
+
+    fractional_children = serializers.SerializerMethodField()
+
+    def _include_fractional_children(self):
+        return bool(self.context.get('include_fractional_children'))
+
+    def get_fractional_children(self, obj):
+        if not self._include_fractional_children():
+            return []
+        return fractional_children_payload(obj, self.context)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if not self._include_fractional_children():
+            data.pop('fractional_children', None)
+        return data
+
+
+def group_sibling_queryset(retailer_ids, product_groups):
+    """Active, available siblings for the given shops and group names."""
+    return Product.objects.filter(
+        retailer_id__in=retailer_ids,
+        product_group__in=product_groups,
+        is_active=True,
+        is_available=True,
+    ).select_related('master_product')
+
+
+def cache_group_siblings(products):
+    """One shop-scoped query of group siblings, keyed by (retailer_id, group)."""
+    groups = {product.product_group for product in products if product.product_group}
+    if not groups:
+        return {}
+    retailer_ids = {product.retailer_id for product in products}
+    by_key = {}
+    for sibling in group_sibling_queryset(retailer_ids, groups):
+        by_key.setdefault((sibling.retailer_id, sibling.product_group), []).append(sibling)
+    return by_key
+
+
+def serialize_group_variant(sibling, channel):
+    selling = resolve_channel_price(sibling, channel)
+    return {
+        'id': sibling.id,
+        'name': sibling.name,
+        'unit': sibling.unit,
+        'price': float(selling),
+        'original_price': float(sibling.original_price) if sibling.original_price else float(selling),
+        'image': sibling.image_display_url,
+        'minimum_order_quantity': float(sibling.minimum_order_quantity) if sibling.minimum_order_quantity else 1,
+        'maximum_order_quantity': float(sibling.maximum_order_quantity) if sibling.maximum_order_quantity else None,
+        'track_inventory': sibling.track_inventory,
+        'quantity': float(sibling.quantity) if sibling.quantity else 0,
+    }
+
+
+def sort_group_siblings(siblings):
+    return sorted(
+        siblings,
+        key=lambda sibling: (
+            0 if (sibling.is_parent_bulk or sibling.parent_bulk_product_id is not None) else 1,
+            sibling.id,
+        ),
+    )
+
+
+def group_variants_payload(obj, context):
+    """Same sibling rows detail already returns. Empty group → []."""
+    if not obj.product_group:
+        return []
+    context = context or {}
+    cache = context.get('group_siblings_by_key')
+    if cache is not None:
+        siblings = [
+            sibling
+            for sibling in cache.get((obj.retailer_id, obj.product_group), [])
+            if sibling.id != obj.id
+        ]
+    else:
+        siblings = list(
+            group_sibling_queryset([obj.retailer_id], [obj.product_group]).exclude(
+                id=obj.id
+            )
+        )
+    channel = channel_from_context(context)
+    return [
+        serialize_group_variant(sibling, channel)
+        for sibling in sort_group_siblings(siblings)
+    ]
+
+
+def safe_group_variants_payload(obj, context):
+    """Same as group_variants_payload; catalog reads stay [] on helper errors."""
+    try:
+        return group_variants_payload(obj, context)
+    except Exception as e:
+        logger.error(f"Error getting group variants: {e}")
+        return []
+
+
+class GroupVariantsListSerializer(serializers.ListSerializer):
+    """Prefetch group siblings (and app stock) once for a multi-product payload."""
+
+    def to_representation(self, data):
+        products = list(data)
+        if channel_from_context(self.context) == CHANNEL_APP:
+            # App rows report saleable stock: one grouped batch sum for the whole page.
+            Product.cache_saleable_quantities(products)
+        if (
+            self.context.get('include_group_variants')
+            and self.context.get('group_siblings_by_key') is None
+        ):
+            self.context['group_siblings_by_key'] = cache_group_siblings(products)
+        if (
+            self.context.get('include_margin_percent')
+            and self.context.get('last_pi_cost_by_product_id') is None
+        ):
+            self.context['last_pi_cost_by_product_id'] = (
+                last_pi_unit_costs_by_product_id(products)
+            )
+        return super().to_representation(products)
+
+
+class GroupVariantsReadMixin:
+    """Same-shop product_group siblings; empty group → [].
+
+    Opt-in via context ``include_group_variants`` (retailer reads). Customer
+    lists omit it: each row would embed every sibling and its stock.
+    Subclasses must redeclare ``group_variants`` as a SerializerMethodField.
+    """
+
+    group_variants = serializers.SerializerMethodField()
+
+    def _include_group_variants(self):
+        return bool(self.context.get('include_group_variants'))
+
+    def get_group_variants(self, obj):
+        if not self._include_group_variants():
+            return []
+        return safe_group_variants_payload(obj, self.context)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if not self._include_group_variants():
+            data.pop('group_variants', None)
+        return data
+
+
+def parent_bulk_cycle_exists(child_pk, parent_product):
+    """True when parent_bulk_product would loop back to child_pk or itself."""
+    if parent_product is None:
+        return False
+
+    if child_pk is not None and parent_product.pk == child_pk:
+        return True
+    seen = {parent_product.pk}
+    if child_pk is not None:
+        seen.add(child_pk)
+    ancestor_id = parent_product.parent_bulk_product_id
+    while ancestor_id is not None:
+        if ancestor_id in seen:
+            return True
+        seen.add(ancestor_id)
+        ancestor_id = (
+            Product.objects.filter(pk=ancestor_id)
+            .values_list('parent_bulk_product_id', flat=True)
+            .first()
+        )
+    return False
+
+
+
+def lock_parent_chain_and_recheck(child_pk, parent_product):
+    """
+    Re-run the cycle check under row locks on the parent chain so two concurrent updates
+    (A under B, B under A) cannot both pass. Locks only apply inside a transaction.
+    """
+    from django.db import connection
+
+    if parent_product is None:
+        return
+    chain, seen, current = [], set(), parent_product.pk
+    while current is not None and current not in seen:
+        seen.add(current)
+        chain.append(current)
+        current = (
+            Product.objects.filter(pk=current)
+            .values_list('parent_bulk_product_id', flat=True)
+            .first()
+        )
+    if connection.in_atomic_block:
+        list(Product.objects.select_for_update().filter(pk__in=chain).order_by('pk'))
+    fresh_parent = Product.objects.get(pk=parent_product.pk)
+    if parent_bulk_cycle_exists(child_pk, fresh_parent):
+        raise serializers.ValidationError(
+            {'parent_bulk_product': 'Parent bulk product pointers cannot form a cycle.'}
+        )
+
 
 class ProductCategorySerializer(serializers.ModelSerializer):
     """
@@ -51,12 +420,43 @@ class ProductBatchSerializer(serializers.ModelSerializer):
     """
     Serializer for product batches
     """
+    is_expired = serializers.SerializerMethodField()
+
     class Meta:
         model = ProductBatch
         fields = [
-            'id', 'batch_number', 'barcode', 'purchase_price', 
-            'price', 'original_price', 'quantity', 'is_active', 'show_on_app'
+            'id', 'batch_number', 'barcode', 'purchase_price',
+            'price', 'original_price', 'quantity', 'is_active', 'show_on_app',
+            'expiry_date',
+            'is_expired',
         ]
+
+    def get_is_expired(self, obj):
+        return obj.is_expired()
+
+
+class ExpiringBatchListSerializer(ProductBatchSerializer):
+    """Shop expiry list (OE-210). Batch fields plus product identity; no cost data by default."""
+
+    product_id = serializers.IntegerField(read_only=True)
+    product_name = serializers.CharField(source='product.name', read_only=True)
+
+    class Meta(ProductBatchSerializer.Meta):
+        fields = [
+            name for name in ProductBatchSerializer.Meta.fields if name != 'purchase_price'
+        ] + [
+            'product_id',
+            'product_name',
+        ]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Purchase price is margin information; only callers with purchasing.costs.read get it.
+        if self.context.get('include_costs'):
+            data['purchase_price'] = (
+                str(instance.purchase_price) if instance.purchase_price is not None else None
+            )
+        return data
 
 
 class ProductBrandSerializer(serializers.ModelSerializer):
@@ -92,7 +492,7 @@ class ProductReviewSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'customer_name', 'is_verified_purchase', 'created_at']
 
 
-class ProductListSerializer(serializers.ModelSerializer):
+class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product list view
     """
@@ -108,20 +508,28 @@ class ProductListSerializer(serializers.ModelSerializer):
     is_wishlisted = serializers.SerializerMethodField()
     batches = serializers.SerializerMethodField()
     quantity = serializers.SerializerMethodField()
+    saleable_quantity = serializers.SerializerMethodField()
+    fractional_children = serializers.SerializerMethodField()
+    group_variants = serializers.SerializerMethodField()
+    margin_percent = serializers.SerializerMethodField()
     minimum_order_quantity = serializers.SerializerMethodField()
     maximum_order_quantity = serializers.SerializerMethodField()
     gst_rate = serializers.DecimalField(max_digits=5, decimal_places=2)
     class Meta:
         model = Product
+        list_serializer_class = GroupVariantsListSerializer
         fields = [
-            'id', 'name', 'description', 'price', 'purchase_price', 'discounted_price',
-            'original_price', 'discount_percentage', 'quantity', 'track_inventory', 'unit',
+            'id', 'name', 'description', 'price', 'app_price', 'purchase_price', 'discounted_price',
+            'original_price', 'discount_percentage', 'quantity', 'saleable_quantity',
+            'margin_percent',
+            'track_inventory', 'unit',
             'minimum_order_quantity', 'maximum_order_quantity',
             'image', 'image_url', 'category_name', 'brand_name', 'retailer_name',
             'is_in_stock', 'is_featured', 'is_active', 'is_seasonal', 'is_available',
             'average_rating', 'review_count', 'created_at', 'product_group',
             'active_offer_text', 'is_wishlisted', 'barcode', 'has_batches', 'batches',
             'is_parent_bulk', 'parent_bulk_product', 'conversion_factor',
+            'fractional_children', 'group_variants',
             'hsn_code', 'gst_rate'
         ]
 
@@ -164,11 +572,7 @@ class ProductListSerializer(serializers.ModelSerializer):
             return None
 
     def get_brand_name(self, obj):
-        try:
-            return obj.brand.name if obj.brand else None
-        except Exception as e:
-            logger.error(f"Error getting brand name: {e}")
-            return None
+        return obj.brand.name if obj.brand else None
 
     def get_image(self, obj):
         """Get product image URL or fallback to image_url"""
@@ -268,21 +672,40 @@ class ProductListSerializer(serializers.ModelSerializer):
             return False
 
 
-class ProductSearchSerializer(serializers.ModelSerializer):
+class ProductSearchSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, GroupVariantsReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Lightweight serializer for product search results
     """
     image = serializers.SerializerMethodField()
-    
+    category_name = serializers.SerializerMethodField()
+    brand_name = serializers.SerializerMethodField()
     batches = serializers.SerializerMethodField()
-    
+    saleable_quantity = serializers.SerializerMethodField()
+    fractional_children = serializers.SerializerMethodField()
+    group_variants = serializers.SerializerMethodField()
+    margin_percent = serializers.SerializerMethodField()
+    discounted_price = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    is_in_stock = serializers.BooleanField(read_only=True)
+
     class Meta:
         model = Product
         # barcode + original_price are required by Print Labels (and POS search rows)
         # so callers do not have to re-fetch product detail after picking a hit.
+        list_serializer_class = GroupVariantsListSerializer
         fields = [
-            'id', 'name', 'price', 'original_price', 'unit', 'image', 'barcode',
-            'track_inventory', 'quantity', 'has_batches', 'batches',
+            'id', 'name', 'price', 'app_price', 'discounted_price', 'original_price', 'unit', 'image',
+            'category_name', 'brand_name',
+            'barcode',
+            'is_featured',
+            'is_active',
+            'is_seasonal',
+            'is_available',
+            'is_in_stock',
+            'product_group',
+            'track_inventory',
+            'quantity', 'saleable_quantity', 'margin_percent', 'has_batches', 'batches',
+            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor',
+            'fractional_children', 'group_variants',
         ]
         
     def get_batches(self, obj):
@@ -298,7 +721,17 @@ class ProductSearchSerializer(serializers.ModelSerializer):
             logger.error(f"Error getting search image: {e}")
             return None
 
-class ProductDetailSerializer(serializers.ModelSerializer):
+    def get_category_name(self, obj):
+        try:
+            return obj.category.name if obj.category else None
+        except Exception as e:
+            logger.error(f"Error getting category name: {e}")
+            return None
+
+    def get_brand_name(self, obj):
+        return obj.brand.name if obj.brand else None
+
+class ProductDetailSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, FractionalChildrenReadMixin, ChannelPriceRepresentationMixin, serializers.ModelSerializer):
     """
     Serializer for product detail view
     """
@@ -321,16 +754,21 @@ class ProductDetailSerializer(serializers.ModelSerializer):
     offers = serializers.SerializerMethodField()
     is_wishlisted = serializers.SerializerMethodField()
     quantity = serializers.SerializerMethodField()
+    saleable_quantity = serializers.SerializerMethodField()
+    fractional_children = serializers.SerializerMethodField()
     minimum_order_quantity = serializers.SerializerMethodField()
     maximum_order_quantity = serializers.SerializerMethodField()
     group_variants = serializers.SerializerMethodField()
+    margin_percent = serializers.SerializerMethodField()
     gst_rate = serializers.DecimalField(max_digits=5, decimal_places=2)
     
     class Meta:
         model = Product
         fields = [
-            'id', 'name', 'description', 'price', 'purchase_price', 'discounted_price',
-            'original_price', 'discount_percentage', 'savings', 'quantity', 'track_inventory',
+            'id', 'name', 'description', 'price', 'app_price', 'purchase_price', 'discounted_price',
+            'original_price', 'discount_percentage', 'savings', 'quantity', 'saleable_quantity',
+            'margin_percent',
+            'track_inventory',
             'unit', 'minimum_order_quantity', 'maximum_order_quantity', 'has_batches', 'batches',
             'image', 'image_url', 'images', 'additional_images', 'category', 
             'category_name', 'brand', 'brand_name',
@@ -338,7 +776,8 @@ class ProductDetailSerializer(serializers.ModelSerializer):
             'is_in_stock', 'is_featured', 'is_active', 'is_seasonal', 'is_available', 
             'average_rating', 'review_count', 'created_at', 'updated_at',
             'product_group', 'active_offer_text', 'offers', 'is_wishlisted', 'barcode',
-            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor', 'group_variants',
+            'is_parent_bulk', 'parent_bulk_product', 'conversion_factor',
+            'fractional_children', 'group_variants',
             'hsn_code', 'gst_rate'
         ]
 
@@ -552,44 +991,23 @@ class ProductDetailSerializer(serializers.ModelSerializer):
             return False
 
     def get_group_variants(self, obj):
-        """Get all other active products in the same group for this retailer, sorting parent/child first"""
-        try:
-            if obj.product_group:
-                siblings = filter_in_stock_for_customer(Product.objects.filter(
-                    retailer=obj.retailer,
-                    product_group=obj.product_group,
-                    is_active=True,
-                    is_available=True
-                )).exclude(id=obj.id).only(
-                    'id', 'name', 'unit', 'price', 'original_price', 
-                    'is_parent_bulk', 'parent_bulk_product'
-                )
-                
-                # Sort: items where is_parent_bulk is True or parent_bulk_product_id is not None come first
-                sorted_siblings = sorted(
-                    list(siblings),
-                    key=lambda s: (0 if (s.is_parent_bulk or s.parent_bulk_product_id is not None) else 1, s.id)
-                )
-                
-                variants = []
-                for s in sorted_siblings:
-                    variants.append({
-                        'id': s.id,
-                        'name': s.name,
-                        'unit': s.unit,
-                        'price': float(s.price),
-                        'original_price': float(s.original_price) if s.original_price else float(s.price),
-                        'image': s.image_display_url,
-                        'minimum_order_quantity': float(s.minimum_order_quantity) if s.minimum_order_quantity else 1,
-                        'maximum_order_quantity': float(s.maximum_order_quantity) if s.maximum_order_quantity else None,
-                        'track_inventory': s.track_inventory,
-                        'quantity': float(s.quantity) if s.quantity else 0
-                    })
-                return variants
+        """Other active products in the same group, parent/child first.
+
+        Customers (app channel) see in-stock siblings at the app price (KAN-63,
+        OE-106); shop staff see every sibling at the store price.
+        """
+        if not obj.product_group:
             return []
-        except Exception as e:
-            logger.error(f"Error getting group variants: {e}")
-            return []
+        channel = channel_from_context(self.context)
+        siblings = group_sibling_queryset(
+            [obj.retailer_id], [obj.product_group]
+        ).exclude(id=obj.id)
+        if channel == CHANNEL_APP:
+            siblings = filter_in_stock_for_customer(siblings)
+        return [
+            serialize_group_variant(sibling, channel)
+            for sibling in sort_group_siblings(siblings)
+        ]
 
 
 class MasterProductSerializer(serializers.ModelSerializer):
@@ -665,7 +1083,7 @@ class ProductCreateSerializer(ProductTaxValidationMixin, serializers.ModelSerial
     class Meta:
         model = Product
         fields = [
-            'name', 'description', 'category', 'brand', 'price', 'purchase_price',
+            'name', 'description', 'category', 'brand', 'price', 'app_price', 'purchase_price',
             'original_price', 'discount_percentage', 'quantity', 'track_inventory', 'unit',
             'minimum_order_quantity', 'maximum_order_quantity', 'image',
             'images', 'specifications', 'tags', 'is_featured', 'is_available',
@@ -679,6 +1097,13 @@ class ProductCreateSerializer(ProductTaxValidationMixin, serializers.ModelSerial
             retailer = self.context.get('retailer')
             if retailer and Product.objects.filter(retailer=retailer, barcode=value).exists():
                 raise serializers.ValidationError("A product with this barcode already exists.")
+        return value
+
+    def validate_conversion_factor(self, value):
+        if value is not None and value <= 0:
+            raise serializers.ValidationError(
+                "Conversion factor must be greater than zero."
+            )
         return value
 
     def validate(self, data):
@@ -704,6 +1129,10 @@ class ProductCreateSerializer(ProductTaxValidationMixin, serializers.ModelSerial
             retailer = self.context.get('retailer')
             if retailer and parent_product.retailer != retailer:
                 raise serializers.ValidationError("Parent bulk product must belong to the same retailer.")
+            if parent_bulk_cycle_exists(None, parent_product):
+                raise serializers.ValidationError(
+                    "Parent bulk product pointers cannot form a cycle."
+                )
         
         quantity = data.get('quantity', 0)
         min_order_qty = data.get('minimum_order_quantity', 1)
@@ -746,7 +1175,7 @@ class ProductUpdateSerializer(ProductTaxValidationMixin, serializers.ModelSerial
     class Meta:
         model = Product
         fields = [
-            'name', 'description', 'category', 'brand', 'price', 'purchase_price',
+            'name', 'description', 'category', 'brand', 'price', 'app_price', 'purchase_price',
             'original_price', 'discount_percentage', 'quantity', 'track_inventory', 'unit',
             'minimum_order_quantity', 'maximum_order_quantity', 'image',
             'images', 'specifications', 'tags', 'is_featured', 'is_available',
@@ -761,9 +1190,18 @@ class ProductUpdateSerializer(ProductTaxValidationMixin, serializers.ModelSerial
                 raise serializers.ValidationError("A product with this barcode already exists.")
         return value
 
+    def validate_conversion_factor(self, value):
+        if value is not None and value <= 0:
+            raise serializers.ValidationError(
+                "Conversion factor must be greater than zero."
+            )
+        return value
+
     def update(self, instance, validated_data):
         """Handle product update and sync batches if provided"""
         import json
+        if validated_data.get('parent_bulk_product') is not None:
+            lock_parent_chain_and_recheck(instance.pk, validated_data['parent_bulk_product'])
         batches_data = self.initial_data.get('batches')
         link_barcode = self.initial_data.get('link_barcode') # Flag for automated batch creation
         
@@ -831,6 +1269,13 @@ class ProductUpdateSerializer(ProductTaxValidationMixin, serializers.ModelSerial
                     'is_active': batch_item.get('is_active', True),
                     'show_on_app': batch_item.get('show_on_app', True),
                 }
+                if 'expiry_date' in batch_item:
+                    parsed_expiry = parse_expiry_date(batch_item.get('expiry_date'))
+                    if parsed_expiry is UNPARSEABLE_EXPIRY:
+                        raise serializers.ValidationError(
+                            {'batches': 'Invalid expiry_date'}
+                        )
+                    batch_fields['expiry_date'] = parsed_expiry
                 
                 if batch_id:
                     ProductBatch.objects.filter(id=batch_id, product=instance).update(**batch_fields)
@@ -903,6 +1348,11 @@ class ProductUpdateSerializer(ProductTaxValidationMixin, serializers.ModelSerial
                 retailer = self.instance.retailer
             if retailer and parent_product.retailer != retailer:
                 raise serializers.ValidationError("Parent bulk product must belong to the same retailer.")
+            child_pk = self.instance.pk if self.instance else None
+            if parent_bulk_cycle_exists(child_pk, parent_product):
+                raise serializers.ValidationError(
+                    "Parent bulk product pointers cannot form a cycle."
+                )
             
             # User requested that existing stock should not block linking,
             # and the child stock should simply be calculated from the parent.
@@ -925,6 +1375,23 @@ class ProductUpdateSerializer(ProductTaxValidationMixin, serializers.ModelSerial
             if track_inv and current_quantity > 0 and min_quantity > current_quantity:
                 raise serializers.ValidationError("Minimum order quantity cannot be greater than available quantity")
         
+        batches_data = self.initial_data.get('batches')
+        if isinstance(batches_data, str):
+            import json
+            try:
+                batches_data = json.loads(batches_data)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                batches_data = None
+        if isinstance(batches_data, list):
+            for batch_item in batches_data:
+                if not isinstance(batch_item, dict) or 'expiry_date' not in batch_item:
+                    continue
+                parsed_expiry = parse_expiry_date(batch_item.get('expiry_date'))
+                if parsed_expiry is UNPARSEABLE_EXPIRY:
+                    raise serializers.ValidationError(
+                        {'batches': 'Invalid expiry_date'}
+                    )
+
         max_quantity = data.get('maximum_order_quantity', self.instance.maximum_order_quantity)
         min_quantity_final = data.get('minimum_order_quantity', self.instance.minimum_order_quantity)
         if max_quantity and max_quantity < min_quantity_final:
@@ -1016,6 +1483,13 @@ class PurchaseItemSerializer(serializers.ModelSerializer):
     Serializer for Purchase Items
     """
     product_name = serializers.CharField(source='product.name', read_only=True)
+    # OE-310: echo Product.unit already on list/detail. Null/empty stays null/empty.
+    unit = serializers.CharField(
+        source='product.unit',
+        read_only=True,
+        allow_null=True,
+        allow_blank=True,
+    )
     # Fields to allow updating product prices during purchase
     new_price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, write_only=True)
     new_original_price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, write_only=True)
@@ -1023,13 +1497,13 @@ class PurchaseItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = PurchaseItem
         fields = [
-            'id', 'product', 'product_name', 'quantity', 'purchase_price',
+            'id', 'product', 'product_name', 'unit', 'quantity', 'purchase_price',
             'total', 'hsn_code', 'gst_rate', 'taxable_value', 'tax_amount',
             'tax_type', 'mrp_updated', 'new_price', 'new_original_price',
             'returned_quantity', 'net_quantity',
         ]
         read_only_fields = [
-            'id', 'hsn_code', 'gst_rate', 'taxable_value', 'tax_amount',
+            'id', 'unit', 'hsn_code', 'gst_rate', 'taxable_value', 'tax_amount',
             'tax_type',
         ]
 
@@ -1101,6 +1575,37 @@ class PurchaseInvoiceSerializer(serializers.ModelSerializer):
                     f"Invalid product id(s): {', '.join(invalid_product_ids)}."
                 )
             })
+
+    def validate_supplier(self, supplier):
+        """
+        Inactive suppliers cannot be selected on new purchase invoices.
+
+        Existing invoices may keep an inactive supplier (not a new selection).
+        Changing the supplier on an existing invoice is treated as a new pick.
+        OE-102 PO create should call the same helper.
+        """
+        from retailers.suppliers import (
+            assert_supplier_in_org,
+            assert_supplier_selectable_for_new_purchase,
+        )
+
+        if supplier is None:
+            return supplier
+
+        is_create = self.instance is None
+        changing = (
+            self.instance is not None
+            and self.instance.supplier_id != supplier.id
+        )
+        if is_create or changing:
+            assert_supplier_selectable_for_new_purchase(supplier)
+
+        retailer = self.context.get('retailer')
+        if retailer is None and self.instance is not None:
+            retailer = self.instance.retailer
+        if retailer is not None:
+            assert_supplier_in_org(supplier, retailer)
+        return supplier
 
     def _validate_supplier_active_for_purchase(self, supplier, previous_supplier=None):
         if supplier is None or supplier.is_active:
@@ -1358,3 +1863,34 @@ class SupplierLedgerSerializer(serializers.ModelSerializer):
 
     def get_reference_invoice_number(self, obj):
         return obj.reference_invoice.invoice_number if obj.reference_invoice else None
+
+class SkuSupplierLastCostSerializer(serializers.Serializer):
+    """One supplier's latest PI unit cost for a SKU (OE-112)."""
+
+    supplier_id = serializers.IntegerField()
+    supplier_name = serializers.CharField(allow_blank=True)
+    last_cost = serializers.DecimalField(max_digits=10, decimal_places=2)
+    invoice_id = serializers.IntegerField()
+    invoice_date = serializers.DateField()
+
+
+class SkuLastSupplierCostsSerializer(serializers.Serializer):
+    """Purchase-role read of last PI costs by supplier. Empty list = no history."""
+
+    product_id = serializers.IntegerField()
+    suppliers = SkuSupplierLastCostSerializer(many=True)
+
+
+class SkuMarginPreviewSerializer(serializers.Serializer):
+    """Purchase-role margin% preview. Missing cost → null, not 0."""
+
+    product_id = serializers.IntegerField()
+    selling_price = serializers.DecimalField(max_digits=10, decimal_places=2)
+    cost = serializers.DecimalField(
+        max_digits=10, decimal_places=2, allow_null=True
+    )
+    cost_source = serializers.CharField(allow_null=True, allow_blank=True)
+    margin_percent = serializers.DecimalField(
+        max_digits=10, decimal_places=2, allow_null=True
+    )
+

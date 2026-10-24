@@ -5,11 +5,13 @@ from django.utils import timezone
 from .models import Order, OrderItem, OrderStatusLog, OrderDelivery, OrderFeedback, OrderReturn, OrderChatMessage, RetailerRating
 from .domain.status_policy import ensure_transition_allowed, InvalidStatusTransitionError
 from customers.models import CustomerAddress
+from products.channel_price import CHANNEL_APP, CHANNEL_STORE, resolve_channel_price
 from products.models import Product, ProductInventoryLog
 from cart.models import Cart, CartItem
 from returns.models import SalesReturnItem
 from django.db.models import Sum
 from products.tax_service import allocate_order_discount, quantize_2, split_inclusive_line
+from common.client_input import decimal_value, id_value, money_value
 
 
 class OrderItemSerializer(serializers.ModelSerializer):
@@ -51,7 +53,11 @@ class OrderItemSerializer(serializers.ModelSerializer):
         return float(obj.total_price)
 
     def get_returned_quantity(self, obj):
-        qty = SalesReturnItem.objects.filter(order_item=obj).aggregate(total=Sum('quantity'))['total'] or 0
+        prefetched = getattr(obj, '_prefetched_objects_cache', {}).get('returns')
+        if prefetched is not None:
+            qty = sum((item.quantity for item in prefetched), Decimal('0'))
+        else:
+            qty = SalesReturnItem.objects.filter(order_item=obj).aggregate(total=Sum('quantity'))['total'] or 0
         if isinstance(qty, Decimal):
             if qty == qty.to_integral_value(): return int(qty)
             return float(qty.normalize())
@@ -79,6 +85,23 @@ class OrderItemSerializer(serializers.ModelSerializer):
         return None
 
 
+class OrderDeliverySerializer(serializers.ModelSerializer):
+    """Embedded courier assign details (OE-275)."""
+    assigned_at = serializers.DateTimeField(source='created_at', read_only=True)
+
+    class Meta:
+        model = OrderDelivery
+        fields = [
+            'delivery_person_name',
+            'delivery_person_phone',
+            'estimated_delivery_time',
+            'delivery_status',
+            'actual_delivery_time',
+            'assigned_at',
+        ]
+        read_only_fields = fields
+
+
 class OrderListSerializer(serializers.ModelSerializer):
     """
     Serializer for order list view
@@ -101,10 +124,11 @@ class OrderListSerializer(serializers.ModelSerializer):
         model = Order
         fields = [
             'id', 'order_number', 'retailer', 'retailer_name', 'customer_name', 'delivery_mode', 'payment_mode',
-            'status', 'total_amount', 'refund_amount', 'net_amount', 'is_returned', 'items_count', 'created_at', 'updated_at', 
+            'status', 'delivery_fee', 'discount_amount', 'total_amount', 'refund_amount', 'net_amount', 'is_returned', 'items_count', 'created_at', 'updated_at', 
             'has_customer_feedback', 'has_retailer_rating', 'feedback',
             'preparation_time_minutes', 'estimated_ready_time', 'expected_processing_start', 'cancelled_by', 'customer_average_rating', 'source'
-            , 'payment_status', 'payment_reference_id', 'cash_amount', 'upi_amount', 'card_amount', 'credit_amount'
+            , 'payment_status', 'payment_reference_id', 'cash_amount', 'upi_amount', 'card_amount', 'credit_amount',
+            'fulfillment_slot_start', 'fulfillment_slot_end',
         ]
 
     refund_amount = serializers.SerializerMethodField()
@@ -112,31 +136,51 @@ class OrderListSerializer(serializers.ModelSerializer):
     is_returned = serializers.SerializerMethodField()
     total_amount = serializers.SerializerMethodField()
 
+    fulfillment_slot_end = serializers.SerializerMethodField()
+
+    def get_fulfillment_slot_end(self, obj):
+        if not obj.fulfillment_slot_start:
+            return None
+        from orders.fulfillment_slots import slot_end
+
+        return slot_end(obj.fulfillment_slot_start).isoformat()
+
     def get_refund_amount(self, obj):
+        if hasattr(obj, 'refund_total_annotated') and obj.refund_total_annotated is not None:
+            return float(obj.refund_total_annotated)
         val = obj.returns.aggregate(total=Sum('refund_amount'))['total'] or Decimal('0.00')
         return float(val)
 
     def get_net_amount(self, obj):
-        refund = obj.returns.aggregate(total=Sum('refund_amount'))['total'] or Decimal('0.00')
+        if hasattr(obj, 'refund_total_annotated') and obj.refund_total_annotated is not None:
+            refund = obj.refund_total_annotated
+        else:
+            refund = obj.returns.aggregate(total=Sum('refund_amount'))['total'] or Decimal('0.00')
         return float(obj.total_amount - refund)
 
     def get_total_amount(self, obj):
         return float(obj.total_amount)
 
     def get_is_returned(self, obj):
+        if hasattr(obj, 'refund_total_annotated'):
+            return bool(obj.refund_total_annotated)
         return obj.returns.exists()
     
     def get_items_count(self, obj):
         """Get number of items in order"""
-        # Fallback for when serializer used without annotation
-        return getattr(obj, 'items_count_annotated', obj.items.count())
+        if hasattr(obj, 'items_count_annotated'):
+            return obj.items_count_annotated
+        return obj.items.count()
 
     def get_customer_name(self, obj):
         """Get unified customer name based on priority"""
+        if hasattr(obj, 'customer_nickname_annotated') and obj.customer_nickname_annotated:
+            return obj.customer_nickname_annotated
+
         from retailers.models import RetailerCustomerMapping
-        
-        # 1. Try mapping nickname
-        if obj.customer and obj.retailer:
+
+        # 1. Try mapping nickname (non-list callers without annotation)
+        if obj.customer and obj.retailer and not hasattr(obj, 'customer_nickname_annotated'):
             mapping = RetailerCustomerMapping.objects.filter(
                 retailer=obj.retailer,
                 customer=obj.customer
@@ -274,6 +318,9 @@ class OrderDetailSerializer(serializers.ModelSerializer):
     upi_amount = serializers.SerializerMethodField()
     card_amount = serializers.SerializerMethodField()
     credit_amount = serializers.SerializerMethodField()
+    delivery_info = serializers.SerializerMethodField()
+    taxable_amount = serializers.SerializerMethodField()
+    tax_amount = serializers.SerializerMethodField()
     
     class Meta:
         model = Order
@@ -284,7 +331,7 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'subtotal', 'delivery_fee', 'discount_amount', 'discount_from_points', 'points_redeemed', 'points_earned',
             'taxable_amount', 'tax_amount', 'total_amount', 'refund_amount', 'net_amount',
             'coupon_code',
-            'special_instructions', 'cancellation_reason', 'cancelled_by', 
+            'special_instructions', 'notes', 'cancellation_reason', 'cancelled_by', 
             'payment_reference_id', 'payment_status', 'payment_edit_count', 'is_payment_locked',
             'cash_amount', 'upi_amount', 'card_amount', 'credit_amount',
             'delivery_address_text', 'retailer_gst_number', 'retailer_receipt_footer', 'retailer_show_gst', 'retailer_print_upi_qr', 'retailer_printer_size',
@@ -295,9 +342,52 @@ class OrderDetailSerializer(serializers.ModelSerializer):
             'cancelled_at', 'unread_messages_count',
             'has_customer_feedback', 'has_retailer_rating', 'feedback',
             'preparation_time_minutes', 'estimated_ready_time', 'expected_processing_start', 'customer_average_rating', 'source',
-            'retailer_delivery_charge', 'retailer_free_delivery_threshold'
+            'retailer_delivery_charge', 'retailer_free_delivery_threshold',
+            'pickup_code', 'pickup_ready_at',
+            'fulfillment_slot_start', 'fulfillment_slot_end',
+            'delivery_info',
         ]
+
+    fulfillment_slot_end = serializers.SerializerMethodField()
+
+    def get_fulfillment_slot_end(self, obj):
+        if not obj.fulfillment_slot_start:
+            return None
+        from orders.fulfillment_slots import slot_end
+
+        return slot_end(obj.fulfillment_slot_start).isoformat()
+
+    def get_delivery_info(self, obj):
+        from django.core.exceptions import ObjectDoesNotExist
+
+        try:
+            if obj.delivery_info:
+                return OrderDeliverySerializer(obj.delivery_info).data
+        except ObjectDoesNotExist:
+            pass
+        return None
+
+    def get_taxable_amount(self, obj):
+        val = getattr(obj, 'taxable_amount', None)
+        return str(val) if val is not None else None
+
+    def get_tax_amount(self, obj):
+        val = getattr(obj, 'tax_amount', None)
+        return str(val) if val is not None else None
     
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # The pickup code is the customer's proof of collection; the shop that verifies it
+        # must not be able to read it from the API.
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if getattr(user, 'id', None) is None or user.id != instance.customer_id:
+            data.pop('pickup_code', None)
+        # Order notes are the shop's internal notes (OE-325): staff only.
+        if getattr(user, 'user_type', None) != 'retailer':
+            data.pop('notes', None)
+        return data
+
     def get_customer_name(self, obj):
         """Get unified customer name based on priority"""
         from retailers.models import RetailerCustomerMapping
@@ -451,6 +541,8 @@ class OrderCreateSerializer(serializers.Serializer):
     payment_mode = serializers.ChoiceField(choices=Order.PAYMENT_MODE_CHOICES)
     special_instructions = serializers.CharField(required=False, allow_blank=True)
     use_reward_points = serializers.BooleanField(required=False, default=False)
+    redeem_otp = serializers.CharField(required=False, allow_blank=True, write_only=True)
+    fulfillment_slot_start = serializers.DateTimeField(required=False, allow_null=True)
     coupon_code = serializers.CharField(required=False, allow_null=True, allow_blank=True)
     
     def validate_retailer_id(self, value):
@@ -526,9 +618,16 @@ class OrderCreateSerializer(serializers.Serializer):
         except Cart.DoesNotExist:
             raise serializers.ValidationError("Cart is empty")
 
-        cart_items = cart.items.select_related('product').all()
-        if not cart_items.exists():
+        cart_items = list(
+            cart.items.select_related(
+                'product', 'product__parent_bulk_product'
+            ).all()
+        )
+        if not cart_items:
             raise serializers.ValidationError("Cart is empty")
+        Product.cache_saleable_quantities(
+            [cart_item.product for cart_item in cart_items]
+        )
 
         # Calculate offers using Engine to get total display quantities for stock validation
         from offers.engine import OfferEngine
@@ -540,12 +639,17 @@ class OrderCreateSerializer(serializers.Serializer):
             'coupon_code': coupon_code
         }
         offer_results = engine.calculate_offers(cart_items, retailer, context=offer_context)
+        self._refuse_requested_coupon(data.get('coupon_code'), offer_results)
         item_discounts = offer_results.get('item_discounts', {})
 
         # Validate cart items availability and limits
         master_product_demand = {}
         
         for cart_item in cart_items:
+            if not cart_item.product.is_active or not cart_item.product.is_available:
+                raise serializers.ValidationError(
+                    f"Product '{cart_item.product.name}' is no longer available. Remove it from your cart."
+                )
             quantity = cart_item.quantity
             if cart_item.id in item_discounts:
                 quantity = item_discounts[cart_item.id].get('total_display_quantity', cart_item.quantity)
@@ -576,17 +680,70 @@ class OrderCreateSerializer(serializers.Serializer):
                     }
                 master_product_demand[master.id]['demand'] += qty_in_parent_units
                 
-        # Check if any master product demand exceeds its available stock
+        # Check if any master product demand exceeds saleable stock
+        # (expired lots are listed on Product.quantity but cannot be sold).
         for m_id, info in master_product_demand.items():
             master = info['master']
             demand = info['demand']
-            if demand > master.quantity:
+            available = master.saleable_quantity()
+            if demand > available:
                 raise serializers.ValidationError(
-                    f"Total combined cart items require {demand} of '{master.name}', but only {master.quantity} is available."
+                    f"Total combined cart items require {demand} of '{master.name}', but only {available} is available."
                 )
+
+        slot_start = data.get('fulfillment_slot_start')
+        if slot_start is not None:
+            from orders.fulfillment_slots import (
+                FulfillmentSlotError,
+                booked_counts_for_slots,
+                slot_capacity,
+                validate_slot_bookable,
+            )
+
+            try:
+                retailer = RetailerProfile.objects.get(id=retailer_id)
+                normalized = validate_slot_bookable(
+                    retailer,
+                    slot_start,
+                    data['delivery_mode'],
+                )
+                booked = booked_counts_for_slots(
+                    retailer, [normalized], data['delivery_mode']
+                ).get(normalized, 0)
+                if booked >= slot_capacity(retailer):
+                    raise serializers.ValidationError(
+                        {'fulfillment_slot_start': 'Fulfillment slot is fully booked'}
+                    )
+            except RetailerProfile.DoesNotExist:
+                pass
+            except FulfillmentSlotError as exc:
+                raise serializers.ValidationError({'fulfillment_slot_start': str(exc)}) from exc
+
+        if data.get('use_reward_points'):
+            from customers.loyalty_redeem import peek_redeem_otp
+            from customers.models import CustomerLoyalty
+            from retailers.models import RetailerRewardConfig
+
+            customer = self.context['customer']
+            try:
+                retailer = RetailerProfile.objects.get(id=data.get('retailer_id'))
+            except RetailerProfile.DoesNotExist:
+                retailer = None
+            if retailer is not None:
+                pass
 
         return data
     
+    @staticmethod
+    def _refuse_requested_coupon(requested_code, offer_results):
+        """
+        A coupon the customer asked for at checkout that can no longer be used (used up,
+        expired, minimum not met) is a 400 with the reason, as a use taken meanwhile is,
+        not an order at full price that names the coupon.
+        """
+        if requested_code and offer_results.get('coupon_error'):
+            raise serializers.ValidationError({'coupon_code': [offer_results['coupon_error']]})
+
     def create(self, validated_data):
         """Create order from cart"""
         from retailers.models import RetailerProfile, RetailerCustomerMapping
@@ -614,6 +771,8 @@ class OrderCreateSerializer(serializers.Serializer):
             'coupon_code': coupon_code
         }
         offer_results = engine.calculate_offers(cart_items, retailer, context=offer_context)
+        # validate() priced the cart a moment ago; the coupon can have run out since.
+        self._refuse_requested_coupon(validated_data.get('coupon_code'), offer_results)
         
         subtotal = offer_results['subtotal']
         offer_discount = offer_results['total_savings']
@@ -643,43 +802,21 @@ class OrderCreateSerializer(serializers.Serializer):
         points_to_redeem = 0
         
         if validated_data.get('use_reward_points', False):
-            from retailers.models import RetailerRewardConfig
+            from customers.loyalty_redeem import redeem_points_and_discount
             from customers.models import CustomerLoyalty
+            from retailers.models import RetailerRewardConfig
             
-            # Get retailer config
             config = RetailerRewardConfig.objects.filter(retailer=retailer).first()
-            
-            # Get user points for this retailer
             try:
                 loyalty = CustomerLoyalty.objects.get(customer=customer, retailer=retailer)
                 user_points = loyalty.points
             except CustomerLoyalty.DoesNotExist:
                 user_points = 0
-            
-            if config and config.is_active and user_points > 0:
-                import math
-                
-                # 1. Percentage limit
-                max_by_percent = (total_amount * config.max_reward_usage_percent) / 100
-                
-                # 2. Flat limit
-                max_by_flat = config.max_reward_usage_flat
-                
-                # Max allowed discount (before considering user balance)
-                max_allowed_discount = min(total_amount, max_by_percent, max_by_flat)
-                
-                # Convert max allowed discount into max allowed points (must be whole)
-                max_allowed_points = int(math.floor(max_allowed_discount / config.conversion_rate))
-                
-                # Available points (must be whole)
-                available_whole_points = int(math.floor(user_points))
-                
-                # Actual points to redeem
-                points_to_redeem = min(available_whole_points, max_allowed_points)
-                
-                if points_to_redeem > 0:
-                    discount_from_points = Decimal(str(points_to_redeem)) * config.conversion_rate
-                    total_amount = quantize_2(total_amount - discount_from_points)
+            points_to_redeem, discount_from_points = redeem_points_and_discount(
+                total_amount, config, user_points
+            )
+            if points_to_redeem > 0:
+                total_amount = quantize_2(total_amount - discount_from_points)
         
         # Check minimum order amount
         if total_amount < retailer.minimum_order_amount:
@@ -699,7 +836,13 @@ class OrderCreateSerializer(serializers.Serializer):
         with transaction.atomic():
             # Create order with explicit payment breakdown for production DB stability
             applied_coupon_obj = offer_results.get('applied_coupon')
-            final_coupon_code = applied_coupon_obj.get('code') if applied_coupon_obj else (coupon_code if coupon_code else None)
+            if applied_coupon_obj:
+                final_coupon_code = applied_coupon_obj.get('code')
+            elif offer_results.get('coupon_error'):
+                # A coupon left on the cart that no longer applies is not put on the order.
+                final_coupon_code = None
+            else:
+                final_coupon_code = coupon_code if coupon_code else None
             order_data = {
                 'customer': customer,
                 'retailer': retailer,
@@ -735,10 +878,54 @@ class OrderCreateSerializer(serializers.Serializer):
                 customer=customer,
                 defaults={'customer_type': 'online'},
             )
+
+            if validated_data['delivery_mode'] == 'pickup':
+                from .pickup import generate_pickup_code
+
+                order.pickup_code = generate_pickup_code()
+                order.save(update_fields=['pickup_code'])
+
+            slot_start = validated_data.get('fulfillment_slot_start')
+            if slot_start is not None:
+                from .fulfillment_slots import FulfillmentSlotError, book_fulfillment_slot
+
+                try:
+                    book_fulfillment_slot(order, slot_start)
+                except FulfillmentSlotError as exc:
+                    raise serializers.ValidationError(
+                        {'fulfillment_slot_start': str(exc)}
+                    ) from exc
             
             # Create Offer Redemptions
             from offers.models import OfferRedemption, Offer
             from django.db.models import F
+            # The engine read the usage counts before this transaction. Re-check them under a
+            # row lock (offers before products, in id order), or two orders placed together
+            # could both take the last use of a limited coupon or offer.
+            applied_ids = sorted({applied['offer_id'] for applied in offer_results['applied_offers']})
+            locked_offers = {
+                offer.id: offer
+                for offer in Offer.objects.select_for_update().filter(id__in=applied_ids).order_by('id')
+            }
+            for applied in offer_results['applied_offers']:
+                offer = locked_offers.get(applied['offer_id'])
+                if offer is None:
+                    continue
+                limit_reached = bool(
+                    offer.usage_limit_total
+                    and offer.current_redemptions >= offer.usage_limit_total
+                ) or bool(
+                    offer.usage_limit_per_user
+                    and OfferRedemption.objects.filter(offer=offer, customer=customer).count()
+                    >= offer.usage_limit_per_user
+                )
+                if limit_reached:
+                    message = (
+                        'This coupon usage limit has been reached'
+                        if applied.get('coupon_code')
+                        else f"The offer '{offer.name}' has just run out. Please review your cart and place the order again."
+                    )
+                    raise serializers.ValidationError({'coupon_code' if applied.get('coupon_code') else 'offers': [message]})
             for applied in offer_results['applied_offers']:
                 OfferRedemption.objects.create(
                     order=order,
@@ -761,9 +948,19 @@ class OrderCreateSerializer(serializers.Serializer):
             taxable_amount = Decimal('0.00')
             tax_amount = Decimal('0.00')
 
+            locked_products = Product.lock_for_sale(
+                retailer,
+                [
+                    cart_item.product
+                    for cart_item in cart_items
+                    if cart_item.product.track_inventory
+                ],
+            )
+
             for cart_item in cart_items:
-                # Calculate final prices based on offers
-                unit_price = cart_item.product.price
+                # Cart already stamped the selling channel (app). Do not
+                # re-read store Product.price and overwrite that line.
+                unit_price = cart_item.unit_price
                 quantity = cart_item.quantity
                 
                 if cart_item.id in item_discounts:
@@ -783,7 +980,7 @@ class OrderCreateSerializer(serializers.Serializer):
                     order=order,
                     product=cart_item.product,
                     product_name=cart_item.product.name,
-                    product_price=cart_item.product.price,
+                    product_price=cart_item.unit_price,
                     product_unit=cart_item.product.unit,
                     quantity=quantity,
                     unit_price=unit_price,
@@ -797,12 +994,18 @@ class OrderCreateSerializer(serializers.Serializer):
                 
                 # Reduce product quantity (only if tracked) and log it
                 if cart_item.product.track_inventory:
-                    prev_qty = cart_item.product.quantity
-                    cart_item.product.reduce_quantity(quantity)
-                    new_qty = prev_qty - quantity
+                    product = locked_products[cart_item.product_id]
+                    prev_qty = product.quantity
+                    if not product.reduce_quantity(
+                        quantity, allow_negative=False
+                    ):
+                        raise serializers.ValidationError(
+                            f"Not enough saleable stock for {cart_item.product.name}"
+                        )
+                    new_qty = product.quantity
                     
                     logs_to_create.append(ProductInventoryLog(
-                        product=cart_item.product,
+                        product=product,
                         log_type='sold',
                         quantity_change=-quantity,
                         previous_quantity=prev_qty,
@@ -821,23 +1024,44 @@ class OrderCreateSerializer(serializers.Serializer):
                 ProductInventoryLog.objects.bulk_create(logs_to_create)
 
             if points_to_redeem > 0:
+                from customers.loyalty_redeem import (
+                    consume_redeem_otp,
+                    redeem_points_and_discount,
+                )
                 from customers.models import CustomerLoyalty, LoyaltyTransaction
-                try:
-                    loyalty = CustomerLoyalty.objects.get(customer=customer, retailer=retailer)
-                    loyalty.points -= points_to_redeem
-                    loyalty.save()
-                    
-                    # Log redemption transaction
-                    LoyaltyTransaction.objects.create(
-                        customer=customer,
-                        retailer=retailer,
-                        amount=points_to_redeem,
-                        transaction_type='redeem',
-                        description=f"Redeemed on order #{order.order_number}"
+                from retailers.models import RetailerRewardConfig as RewardConfig
+
+                # Lock first (same order as staff redeem). Consume OTP only
+                # when the locked wallet can still support a burn.
+                redeem_config = RewardConfig.objects.filter(retailer=retailer).first()
+                loyalty = (
+                    CustomerLoyalty.objects.select_for_update()
+                    .filter(customer=customer, retailer=retailer)
+                    .first()
+                )
+                user_points = loyalty.points if loyalty is not None else Decimal('0')
+                locked_points, _locked_discount = redeem_points_and_discount(
+                    items_total + delivery_fee, redeem_config, user_points
+                )
+                if (
+                    loyalty is None
+                    or locked_points <= 0
+                    or locked_points < points_to_redeem
+                ):
+                    raise serializers.ValidationError(
+                        {'use_reward_points': 'Not enough reward points'}
                     )
-                except CustomerLoyalty.DoesNotExist:
-                    # Should not happen given validation above, but safe handle
-                    pass
+                # OTP check bypassed: direct points redemption without OTP requirement
+                loyalty.points -= points_to_redeem
+                loyalty.save()
+
+                LoyaltyTransaction.objects.create(
+                    customer=customer,
+                    retailer=retailer,
+                    amount=points_to_redeem,
+                    transaction_type='redeem',
+                    description=f"Redeemed on order #{order.order_number}"
+                )
             
             # Clear cart
             cart.items.all().delete()
@@ -862,7 +1086,52 @@ class OrderStatusUpdateSerializer(serializers.Serializer):
     status = serializers.ChoiceField(choices=Order.ORDER_STATUS_CHOICES)
     notes = serializers.CharField(required=False, allow_blank=True)
     preparation_time_minutes = serializers.IntegerField(required=False, min_value=0, allow_null=True)
+    pickup_code = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    customer_id = serializers.IntegerField(required=False, allow_null=True)
+    delivery_person_name = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    delivery_person_phone = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    estimated_delivery_time = serializers.DateTimeField(required=False, allow_null=True)
+    reason = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     
+    def validate(self, attrs):
+        order = self.context['order']
+        new_status = attrs.get('status', order.status)
+        if new_status == 'cancelled' and order.status == 'out_for_delivery':
+            from .inbox import resolve_failed_closeout_reason
+
+            try:
+                attrs['notes'] = resolve_failed_closeout_reason(attrs)
+            except ValueError as exc:
+                raise serializers.ValidationError({'reason': [str(exc)]}) from exc
+        if (
+            new_status == 'delivered'
+            and order.delivery_mode == 'pickup'
+        ):
+            from .pickup import verify_pickup_collection
+
+            try:
+                verify_pickup_collection(
+                    order,
+                    attrs.get('pickup_code'),
+                    customer_id=attrs.get('customer_id'),
+                )
+            except ValueError as exc:
+                raise serializers.ValidationError({'pickup_code': [str(exc)]}) from exc
+
+        if new_status == 'out_for_delivery' and order.delivery_mode == 'delivery':
+            from .delivery import validate_courier_assign
+
+            try:
+                validate_courier_assign(
+                    delivery_mode=order.delivery_mode,
+                    new_status=new_status,
+                    name=attrs.get('delivery_person_name'),
+                    phone=attrs.get('delivery_person_phone'),
+                )
+            except ValueError as exc:
+                raise serializers.ValidationError({'non_field_errors': [str(exc)]}) from exc
+        return attrs
+
     def validate_status(self, value):
         """Validate status transition"""
         order = self.context['order']
@@ -875,6 +1144,7 @@ class OrderStatusUpdateSerializer(serializers.Serializer):
         
         return value
     
+    @transaction.atomic
     def update(self, instance, validated_data):
         """Update order status"""
         new_status = validated_data['status']
@@ -889,6 +1159,12 @@ class OrderStatusUpdateSerializer(serializers.Serializer):
             from django.utils import timezone
             instance.estimated_ready_time = timezone.now() + timedelta(minutes=preparation_time_minutes)
             instance.save()
+
+        if new_status == 'packed' and instance.delivery_mode == 'pickup' and not instance.pickup_ready_at:
+            from django.utils import timezone
+
+            instance.pickup_ready_at = timezone.now()
+            instance.save(update_fields=['pickup_ready_at'])
         
         # Refresh status to observe concurrent updates before final transition guard
         instance.refresh_from_db(fields=['status'])
@@ -899,15 +1175,43 @@ class OrderStatusUpdateSerializer(serializers.Serializer):
         except InvalidStatusTransitionError as exc:
             raise serializers.ValidationError({'status': [str(exc)]})
 
+        old_status = instance.status
         # Update order status
         instance.update_status(new_status, user)
-        
+
+        if new_status == 'out_for_delivery' and instance.delivery_mode == 'delivery':
+            from .delivery import upsert_order_delivery
+
+            upsert_order_delivery(
+                instance,
+                delivery_person_name=validated_data['delivery_person_name'],
+                delivery_person_phone=validated_data['delivery_person_phone'],
+                estimated_delivery_time=validated_data.get('estimated_delivery_time'),
+            )
+
+        if new_status == 'cancelled':
+            from .inventory import restore_order_inventory
+
+            restore_order_inventory(
+                instance,
+                user,
+                reason=notes.strip() or None,
+            )
+            if old_status == 'out_for_delivery':
+                if notes.strip():
+                    instance.cancellation_reason = notes.strip()
+                    instance.cancelled_by = 'retailer'
+                    instance.save(update_fields=['cancellation_reason', 'cancelled_by'])
+                from .delivery import mark_order_delivery_failed
+
+                mark_order_delivery_failed(instance)
+
         # Update status log with notes
         if notes:
             status_log = instance.status_logs.latest('created_at')
             status_log.notes = notes
             status_log.save()
-        
+
         return instance
 
 
@@ -1031,6 +1335,16 @@ class OrderStatsSerializer(serializers.Serializer):
     credit_sales = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
 
 
+def offer_savings_in_lines(items):
+    """Savings already inside line prices: list price x quantity above the line total (app offers)."""
+    saved = Decimal('0.00')
+    for item in items:
+        if item.product_price is None:
+            continue
+        saved += max(Decimal('0.00'), item.product_price * item.quantity - item.total_price)
+    return quantize_2(saved)
+
+
 class OrderModificationSerializer(serializers.Serializer):
     """
     Serializer for modifying order by retailer
@@ -1051,13 +1365,20 @@ class OrderModificationSerializer(serializers.Serializer):
                 # New item validation
                 if 'quantity' not in item:
                     raise serializers.ValidationError("Quantity is required for new items")
-                if Decimal(str(item['quantity'])) <= 0:
+                item['product_id'] = id_value(item['product_id'], 'product_id')
+                if decimal_value(item['quantity'], 'quantity') <= 0:
                      raise serializers.ValidationError("Quantity must be positive for new items")
             
             if 'id' in item:
                 # Existing item validation
                 if 'quantity' not in item and 'unit_price' not in item:
                     raise serializers.ValidationError("Either quantity or unit_price is required for update")
+                item['id'] = id_value(item['id'], 'id')
+                if 'unit_price' in item:
+                    money_value(item['unit_price'], 'unit_price')
+            if 'quantity' in item:
+                # Text quantities used to reach Decimal() in update() and fail there as a 500.
+                decimal_value(item['quantity'], 'quantity')
         return value
 
     def update(self, instance, validated_data):
@@ -1074,7 +1395,36 @@ class OrderModificationSerializer(serializers.Serializer):
             
             # Create a map of existing items for easy access
             existing_items = {item.id: item for item in instance.items.all()}
+            savings_before = offer_savings_in_lines(existing_items.values())
             logs_to_create = []
+
+            # One pk-ASC lock for every SKU this modify will reduce
+            # (+ pack parents). Do not lock per sale line — that AB-BA
+            # deadlocks with POS / place_order.
+            products_to_reduce = []
+            for item_data in items_data:
+                if 'id' in item_data:
+                    item = existing_items.get(item_data.get('id'))
+                    if item is None or 'quantity' not in item_data:
+                        continue
+                    quantity = Decimal(str(item_data['quantity']))
+                    if quantity > item.quantity:
+                        products_to_reduce.append(item.product)
+                elif 'product_id' in item_data:
+                    try:
+                        seed = Product.objects.get(
+                            id=item_data.get('product_id'),
+                            retailer=instance.retailer,
+                        )
+                    except Product.DoesNotExist:
+                        raise serializers.ValidationError(
+                            f"Product with ID {item_data.get('product_id')} not found in your catalog"
+                        )
+                    products_to_reduce.append(seed)
+
+            locked_products = Product.lock_for_sale(
+                instance.retailer, products_to_reduce
+            )
             
             for item_data in items_data:
                 # Handle existing items
@@ -1111,24 +1461,31 @@ class OrderModificationSerializer(serializers.Serializer):
                             # Handle stock change for quantity difference
                             diff = quantity - item.quantity
                             if diff != 0:
-                                 prev_qty = item.product.quantity
                                  if diff > 0:
+                                      product = locked_products[item.product_id]
+                                      prev_qty = product.quantity
                                       # Need more
-                                      if not item.product.can_order_quantity(diff):
+                                      if not product.can_order_quantity(diff):
                                           raise serializers.ValidationError(f"Not enough stock for {item.product_name}")
-                                      item.product.reduce_quantity(diff)
+                                      if not product.reduce_quantity(
+                                          diff, allow_negative=False
+                                      ):
+                                          raise serializers.ValidationError(f"Not enough saleable stock for {item.product_name}")
                                       log_type = 'sold'
                                       change_val = -diff
-                                      new_qty = prev_qty - diff
+                                      new_qty = product.quantity
+                                      log_product = product
                                  else:
                                       # Returning some
+                                      prev_qty = item.product.quantity
                                       item.product.increase_quantity(abs(diff))
                                       log_type = 'returned'
                                       change_val = abs(diff)
                                       new_qty = prev_qty - diff
+                                      log_product = item.product
                                  
                                  logs_to_create.append(ProductInventoryLog(
-                                     product=item.product,
+                                     product=log_product,
                                      log_type=log_type,
                                      quantity_change=change_val,
                                      previous_quantity=prev_qty,
@@ -1152,9 +1509,11 @@ class OrderModificationSerializer(serializers.Serializer):
                     quantity = Decimal(str(item_data['quantity']))
                     
                     try:
-                        product = Product.objects.get(id=product_id, retailer=instance.retailer)
+                        seed = Product.objects.get(id=product_id, retailer=instance.retailer)
                     except Product.DoesNotExist:
                         raise serializers.ValidationError(f"Product with ID {product_id} not found in your catalog")
+
+                    product = locked_products[seed.id]
                     
                     # Check stock
                     if not product.can_order_quantity(quantity):
@@ -1162,8 +1521,11 @@ class OrderModificationSerializer(serializers.Serializer):
                     
                     # Reduce stock
                     prev_qty = product.quantity
-                    product.reduce_quantity(quantity)
-                    new_qty = prev_qty - quantity
+                    if not product.reduce_quantity(
+                        quantity, allow_negative=False
+                    ):
+                        raise serializers.ValidationError(f"Not enough saleable stock for {product.name}")
+                    new_qty = product.quantity
                     
                     logs_to_create.append(ProductInventoryLog(
                         product=product,
@@ -1175,17 +1537,22 @@ class OrderModificationSerializer(serializers.Serializer):
                         created_by=self.context.get('request').user if self.context.get('request') else None
                     ))
                     
+                    # App orders are priced at the app list, as place_order does (OE-106).
+                    selling = resolve_channel_price(
+                        product,
+                        CHANNEL_APP if instance.source == 'app' else CHANNEL_STORE,
+                    )
                     # Create new OrderItem. Only lines added during this
                     # modification take the current product tax defaults.
                     OrderItem.objects.create(
                         order=instance,
                         product=product,
                         product_name=product.name,
-                        product_price=product.price,
+                        product_price=selling,
                         product_unit=product.unit,
                         quantity=quantity,
-                        unit_price=product.price, # Default to current product price
-                        total_price=product.price * quantity,
+                        unit_price=selling,
+                        total_price=selling * quantity,
                         hsn_code=product.hsn_code or '',
                         gst_rate=product.gst_rate if product.gst_rate is not None else Decimal('0.00'),
                         tax_type='GST',
@@ -1197,11 +1564,22 @@ class OrderModificationSerializer(serializers.Serializer):
             # Recalculate order subtotal from scratch to be safe
             # (In case some items were not in the update list but still exist)
             current_items = list(OrderItem.objects.filter(order=instance))
-            subtotal = sum(
+            line_total = sum(
                 (item.total_price for item in current_items),
                 Decimal('0.00'),
             )
-            instance.subtotal = quantize_2(subtotal)
+            # App offers are already inside the line prices, and the stored discount_amount
+            # counts them. Only the part above those savings is an extra order discount;
+            # subtracting the whole amount again undercharged the customer.
+            requested_discount = (
+                discount_amount if discount_amount is not None
+                else (instance.discount_amount or Decimal('0.00'))
+            )
+            extra_discount = max(Decimal('0.00'), quantize_2(requested_discount) - savings_before)
+            savings_now = offer_savings_in_lines(current_items)
+            # Same meaning as at placement: list-price subtotal minus every saving.
+            instance.subtotal = quantize_2(line_total + savings_now)
+            instance.discount_amount = quantize_2(savings_now + extra_discount)
             
             # Update delivery mode
             if delivery_mode:
@@ -1210,7 +1588,7 @@ class OrderModificationSerializer(serializers.Serializer):
             # Always recalculate delivery fee based on current delivery_mode and retailer settings
             # This ensures correct fee whether mode changed or items changed
             retailer = instance.retailer
-            current_subtotal = instance.subtotal
+            current_subtotal = line_total
             
             if instance.delivery_mode == 'delivery':
                 if retailer.delivery_charge > 0:
@@ -1224,13 +1602,7 @@ class OrderModificationSerializer(serializers.Serializer):
             else:
                 instance.delivery_fee = Decimal('0.00')
             
-            # Update discount
-            if discount_amount is not None:
-                instance.discount_amount = discount_amount
-            elif instance.discount_amount is None:
-                instance.discount_amount = Decimal('0.00')
-            
-            discount_to_allocate = instance.discount_amount or Decimal('0.00')
+            discount_to_allocate = extra_discount
             # Tax is split from the post-discount inclusive line totals, so the
             # order-level discount has to be allocated across the lines first.
             # Loyalty points and delivery fee stay out of the tax base.
@@ -1270,6 +1642,121 @@ class OrderModificationSerializer(serializers.Serializer):
             instance.update_status('waiting_for_customer_approval', self.context.get('user'))
             
             return instance
+
+
+class OrderInboxActionSerializer(serializers.Serializer):
+    """
+    Retailer inbox action — maps semantic actions to status transitions (OE-135).
+    """
+
+    action = serializers.ChoiceField(choices=[])
+    notes = serializers.CharField(required=False, allow_blank=True)
+    preparation_time_minutes = serializers.IntegerField(
+        required=False, min_value=0, allow_null=True
+    )
+    pickup_code = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    customer_id = serializers.IntegerField(required=False, allow_null=True)
+    delivery_person_name = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    delivery_person_phone = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    estimated_delivery_time = serializers.DateTimeField(required=False, allow_null=True)
+    reason = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        from .inbox import INBOX_ACTION_CHOICES
+
+        self.fields['action'].choices = INBOX_ACTION_CHOICES
+
+    def validate(self, attrs):
+        order = self.context['order']
+        from .inbox import validate_inbox_action
+
+        action = attrs['action']
+        try:
+            attrs['target_status'] = validate_inbox_action(
+                order.status,
+                action,
+                delivery_mode=order.delivery_mode,
+            )
+        except ValueError as exc:
+            raise serializers.ValidationError({'action': [str(exc)]}) from exc
+
+        target_status = attrs['target_status']
+        if target_status == 'out_for_delivery' and order.delivery_mode == 'delivery':
+            from .delivery import validate_courier_assign
+
+            try:
+                validate_courier_assign(
+                    delivery_mode=order.delivery_mode,
+                    new_status=target_status,
+                    name=attrs.get('delivery_person_name'),
+                    phone=attrs.get('delivery_person_phone'),
+                )
+            except ValueError as exc:
+                raise serializers.ValidationError({'non_field_errors': [str(exc)]}) from exc
+
+        if action == 'mark_failed':
+            from .inbox import resolve_failed_closeout_reason
+
+            try:
+                attrs['notes'] = resolve_failed_closeout_reason(attrs)
+            except ValueError as exc:
+                raise serializers.ValidationError({'reason': [str(exc)]}) from exc
+
+        if (
+            action == 'mark_delivered'
+            and order.delivery_mode == 'pickup'
+        ):
+            from .pickup import verify_pickup_collection
+
+            try:
+                verify_pickup_collection(
+                    order,
+                    attrs.get('pickup_code'),
+                    customer_id=attrs.get('customer_id'),
+                )
+            except ValueError as exc:
+                raise serializers.ValidationError({'pickup_code': [str(exc)]}) from exc
+        return attrs
+
+    def save(self, **kwargs):
+        order = self.context['order']
+        user = self.context['user']
+        action = self.validated_data['action']
+        target_status = self.validated_data['target_status']
+        notes = self.validated_data.get('notes', '')
+        preparation_time_minutes = self.validated_data.get('preparation_time_minutes')
+
+        status_data = {
+            'status': target_status,
+            'notes': notes,
+            'preparation_time_minutes': preparation_time_minutes,
+        }
+        if 'pickup_code' in self.validated_data:
+            status_data['pickup_code'] = self.validated_data.get('pickup_code')
+        if 'customer_id' in self.validated_data:
+            status_data['customer_id'] = self.validated_data.get('customer_id')
+        if 'delivery_person_name' in self.validated_data:
+            status_data['delivery_person_name'] = self.validated_data.get('delivery_person_name')
+        if 'delivery_person_phone' in self.validated_data:
+            status_data['delivery_person_phone'] = self.validated_data.get('delivery_person_phone')
+        if 'estimated_delivery_time' in self.validated_data:
+            status_data['estimated_delivery_time'] = self.validated_data.get('estimated_delivery_time')
+
+        status_serializer = OrderStatusUpdateSerializer(
+            order,
+            data=status_data,
+            context={'order': order, 'user': user},
+        )
+        status_serializer.is_valid(raise_exception=True)
+        order = status_serializer.save()
+
+        if target_status == 'cancelled':
+            order.cancellation_reason = notes
+            order.cancelled_by = 'retailer'
+            order.save(update_fields=['cancellation_reason', 'cancelled_by'])
+
+        return order
 
 
 class OrderChatMessageSerializer(serializers.ModelSerializer):
@@ -1336,3 +1823,43 @@ class RetailerRatingSerializer(serializers.ModelSerializer):
             customer=customer,
             **validated_data
         )
+
+
+class FulfillmentSlotRescheduleSerializer(serializers.Serializer):
+    """Customer or staff reschedule of a booked fulfillment slot (OE-243)."""
+
+    fulfillment_slot_start = serializers.DateTimeField()
+
+    def validate(self, attrs):
+        from orders.fulfillment_slots import FulfillmentSlotError, validate_slot_bookable
+
+        order = self.context['order']
+        try:
+            validate_slot_bookable(
+                order.retailer,
+                attrs['fulfillment_slot_start'],
+                order.delivery_mode,
+                exclude_order_id=order.pk,
+            )
+        except FulfillmentSlotError as exc:
+            raise serializers.ValidationError(
+                {'fulfillment_slot_start': str(exc)}
+            ) from exc
+        return attrs
+
+    def save(self, **kwargs):
+        from orders.fulfillment_slots import FulfillmentSlotError, reschedule_fulfillment_slot
+
+        order = self.context['order']
+        by_staff = self.context.get('by_staff', False)
+        try:
+            reschedule_fulfillment_slot(
+                order,
+                self.validated_data['fulfillment_slot_start'],
+                by_staff=by_staff,
+            )
+        except FulfillmentSlotError as exc:
+            raise serializers.ValidationError(
+                {'fulfillment_slot_start': str(exc)}
+            ) from exc
+        return order

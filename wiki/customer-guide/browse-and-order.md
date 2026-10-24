@@ -35,7 +35,7 @@ Tap a product to see:
 | Detail | Why it matters |
 |--------|----------------|
 | Name and image | What you are buying |
-| Price | Current selling price set by the shop |
+| Price | Online selling price set by the shop (may differ from the in-store counter price) |
 | Unit / pack size | 500g, 1L, pack of 6, etc. |
 | Availability | In stock or not |
 | Description | Extra info if the shop added it |

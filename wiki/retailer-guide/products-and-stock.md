@@ -9,11 +9,13 @@ Open **Products** to see everything in your catalog. Each product typically has:
 | Field | Purpose |
 |-------|---------|
 | Name | What customers and staff search for |
-| Selling price | Current price |
+| Selling price | Counter / POS price |
+| App price | Optional online price. If empty, the customer app uses the selling price |
 | MRP | Printed price on pack (optional) |
-| Barcode | For POS scan |
+| Barcode | For POS scan. Extra barcodes on the product scan the same way |
 | Category | Organisation and browsing |
-| Stock quantity | How many available |
+| Stock quantity | Total on-hand (includes expired lots still on the shelf) |
+| Saleable quantity | How many can be sold now (excludes expired lots) |
 | Images | Photos for customer app |
 | Active / inactive | Hide without deleting |
 
@@ -40,14 +42,20 @@ OrderEasy can track stock in two ways:
 
 ### Simple quantity
 
-One number per product — goes down on sale, up on purchase or return.
+One number per product — goes down on sale, up on purchase or return. POS and online checkout cannot sell more than on-hand (stock will not go negative).
+
+Cashiers cannot type a **new** stock number on the product screen (saving other fields is fine). Owners (and staff given inventory-adjust permission) can still correct on-hand that way. Everyday sales and purchases still change stock automatically.
 
 ### Batch tracking
 
 For items bought at different costs or expiry dates:
 
-- Each **batch** has its own quantity and purchase price
-- Sales consume stock FIFO (oldest batch first) by default
+- Each **batch** has its own quantity, purchase price, and optional expiry date
+- Sales consume stock FIFO (earliest expiry first; batches without expiry stay valid and sell after dated lots)
+- Expired batches cannot be sold. Cashiers cannot set expiry; owners and staff with inventory-adjust permission can
+- Product list, search, and POS show **saleable quantity** separately from total on-hand. Saleable excludes expired lots; the stock number still includes them until written off
+- Owners and staff can list this shop’s on-hand batches that expire within a chosen number of days (default 30), including expired lots still on the shelf
+- Owners (and staff with inventory-adjust) can **write off** damage, spoilage, or expired lots so the qty leaves on-hand. An expiry write-off only works on a batch that is already expired. The product ledger can filter those rows by reason (`damage`, `expiry`, `spoilage`). Each ledger row shows the same product name and barcode as the product list.
 - Useful for groceries with expiry or varying wholesale rates
 
 ![Inventory and batches](../../docs/visuals/inventory-and-batches.jpg)
@@ -63,7 +71,7 @@ Some items sell both wholesale and retail:
 - **Parent:** Carton of 24 bottles
 - **Child:** Single bottle
 
-Linking them keeps stock in sync when you break a case.
+Linking them keeps stock in sync when you break a case. Selling the child reduces parent stock by the conversion factor (it cannot be zero). Cashiers cannot change the factor or the parent link; owners and staff with inventory-adjust permission can.
 
 ## Adding many products at once
 
@@ -75,6 +83,17 @@ Linking them keeps stock in sync when you break a case.
 4. Review errors and confirm
 
 Best when you already have a spreadsheet.
+
+### Photo bulk import (existing products)
+
+When the products already exist, you can attach photos in one go:
+
+1. Name image files after the barcode or product id (`8901234567890.jpg`), **or** send a small CSV that maps barcode / product id → filename
+2. Upload a zip (and optional CSV) from the retailer product tools
+3. Matching SKUs get the new photo as the default. If two files share the same name (or the same name without the extension), the last one in the zip is used. Extra files that are not images (`readme.txt` and similar) are skipped.
+4. Rows that do not match (missing barcode, bad file, wrong type) are listed; the rest still apply
+
+Staff need photo-import permission. A replacement photo becomes the default; the old default is cleared. This uses the same product photos customers and POS already see — it is not a separate media library.
 
 ### Scanner app + review
 
@@ -91,7 +110,7 @@ Best when you already have a spreadsheet.
 
 | Action | When |
 |--------|------|
-| **Edit price** | Regular price change |
+| **Edit price** | Counter price, or a different app price when you want online ≠ store |
 | **Deactivate** | Seasonal item, not selling now — hidden from customers |
 | **Delete** | Rare — prefer deactivate to keep history |
 
@@ -108,6 +127,6 @@ Inactive products may still appear in old orders and reports.
 | Photograph top sellers first | Online conversion improves with images |
 | Barcode every SKU you can | Faster POS |
 | Reconcile stock weekly | Catch theft, damage, or data entry gaps |
-| Match online price to counter | Avoid customer arguments |
+| Set app price when online should differ | Same stock; customers see the app price, POS keeps the counter price |
 
 → [Purchases and suppliers](purchases-and-suppliers.md) · [POS billing](pos-billing.md)
