@@ -531,9 +531,13 @@ def get_retailer_products(request):
                 'fractional_children',
                 queryset=Product.objects.filter(is_active=True).order_by('id'),
             )
-        ).annotate(
-            average_rating_annotated=Avg('reviews__rating'),
-            review_count_annotated=Count('reviews')
+        )
+        # Rating stats are read for the page rows only (GroupVariantsListSerializer),
+        # not joined and grouped over the whole catalog before the page is cut.
+
+        # Group variants embed every sibling per row; the list omits them unless asked.
+        include_group_variants = (
+            request.query_params.get('include_group_variants') == 'true'
         )
 
         # Pre-fetch active offers for N+1 optimization in serializer
@@ -563,7 +567,7 @@ def get_retailer_products(request):
                     'active_offers': active_offers,
                     'include_saleable_quantity': True,
                     'include_fractional_children': True,
-                    'include_group_variants': True,
+                    'include_group_variants': include_group_variants,
                     'include_margin_percent': can_see_cost,
                     # Cost is the margin's input, so it follows the same purchase-role gate.
                     'hide_purchase_price': not can_see_cost,
@@ -581,7 +585,7 @@ def get_retailer_products(request):
                 'active_offers': active_offers,
                 'include_saleable_quantity': True,
                 'include_fractional_children': True,
-                'include_group_variants': True,
+                'include_group_variants': include_group_variants,
                 'include_margin_percent': can_see_cost,
                 # Cost is the margin's input, so it follows the same purchase-role gate.
                 'hide_purchase_price': not can_see_cost,
@@ -674,6 +678,9 @@ def search_products(request):
         Product.cache_saleable_quantities(products)
         can_see_cost = include_purchase_margin(request.user)
 
+        include_group_variants = (
+            request.query_params.get('include_group_variants') == 'true'
+        )
         serializer = ProductSearchSerializer(
             products,
             many=True,
@@ -681,7 +688,7 @@ def search_products(request):
                 'request': request,
                 'include_saleable_quantity': True,
                 'include_fractional_children': True,
-                'include_group_variants': True,
+                'include_group_variants': include_group_variants,
                 'include_margin_percent': can_see_cost,
                 'include_purchase_bill_fields': True,
                 # Cost is the margin's input, so it follows the same purchase-role gate.
@@ -1465,8 +1472,6 @@ def get_retailer_products_public(request, retailer_id):
         products = Product.objects.select_related(
             'retailer', 'category', 'brand', 'master_product'
         ).annotate(
-            average_rating_annotated=Avg('reviews__rating'),
-            review_count_annotated=Count('reviews'),
             # Price filters and sorting use the price this list shows (the app price).
             app_list_price=_app_list_price(),
         ).filter(

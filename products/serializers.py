@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from decimal import Decimal
 from django.db import transaction
-from django.db.models import Avg, F, Sum
+from django.db.models import Avg, Count, F, Sum, prefetch_related_objects
 from returns.models import PurchaseReturnItem
 from .models import (
     Product, ProductCategory, ProductBrand, ProductImage, 
@@ -317,7 +317,48 @@ class GroupVariantsListSerializer(serializers.ListSerializer):
             self.context['last_pi_cost_by_product_id'] = (
                 last_pi_unit_costs_by_product_id(products)
             )
+        self._prefetch_page_rows(products)
         return super().to_representation(products)
+
+    def _prefetch_page_rows(self, products):
+        """One query each for batches, rating stats and wishlist flags of the page.
+
+        Without this each row asked the database for its own review count,
+        wishlist flag and batches.
+        """
+        if not products:
+            return
+        if self.child.__class__.__name__ != 'ProductListSerializer':
+            return
+        with_batches = [
+            p for p in products
+            if p.has_batches
+            and 'batches' not in getattr(p, '_prefetched_objects_cache', {})
+        ]
+        if with_batches:
+            prefetch_related_objects(with_batches, 'batches')
+        needs_stats = [p for p in products if not hasattr(p, 'review_count_annotated')]
+        if needs_stats:
+            stats = {
+                row['product_id']: row
+                for row in ProductReview.objects.filter(
+                    product_id__in=[p.id for p in needs_stats]
+                ).values('product_id').annotate(avg=Avg('rating'), n=Count('id'))
+            }
+            for p in needs_stats:
+                row = stats.get(p.id)
+                p.average_rating_annotated = row['avg'] if row else None
+                p.review_count_annotated = row['n'] if row else 0
+        if self.context.get('wishlisted_product_ids') is None:
+            request = self.context.get('request')
+            user = getattr(request, 'user', None)
+            if user is not None and user.is_authenticated:
+                from customers.models import CustomerWishlist
+                self.context['wishlisted_product_ids'] = set(
+                    CustomerWishlist.objects.filter(
+                        customer=user, product_id__in=[p.id for p in products]
+                    ).values_list('product_id', flat=True)
+                )
 
 
 class GroupVariantsReadMixin:
@@ -560,7 +601,13 @@ class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, 
     def get_batches(self, obj):
         """Return active batches for POS catalog awareness"""
         if obj.has_batches:
-            active_batches = obj.batches.filter(is_active=True).order_by('id')
+            if 'batches' in getattr(obj, '_prefetched_objects_cache', {}):
+                active_batches = sorted(
+                    (b for b in obj.batches.all() if b.is_active),
+                    key=lambda b: b.id,
+                )
+            else:
+                active_batches = obj.batches.filter(is_active=True).order_by('id')
             return ProductBatchSerializer(active_batches, many=True).data
         return []
     
@@ -596,7 +643,9 @@ class ProductListSerializer(PurchaseMarginReadMixin, SaleableQuantityReadMixin, 
     def get_review_count(self, obj):
         """Get review count"""
         try:
-            return getattr(obj, 'review_count_annotated', obj.reviews.count())
+            if hasattr(obj, 'review_count_annotated'):
+                return obj.review_count_annotated
+            return obj.reviews.count()
         except Exception as e:
             logger.error(f"Error getting review count: {e}")
             return 0
