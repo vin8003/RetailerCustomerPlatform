@@ -49,7 +49,7 @@ In **Profile / shop settings**:
 | Offer pickup? | Yes / No |
 | Delivery radius | 2 km from shop |
 | Minimum order for delivery | ₹200 |
-| Delivery charge | ₹30 flat |
+| Delivery charge | ₹30 flat, or by distance (₹20 up to 2 km, ₹35 up to 5 km, then ₹8 per km) |
 
 Be honest in settings — customers see these rules at checkout.
 

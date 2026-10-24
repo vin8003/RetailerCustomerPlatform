@@ -50,13 +50,25 @@ Be realistic with radius — overpromising causes bad reviews.
 
 ### Delivery charges
 
-Common models:
+Pick a **fee type** in Profile → Delivery:
 
-- Flat fee per order
-- Free above minimum cart value
+- **Flat fee**: one delivery charge per order.
+- **By distance**: fee bands such as "up to 2 km ₹20, up to 5 km ₹35". Past the
+  last band you can add a **per-km rate** (for example ₹8 for every started km
+  beyond 5 km). Without a per-km rate the last band's fee applies up to your radius.
+- **Free delivery above** a cart value works with either type.
 - No delivery (pickup only)
 
-Set charges customers see **before** checkout.
+Distance is measured in a straight line from your shop's map pin to the
+customer's address pin. Set your **map pin** in Profile, or distance pricing and
+radius cannot apply: customers then see your shop by city/pincode and pay the
+flat delivery charge.
+
+### Delivery radius and who sees your shop
+
+Customers who share their location only see shops whose **delivery radius**
+covers them, and checkout refuses delivery to an address outside it. Customers
+who only picked a city still see shops in that city.
 
 ## Payment settings
 
