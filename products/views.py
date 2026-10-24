@@ -683,6 +683,7 @@ def search_products(request):
                 'include_fractional_children': True,
                 'include_group_variants': True,
                 'include_margin_percent': can_see_cost,
+                'include_purchase_bill_fields': True,
                 # Cost is the margin's input, so it follows the same purchase-role gate.
                 'hide_purchase_price': not can_see_cost,
             },
