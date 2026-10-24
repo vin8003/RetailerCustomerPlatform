@@ -1,4 +1,5 @@
 import random
+import secrets
 import string
 import requests
 from datetime import datetime, timedelta
@@ -48,8 +49,8 @@ def generate_otp():
     """
     Generate a 6-digit random number OTP
     """
-    # Generate 6 random digits
-    otp_code = ''.join(random.choices(string.digits, k=6))
+    # Generate 6 random digits from a CSPRNG (the code guards password resets)
+    otp_code = ''.join(secrets.choice(string.digits) for _ in range(6))
     # For compatibility with existing models/views that define secret_key
     # We can just use the same otp_code or a dummy, but let's keep it simple.
     # The models expects a secret_key (char field). 
@@ -59,7 +60,7 @@ def generate_otp():
     # The new verify helper will just compare strings.
     # So we don't strictly need a "secret key" like TOTP does.
     # But to satisfy the function signature and db model:
-    secret_key = ''.join(random.choices(string.ascii_letters + string.digits, k=32))
+    secret_key = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32))
     
     return otp_code, secret_key
 
