@@ -9,6 +9,8 @@ from django.contrib.auth import authenticate
 from django.utils import timezone
 from django.core.cache import cache
 from django.conf import settings
+from django.db import transaction
+import hmac
 import logging
 
 from .models import User, OTPVerification, EmailOTPVerification
@@ -20,9 +22,12 @@ from .serializers import (
     PasswordChangeSerializer, RequestPhoneVerificationSerializer,
     ForgotPasswordSerializer, ResetPasswordConfirmSerializer,
     ForgotPasswordEmailSerializer, ResetPasswordEmailConfirmSerializer,
-    EmailVerifySerializer
+    EmailVerifySerializer, RetailerForgotPasswordSerializer, RetailerResetPasswordSerializer
 )
-from .utils import generate_otp, send_sms_otp, verify_otp_helper, verify_firebase_id_token, send_email_otp
+from .utils import (
+    generate_otp, send_sms_otp, verify_otp_helper, verify_firebase_id_token, send_email_otp,
+    clean_phone_number,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -933,10 +938,11 @@ def reset_password(request):
             # Firebase Token Verification Flow
             if firebase_token:
                 decoded_token = verify_firebase_id_token(firebase_token)
+                # The token only proves its own phone number, so it may reset only that account.
+                if decoded_token and decoded_token.get('phone_number') != phone_number:
+                    logger.warning("Firebase password reset refused: token phone does not match request")
+                    decoded_token = None
                 if decoded_token:
-                    # Token valid, check if it matches the phone number (optional but recommended)
-                    # For now we assume the client verified the phone number
-                    
                     try:
                         user = User.objects.get(phone_number=phone_number)
                          # Change password
@@ -975,6 +981,13 @@ def reset_password(request):
             if otp_verification.is_expired():
                 return Response(
                     {'error': 'OTP has expired'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if not otp_verification.can_retry():
+                otp_verification.delete()
+                return Response(
+                    {'error': 'Too many attempts. Please request a new OTP.'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
@@ -1126,6 +1139,192 @@ def reset_password_email(request):
         return Response(
             {'error': 'Internal server error'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+# Retailer password reset (forgot password on the retailer portal).
+# Both steps answer the same way whether or not an account matches, so they
+# cannot be used to find out which usernames, phones or emails are registered.
+RETAILER_RESET_SENT_MESSAGE = (
+    'If an account matches, we have sent a 6-digit code to its registered phone number '
+    '(or email if no phone is on file).'
+)
+RETAILER_RESET_INVALID_MESSAGE = 'Invalid or expired code. Please request a new one.'
+# A new code is not sent while the last one is younger than this.
+RETAILER_RESET_RESEND_COOLDOWN = 60
+
+
+def _find_retailer_for_reset(identifier):
+    """
+    Resolve a login identifier (username, phone or email) to one active retailer.
+    Returns None when nothing, or more than one account, matches.
+    """
+    retailers = User.objects.filter(user_type='retailer', is_active=True).exclude(
+        registration_status='shadow'
+    )
+    user = retailers.filter(username=identifier).first()
+    if user:
+        return user
+
+    if '@' in identifier:
+        matches = list(retailers.filter(email__iexact=identifier)[:2])
+        return matches[0] if len(matches) == 1 else None
+
+    digits = ''.join(ch for ch in identifier if ch.isdigit())
+    if len(digits) < 10:
+        return None
+    candidates = {clean_phone_number(identifier)}
+    if len(digits) == 10:
+        # The retailer portal stores Indian numbers as +91 followed by 10 digits.
+        candidates.add(f'+91{digits}')
+    matches = list(retailers.filter(phone_number__in=candidates)[:2])
+    return matches[0] if len(matches) == 1 else None
+
+
+def _retailer_reset_records(user):
+    """The user's pending reset codes, across phone and email."""
+    return (
+        OTPVerification.objects.filter(user=user, is_verified=False),
+        EmailOTPVerification.objects.filter(user=user, is_verified=False),
+    )
+
+
+def _send_retailer_reset_code(user):
+    """Send a reset code to the retailer's phone, or email when no phone is on file."""
+    if not user.phone_number and not user.email:
+        logger.warning(f"Retailer password reset: no phone or email on file for user {user.pk}")
+        return
+
+    phone_qs, email_qs = _retailer_reset_records(user)
+    cooldown_start = timezone.now() - timezone.timedelta(seconds=RETAILER_RESET_RESEND_COOLDOWN)
+    recent = (
+        phone_qs.filter(created_at__gt=cooldown_start).exists()
+        or email_qs.filter(created_at__gt=cooldown_start).exists()
+    )
+    if recent:
+        logger.info(f"Retailer password reset: code for user {user.pk} still in cooldown, not resent")
+        return
+
+    phone_qs.delete()
+    email_qs.delete()
+    otp_code, secret_key = generate_otp()
+    expires_at = timezone.now() + timezone.timedelta(seconds=settings.OTP_EXPIRY_TIME)
+
+    if user.phone_number:
+        OTPVerification.objects.create(
+            user=user,
+            phone_number=user.phone_number,
+            otp_code=otp_code,
+            secret_key=secret_key,
+            expires_at=expires_at,
+        )
+        sent = send_sms_otp(user.phone_number, otp_code)
+    else:
+        EmailOTPVerification.objects.create(
+            user=user,
+            email=user.email,
+            otp_code=otp_code,
+            secret_key=secret_key,
+            expires_at=expires_at,
+        )
+        sent = send_email_otp(user.email, otp_code)
+
+    if sent:
+        logger.info(f"Retailer password reset code sent for user {user.pk}")
+    else:
+        logger.error(f"Retailer password reset: failed to send code for user {user.pk}")
+
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+@throttle_classes([OTPThrottle])
+def retailer_forgot_password(request):
+    """
+    Send a retailer a password reset code. Always answers the same way.
+    """
+    serializer = RetailerForgotPasswordSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        user = _find_retailer_for_reset(serializer.validated_data['identifier'])
+        if user is not None:
+            _send_retailer_reset_code(user)
+    except Exception:
+        # Still answer generically; a 500 only for real accounts would reveal them.
+        logger.exception('Error in retailer_forgot_password')
+
+    return Response({
+        'message': RETAILER_RESET_SENT_MESSAGE,
+        'expires_in': settings.OTP_EXPIRY_TIME,
+        'resend_after': RETAILER_RESET_RESEND_COOLDOWN,
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+@throttle_classes([OTPThrottle])
+def retailer_reset_password(request):
+    """
+    Check a retailer's reset code and set the new password.
+    Signs the retailer out of every other session.
+    """
+    serializer = RetailerResetPasswordSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    invalid = Response({'error': RETAILER_RESET_INVALID_MESSAGE}, status=status.HTTP_400_BAD_REQUEST)
+    otp_code = serializer.validated_data['otp_code']
+
+    try:
+        user = _find_retailer_for_reset(serializer.validated_data['identifier'])
+        if user is None:
+            return invalid
+
+        with transaction.atomic():
+            phone_qs, email_qs = _retailer_reset_records(user)
+            record = (
+                phone_qs.select_for_update().order_by('-created_at').first()
+                or email_qs.select_for_update().order_by('-created_at').first()
+            )
+            if record is None:
+                return invalid
+            if record.is_expired() or not record.can_retry():
+                record.delete()
+                return invalid
+            if not hmac.compare_digest(str(record.otp_code), otp_code):
+                record.attempts += 1
+                if record.can_retry():
+                    record.save(update_fields=['attempts'])
+                else:
+                    record.delete()
+                return invalid
+
+            user.set_password(serializer.validated_data['new_password'])
+            update_fields = ['password']
+            if isinstance(record, OTPVerification) and not user.is_phone_verified:
+                # Receiving the SMS code proves the retailer holds this phone.
+                user.is_phone_verified = True
+                update_fields.append('is_phone_verified')
+            user.save(update_fields=update_fields)
+            phone_qs.delete()
+            email_qs.delete()
+
+            from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
+            for token in OutstandingToken.objects.filter(user=user):
+                BlacklistedToken.objects.get_or_create(token=token)
+
+        logger.info(f"Retailer password reset successful for user {user.pk}")
+        return Response(
+            {'message': 'Password reset successfully. Please login with your new password.'},
+            status=status.HTTP_200_OK,
+        )
+
+    except Exception:
+        logger.exception('Error in retailer_reset_password')
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
 
