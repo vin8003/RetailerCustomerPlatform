@@ -341,3 +341,27 @@ class EmailVerifySerializer(serializers.Serializer):
     email = serializers.EmailField()
     otp_code = serializers.CharField(max_length=6)
 
+
+
+class RetailerForgotPasswordSerializer(serializers.Serializer):
+    """
+    Retailer password reset request. The identifier is whatever the retailer
+    logs in with: username, registered phone number or email. It is never
+    checked against accounts here, so the response cannot reveal whether one exists.
+    """
+    identifier = serializers.CharField(max_length=254, trim_whitespace=True)
+
+
+class RetailerResetPasswordSerializer(serializers.Serializer):
+    """
+    Retailer password reset confirmation (identifier + OTP + new password)
+    """
+    identifier = serializers.CharField(max_length=254, trim_whitespace=True)
+    otp_code = serializers.RegexField(r'^\d{6}$', error_messages={'invalid': 'Enter the 6-digit code.'})
+    new_password = serializers.CharField(write_only=True, validators=[validate_password])
+    confirm_password = serializers.CharField(write_only=True)
+
+    def validate(self, attrs):
+        if attrs['new_password'] != attrs['confirm_password']:
+            raise serializers.ValidationError({"confirm_password": "Passwords don't match"})
+        return attrs

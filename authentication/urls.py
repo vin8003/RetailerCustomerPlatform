@@ -6,6 +6,8 @@ urlpatterns = [
     # Retailer authentication
     path('retailer/signup/', views.retailer_signup, name='retailer_signup'),
     path('retailer/login/', views.retailer_login, name='retailer_login'),
+    path('retailer/password/forgot/', views.retailer_forgot_password, name='retailer_forgot_password'),
+    path('retailer/password/reset/', views.retailer_reset_password, name='retailer_reset_password'),
 
     # Customer authentication
     path('customer/signup/', views.customer_signup, name='customer_signup'),
