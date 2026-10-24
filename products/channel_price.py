@@ -1,0 +1,257 @@
+"""
+OE-106 / F-0023 — store vs owned-app selling price (thin EXTEND).
+
+``Product.price`` stays the store / POS list. ``Product.app_price`` is the
+owned-app list; null means fall back to store price. One ATP pool is
+unchanged (``Product.quantity`` / saleable). No PriceList engine (F-0022)
+and no marketplace connector.
+"""
+from decimal import Decimal, InvalidOperation
+from functools import wraps
+from types import SimpleNamespace
+
+from rest_framework import status
+from rest_framework.fields import DecimalField
+from rest_framework.response import Response
+
+from retailers.models import OrgAuditLog
+from retailers.organization import (
+    ensure_org_rbac_bootstrap,
+    get_organization_for_user,
+    user_has_org_permission,
+)
+
+CHANNEL_STORE = 'store'
+CHANNEL_APP = 'app'
+PERM_CATALOG_PRICE = 'catalog.price'
+
+_MONEY = DecimalField(max_digits=10, decimal_places=2)
+_PERCENT = DecimalField(max_digits=5, decimal_places=2)
+
+
+def resolve_channel_price(product, channel, batch=None):
+    """Selling Decimal for a channel. App uses Product.app_price when set."""
+    if channel == CHANNEL_APP and getattr(product, 'app_price', None) is not None:
+        return product.app_price
+    if batch is not None and getattr(batch, 'price', None) is not None:
+        return batch.price
+    return product.price
+
+
+def price_channel_from_request(request):
+    """
+    Retailer JWT on shop APIs sees the store list. Everyone else (customer,
+    anonymous, missing request) sees the app list. Fail closed: do not leak
+    store-only fields on an unknown caller.
+    """
+    if request is None or getattr(request, 'force_app_price_channel', False):
+        return CHANNEL_APP
+    user = getattr(request, 'user', None)
+    if (
+        user is not None
+        and getattr(user, 'is_authenticated', False)
+        and getattr(user, 'user_type', None) == 'retailer'
+    ):
+        return CHANNEL_STORE
+    return CHANNEL_APP
+
+
+def app_channel_view(view_func):
+    """
+    Customer catalog routes serve any shop's products, so every caller gets the
+    app list there. A retailer JWT must not read another shop's store list or cost.
+    """
+    @wraps(view_func)
+    def wrapped(request, *args, **kwargs):
+        request.force_app_price_channel = True
+        return view_func(request, *args, **kwargs)
+    return wrapped
+
+
+def channel_from_context(context):
+    """Prefer an explicit channel; otherwise derive it from the request."""
+    context = context or {}
+    channel = context.get('price_channel')
+    if channel is None:
+        channel = price_channel_from_request(context.get('request'))
+    return channel
+
+
+def format_money(value):
+    if value is None:
+        return None
+    return _MONEY.to_representation(value)
+
+
+def _rewrite_nested_batch_prices(data, product, channel):
+    """Customer payloads must not leak store batch.price when app_price is set."""
+    batches = data.get('batches')
+    if not isinstance(batches, list):
+        return
+    for row in batches:
+        if not isinstance(row, dict) or 'price' not in row:
+            continue
+        batch = SimpleNamespace(price=row.get('price'))
+        row['price'] = format_money(
+            resolve_channel_price(product, channel, batch=batch)
+        )
+
+
+def _discount_off_mrp(original_price, selling):
+    """(savings, percent) off MRP at this selling price; same rule as Product.save()."""
+    if original_price and original_price > selling:
+        saved = original_price - selling
+        return saved, saved / original_price * 100
+    return Decimal('0.00'), Decimal('0.00')
+
+
+def apply_channel_price_representation(data, product, context):
+    """Rewrite shared product payloads so app callers cannot read store list."""
+    if not isinstance(data, dict) or product is None:
+        return data
+    channel = channel_from_context(context)
+    selling = resolve_channel_price(product, channel)
+    formatted = format_money(selling)
+    data['price'] = formatted
+    if 'discounted_price' in data:
+        data['discounted_price'] = formatted
+    if 'discount_percentage' in data or 'savings' in data:
+        # The stored discount is off the store list; show the one this caller pays.
+        saved, percent = _discount_off_mrp(getattr(product, 'original_price', None), selling)
+        if 'discount_percentage' in data:
+            data['discount_percentage'] = _PERCENT.to_representation(percent)
+        if 'savings' in data:
+            data['savings'] = format_money(saved)
+    if channel == CHANNEL_APP:
+        data.pop('app_price', None)
+        # Cost price is shop-only data; customers and anonymous callers never get it.
+        data.pop('purchase_price', None)
+        for row in data.get('batches') or []:
+            if isinstance(row, dict):
+                row.pop('purchase_price', None)
+    else:
+        data['app_price'] = format_money(getattr(product, 'app_price', None))
+    _rewrite_nested_batch_prices(data, product, channel)
+    return data
+
+
+def _money_differs(raw, current):
+    if raw in (None, ''):
+        return current is not None
+    try:
+        submitted = Decimal(str(raw))
+    except (InvalidOperation, TypeError, ValueError):
+        return True
+    if current is None:
+        return True
+    return submitted != Decimal(str(current))
+
+
+def payload_sets_app_price(data):
+    return isinstance(data, dict) and 'app_price' in data
+
+
+def submitted_app_price_differs(product, data):
+    if not payload_sets_app_price(data) or product is None:
+        return False
+    return _money_differs(data.get('app_price'), getattr(product, 'app_price', None))
+
+
+def create_payload_sets_app_price(data):
+    if not payload_sets_app_price(data):
+        return False
+    return data.get('app_price') not in (None, '')
+
+
+def bulk_items_set_app_price(items):
+    if not isinstance(items, list):
+        return False
+    return any(payload_sets_app_price(item) for item in items)
+
+
+def bulk_items_would_change_app_price(items, products_by_id):
+    if not isinstance(items, list):
+        return False
+    for item in items:
+        if not payload_sets_app_price(item):
+            continue
+        product = products_by_id.get(item.get('id'))
+        if product is None:
+            return True
+        if _money_differs(item.get('app_price'), product.app_price):
+            return True
+    return False
+
+
+def catalog_price_denied_response():
+    return Response(
+        {'error': 'Catalog price permission required'},
+        status=status.HTTP_403_FORBIDDEN,
+    )
+
+
+def require_catalog_price(user, organization=None):
+    """
+    Return a 403/404 Response when the user may not change app_price.
+
+    Owner is implicit admin. On deny, refresh system Admin from the catalog
+    then re-check so stale admin roles do not block after a catalog bump.
+    """
+    org = organization
+    if org is None:
+        org = get_organization_for_user(user)
+    if org is None:
+        return Response(
+            {'error': 'Organization not found or access denied'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    if user_has_org_permission(user, org, PERM_CATALOG_PRICE):
+        return None
+    ensure_org_rbac_bootstrap(org)
+    if user_has_org_permission(user, org, PERM_CATALOG_PRICE):
+        return None
+    return catalog_price_denied_response()
+
+
+_UNSET = object()
+
+
+def app_price_summary(product, app_price=_UNSET):
+    """Build an audit summary. Pass ``app_price=None`` to record a clear."""
+    if app_price is _UNSET and product is not None:
+        app_price = product.app_price
+    return {
+        'product_id': product.id if product is not None else None,
+        'store_price': format_money(product.price) if product is not None else None,
+        'app_price': format_money(app_price),
+    }
+
+
+def record_channel_price_audit(
+    *,
+    product,
+    actor,
+    organization,
+    location=None,
+    summary_before=None,
+    summary_after=None,
+    action=OrgAuditLog.ACTION_UPDATE,
+):
+    if organization is None or product is None:
+        return None
+    before = dict(summary_before or {})
+    after = dict(summary_after or {})
+    if before == after:
+        return None
+    from retailers.audit_log import record_org_audit_event
+
+    return record_org_audit_event(
+        organization=organization,
+        actor=actor,
+        action=action,
+        object_type=OrgAuditLog.OBJECT_CHANNEL_PRICE,
+        object_id=product.id,
+        summary_before=before,
+        summary_after=after,
+        location=location,
+    )

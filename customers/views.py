@@ -1,10 +1,14 @@
 from rest_framework import status, permissions
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
+from rest_framework.throttling import UserRateThrottle
+from rest_framework.exceptions import APIException
+from rest_framework.generics import get_object_or_404  # malformed ids are a 404, not a 500
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Count, Sum, Q, Avg, DecimalField, IntegerField, Max, Subquery, OuterRef, F
-from django.shortcuts import get_object_or_404
+from django.http import Http404
 from decimal import Decimal
+from common.client_input import id_value
 from common.pagination import StandardResultsSetPagination
 from django.utils import timezone
 from datetime import timedelta
@@ -22,8 +26,36 @@ from retailers.models import RetailerProfile, RetailerRewardConfig, RetailerBlac
 from retailers.serializers import RetailerRewardConfigSerializer
 from orders.models import Order, RetailerRating
 from products.models import Product
+from .crm import (
+    RECENT_ORDERS_LIMIT,
+    annotated_history_qs,
+    customer_summary,
+    find_org_customer_mapping,
+    is_export_requested,
+    org_customer_orders_qs,
+    order_totals,
+    parse_lookup_phone,
+    require_history_export_permission,
+    require_retailer_crm_access,
+    serialize_order_row,
+)
 
 User = get_user_model()
+
+from retailers.module_flags import module_required
+
+
+def _redeem_otp_error_status(message):
+    from .loyalty_redeem import ERR_TOO_MANY_CODES
+
+    if message == ERR_TOO_MANY_CODES:
+        return status.HTTP_429_TOO_MANY_REQUESTS
+    return status.HTTP_400_BAD_REQUEST
+
+
+class RedeemOTPThrottle(UserRateThrottle):
+    """Per signed-in user (AnonRateThrottle never applies to authenticated staff)."""
+    scope = 'otp'
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +219,8 @@ def get_customer_address(request, address_id):
         serializer = CustomerAddressSerializer(address)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error getting customer address: {str(e)}")
         return Response(
@@ -229,6 +263,8 @@ def update_customer_address(request, address_id):
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error updating customer address: {str(e)}")
         return Response(
@@ -267,6 +303,8 @@ def delete_customer_address(request, address_id):
             status=status.HTTP_200_OK
         )
     
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error deleting customer address: {str(e)}")
         return Response(
@@ -290,18 +328,24 @@ def get_customer_wishlist(request):
         
         wishlist = CustomerWishlist.objects.filter(
             customer=request.user
-        ).select_related('product', 'product__retailer').order_by('-created_at')
+        ).select_related('product', 'product__retailer', 'product__brand').order_by('-created_at')
         
         paginator = CustomerPagination()
         page = paginator.paginate_queryset(wishlist, request)
         
         if page is not None:
-            serializer = CustomerWishlistSerializer(page, many=True)
+            serializer = CustomerWishlistSerializer(
+                page, many=True, context={'request': request}
+            )
             return paginator.get_paginated_response(serializer.data)
         
-        serializer = CustomerWishlistSerializer(wishlist, many=True)
+        serializer = CustomerWishlistSerializer(
+            wishlist, many=True, context={'request': request}
+        )
         return Response(serializer.data, status=status.HTTP_200_OK)
     
+    except (Http404, APIException):
+        raise
     except Exception as e:
         logger.error(f"Error getting customer wishlist: {str(e)}")
         return Response(
@@ -325,7 +369,7 @@ def add_to_wishlist(request):
         
         serializer = CustomerWishlistSerializer(
             data=request.data, 
-            context={'customer': request.user}
+            context={'customer': request.user, 'request': request}
         )
         
         if serializer.is_valid():
@@ -378,6 +422,8 @@ def remove_from_wishlist(request, product_id):
             status=status.HTTP_200_OK
         )
     
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error removing from wishlist: {str(e)}")
         return Response(
@@ -418,6 +464,8 @@ def get_customer_notifications(request):
         serializer = CustomerNotificationSerializer(notifications, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
+    except (Http404, APIException):
+        raise
     except Exception as e:
         logger.error(f"Error getting customer notifications: {str(e)}")
         return Response(
@@ -451,6 +499,8 @@ def mark_notification_read(request, notification_id):
         serializer = CustomerNotificationSerializer(notification)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error marking notification as read: {str(e)}")
         return Response(
@@ -558,6 +608,8 @@ def get_reward_configuration(request):
         serializer = RetailerRewardConfigSerializer(config)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
+    except (Http404, APIException):
+        raise
     except Exception as e:
         logger.error(f"Error getting reward configuration: {str(e)}")
         return Response(
@@ -594,6 +646,8 @@ def get_customer_loyalty(request):
             'retailer_name': retailer.shop_name
         }, status=status.HTTP_200_OK)
     
+    except (Http404, APIException):
+        raise
     except Exception as e:
         logger.error(f"Error getting customer loyalty: {str(e)}")
         return Response(
@@ -710,7 +764,7 @@ def get_loyalty_transactions(request):
     transactions = LoyaltyTransaction.objects.filter(customer=request.user)
     
     if retailer_id:
-        transactions = transactions.filter(retailer_id=retailer_id)
+        transactions = transactions.filter(retailer_id=id_value(retailer_id, 'retailer_id'))
         
     transactions = transactions.select_related('retailer').order_by('-created_at')[:50]
     
@@ -761,6 +815,8 @@ def get_retailer_customers_loyalty(request):
             
         return Response(data, status=status.HTTP_200_OK)
     
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error getting retailer customers loyalty: {str(e)}")
         return Response(
@@ -924,6 +980,12 @@ def get_retailer_customers(request):
                 {'error': 'Only retailers can access this endpoint'}, 
                 status=status.HTTP_403_FORBIDDEN
             )
+
+        from retailers.module_flags import require_module_enabled
+
+        _org, module_err = require_module_enabled(request.user, 'customers')
+        if module_err is not None:
+            return module_err
             
         retailer = get_object_or_404(RetailerProfile, user=request.user)
         
@@ -1040,7 +1102,14 @@ def get_retailer_customers(request):
                 'joined_date': mapping.created_at,
                 # Only show credit balance if it's non-zero or retailer has explicitly set a credit limit
                 'current_balance': float(mapping.current_balance) if (mapping.current_balance > 0 or mapping.credit_limit > 0) else None,
-                'credit_limit': float(mapping.credit_limit) if mapping.credit_limit > 0 else None
+                # Known RBAC gap (OE-305 / #94): any staff seat with the customers module sees
+                # customer email here and on customer detail. Gate both together when the
+                # staff permissions on #94 land; hiding it on one endpoint alone hides nothing.
+                'email': user.email,
+                'notes': mapping.notes,
+                # 0 means no limit; older clients read "0.00" as a ₹0 limit.
+                'credit_limit': mapping.credit_limit if mapping.credit_limit > 0 else None,
+                'credit_due_days': mapping.credit_due_days,
             })
             
         serializer = RetailerCustomerListSerializer(data, many=True)
@@ -1049,12 +1118,93 @@ def get_retailer_customers(request):
             
         return Response(serializer.data, status=status.HTTP_200_OK)
     
+    except (Http404, APIException):
+        raise
     except Exception as e:
         logger.error(f"Error getting retailer customers: {str(e)}")
         return Response(
             {'error': 'Internal server error'}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+class CustomerLookupThrottle(UserRateThrottle):
+    scope = 'customer_lookup'
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+@throttle_classes([CustomerLookupThrottle])
+def lookup_retailer_customer(request):
+    """
+    Phone lookup: org-scoped customer summary + recent POS and app orders.
+
+    OE-212 / F-0105. Does not change POS typeahead payloads.
+    """
+    from collections import OrderedDict
+
+    org, err = require_retailer_crm_access(request.user)
+    if err is not None:
+        return err
+
+    last_10, phone_err = parse_lookup_phone(request.query_params.get('phone'))
+    if phone_err is not None:
+        return phone_err
+
+    # Order history and balances need orders.read for every response, not only exports.
+    read_err = require_history_export_permission(request.user, org)
+    if read_err is not None:
+        return read_err
+    export = is_export_requested(request.query_params)
+
+    from orders.access import staff_served_location_ids
+    from retailers.audit_log import record_org_audit_event
+    from retailers.models import OrgAuditLog
+
+    # Staff only see customers and orders of the locations they serve.
+    served = staff_served_location_ids(request.user, org)
+    record_org_audit_event(
+        organization=org,
+        actor=request.user,
+        action=OrgAuditLog.ACTION_UPDATE,
+        object_type=OrgAuditLog.OBJECT_CUSTOMER_LOOKUP,
+        object_id=last_10[-4:],
+        summary_after={'phone_last4': last_10[-4:], 'export': export},
+    )
+
+    mapping = find_org_customer_mapping(org, last_10, location_ids=served)
+    customer = mapping.customer if mapping is not None else None
+    orders_base = org_customer_orders_qs(
+        org, customer=customer, last_10=last_10, location_ids=served
+    )
+    history_qs = annotated_history_qs(orders_base)
+
+    if mapping is None:
+        first_order = history_qs.first()
+        if first_order is None:
+            return Response(
+                {'error': 'Customer not found'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        totals = order_totals(orders_base)
+        guest_name = first_order.guest_name or ''
+        payload = customer_summary(None, last_10, totals, guest_name=guest_name)
+    else:
+        totals = order_totals(orders_base)
+        payload = customer_summary(mapping, last_10, totals)
+
+    if export:
+        paginator = StandardResultsSetPagination()
+        page = paginator.paginate_queryset(history_qs, request)
+        rows = [serialize_order_row(order) for order in page]
+        paged = paginator.get_paginated_response(rows)
+        body = OrderedDict(customer=payload)
+        body.update(paged.data)
+        return Response(body, status=status.HTTP_200_OK)
+
+    recent = list(history_qs[:RECENT_ORDERS_LIMIT])
+    payload['recent_orders'] = [serialize_order_row(order) for order in recent]
+    return Response(payload, status=status.HTTP_200_OK)
 
 
 @api_view(['GET'])
@@ -1135,6 +1285,7 @@ def get_customer_details_for_retailer(request, customer_id):
             'nickname': mapping.nickname,
             'notes': mapping.notes,
             'phone_number': user.phone_number,
+            # Same RBAC gap as the customer list: no staff permission gates email yet (#94).
             'email': user.email,
             'profile_image': profile.profile_image.url if profile and profile.profile_image else None,
             'points': points,
@@ -1148,6 +1299,7 @@ def get_customer_details_for_retailer(request, customer_id):
             'is_phone_verified': user.is_phone_verified,
             'credit_limit': mapping.credit_limit,
             'current_balance': mapping.current_balance,
+            'credit_due_days': mapping.credit_due_days,
             'recent_orders': recent_orders_data,
             'reward_history': reward_history,
             'retailer_ratings': my_ratings
@@ -1156,6 +1308,8 @@ def get_customer_details_for_retailer(request, customer_id):
         serializer = RetailerCustomerDetailSerializer(data)
         return Response(serializer.data, status=status.HTTP_200_OK)
         
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error getting customer details: {str(e)}")
         return Response(
@@ -1222,6 +1376,7 @@ def toggle_blacklist(request):
 
 @api_view(['PATCH'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('customers')
 def update_retailer_customer(request, customer_id):
     """
     Update retailer-specific customer mapping (nickname and notes)
@@ -1254,6 +1409,8 @@ def update_retailer_customer(request, customer_id):
             'notes': mapping.notes
         }, status=status.HTTP_200_OK)
         
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error updating retailer customer mapping: {str(e)}")
         return Response(
@@ -1264,6 +1421,7 @@ def update_retailer_customer(request, customer_id):
 
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('customers')
 def get_customer_ledger(request, customer_id):
     """
     Get full ledger (Khata) for a customer
@@ -1288,6 +1446,8 @@ def get_customer_ledger(request, customer_id):
         serializer = CustomerLedgerSerializer(ledger_entries, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
         
+    except (Http404, APIException):
+        raise
     except Exception as e:
         logger.error(f"Error getting customer ledger: {str(e)}")
         return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -1295,6 +1455,7 @@ def get_customer_ledger(request, customer_id):
 
 @api_view(['POST'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('customers')
 def record_customer_payment(request):
     """
     Record a manual payment from a customer (Credit to Ledger)
@@ -1343,38 +1504,153 @@ def record_customer_payment(request):
 
 @api_view(['PATCH'])
 @permission_classes([permissions.IsAuthenticated])
+@module_required('customers')
 def update_customer_credit_limit(request, customer_id):
     """
-    Update credit limit for a customer
+    Update credit limit and/or credit due days for a customer.
     """
     try:
         if request.user.user_type != 'retailer':
             return Response({'error': 'Only retailers can manage credit limits'}, status=status.HTTP_403_FORBIDDEN)
             
-        credit_limit = request.data.get('credit_limit')
-        if credit_limit is None:
-            return Response({'error': 'Credit limit is required'}, status=status.HTTP_400_BAD_REQUEST)
-            
+        from retailers.organization import get_organization_for_user, user_has_org_permission
+
+        credit_org = get_organization_for_user(request.user)
+        if credit_org is None or not user_has_org_permission(
+            request.user, credit_org, 'credit.manage'
+        ):
+            return Response(
+                {'error': 'Credit limit permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        has_limit = 'credit_limit' in request.data
+        has_due_days = 'credit_due_days' in request.data
+        if not has_limit and not has_due_days:
+            return Response(
+                {'error': 'Credit limit or credit due days is required'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         from decimal import Decimal
-        try:
-            credit_limit = Decimal(str(credit_limit))
-            if credit_limit < 0:
-                return Response({'error': 'Credit limit cannot be negative'}, status=status.HTTP_400_BAD_REQUEST)
-        except:
-            return Response({'error': 'Invalid credit limit'}, status=status.HTTP_400_BAD_REQUEST)
-            
+        update_fields = ['updated_at']
+        credit_limit = None
+        if has_limit:
+            credit_limit = request.data.get('credit_limit')
+            try:
+                credit_limit = Decimal(str(credit_limit))
+                if not credit_limit.is_finite():
+                    return Response({'error': 'Invalid credit limit'}, status=status.HTTP_400_BAD_REQUEST)
+                if credit_limit < 0:
+                    return Response({'error': 'Credit limit cannot be negative'}, status=status.HTTP_400_BAD_REQUEST)
+            except Exception:
+                return Response({'error': 'Invalid credit limit'}, status=status.HTTP_400_BAD_REQUEST)
+
+        credit_due_days = None
+        if has_due_days:
+            raw_due = request.data.get('credit_due_days')
+            if raw_due is None or raw_due == '':
+                credit_due_days = None
+            else:
+                try:
+                    credit_due_days = int(raw_due)
+                    if credit_due_days < 0:
+                        return Response(
+                            {'error': 'Credit due days cannot be negative'},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                except (TypeError, ValueError):
+                    return Response({'error': 'Invalid credit due days'}, status=status.HTTP_400_BAD_REQUEST)
+
         retailer = get_object_or_404(RetailerProfile, user=request.user)
         user = get_object_or_404(User, id=customer_id)
         mapping = get_object_or_404(RetailerCustomerMapping, retailer=retailer, customer=user)
-        
-        mapping.credit_limit = credit_limit
-        mapping.save(update_fields=['credit_limit', 'updated_at'])
+
+        if has_limit:
+            mapping.credit_limit = credit_limit
+            update_fields.append('credit_limit')
+        if has_due_days:
+            mapping.credit_due_days = credit_due_days
+            update_fields.append('credit_due_days')
+        mapping.save(update_fields=update_fields)
         
         return Response({
             'message': 'Credit limit updated successfully',
-            'credit_limit': mapping.credit_limit
+            'credit_limit': mapping.credit_limit,
+            'credit_due_days': mapping.credit_due_days,
         }, status=status.HTTP_200_OK)
-        
+
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error updating credit limit: {str(e)}")
         return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+@throttle_classes([RedeemOTPThrottle])
+def customer_loyalty_redeem_otp(request):
+    """Customer requests a redeem OTP for one shop wallet."""
+    if request.user.user_type != 'customer':
+        return Response(
+            {'error': 'Only customers can request a redeem OTP here'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    retailer_id = request.data.get('retailer_id')
+    if not retailer_id:
+        return Response({'error': 'retailer_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+    retailer = get_object_or_404(RetailerProfile, id=retailer_id, is_active=True)
+    from retailers.module_flags import is_module_enabled, module_disabled_response
+    from .loyalty_redeem import customer_has_wallet, issue_redeem_otp, otp_sent_payload
+
+    org = retailer.organization
+    if org is not None and not is_module_enabled(org, 'rewards'):
+        return module_disabled_response('rewards')
+    if not customer_has_wallet(request.user, retailer):
+        return Response({'error': 'No loyalty wallet at this shop'}, status=status.HTTP_400_BAD_REQUEST)
+    _row, err = issue_redeem_otp(request.user, retailer)
+    if err:
+        return Response({'error': err}, status=_redeem_otp_error_status(err))
+    return Response(otp_sent_payload(), status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+@throttle_classes([RedeemOTPThrottle])
+def staff_loyalty_redeem_otp(request):
+    """Staff sends a redeem OTP to an org customer's registered mobile."""
+    from .loyalty_redeem import issue_redeem_otp, otp_sent_payload, staff_customer_for_otp
+
+    customer, retailer, err = staff_customer_for_otp(request.user, request.data)
+    if err is not None:
+        return err
+    _row, issue_err = issue_redeem_otp(customer, retailer)
+    if issue_err:
+        return Response({'error': issue_err}, status=_redeem_otp_error_status(issue_err))
+    return Response(otp_sent_payload(), status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def staff_loyalty_redeem(request):
+    """Burn points onto a pending org order. OTP required when config says so."""
+    from .loyalty_redeem import apply_pending_order_redeem, staff_order_for_redeem
+
+    order, err = staff_order_for_redeem(request.user, request.data.get('order_id'))
+    if err is not None:
+        return err
+    order, apply_err = apply_pending_order_redeem(
+        order,
+        otp_code=request.data.get('otp_code') or request.data.get('redeem_otp'),
+        requested_points=request.data.get('points', None),
+    )
+    if apply_err:
+        return Response({'error': apply_err}, status=status.HTTP_400_BAD_REQUEST)
+    return Response(
+        {
+            'order_id': order.id,
+            'points_redeemed': order.points_redeemed,
+            'discount_from_points': order.discount_from_points,
+            'total_amount': order.total_amount,
+        },
+        status=status.HTTP_200_OK,
+    )

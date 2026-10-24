@@ -1,12 +1,478 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from .models import (
-    RetailerProfile, RetailerOperatingHours, RetailerCategory,
+    Organization, RetailerProfile, RetailerOperatingHours, RetailerCategory,
     RetailerCategoryMapping, RetailerReview, RetailerRewardConfig,
-    Supplier
+    Supplier, OrgRole, OrgStaffMembership, OrgApiKey, OrgAuditLog,
+    OrgModuleFlags,
+    OrgNotificationConfig,
+    OrgNotificationDelivery,
+)
+from .permissions_catalog import (
+    validate_permission_codes,
+)
+from .api_scopes import validate_scope_codes
+from .module_flags_catalog import validate_module_flags
+from common.notification_catalog import (
+    ALL_CHANNELS,
+    MAX_BLAST_RECIPIENTS,
+    validate_disabled_types,
+    validate_channel,
 )
 
 User = get_user_model()
+
+
+class OrganizationSerializer(serializers.ModelSerializer):
+    """Serializer for Organization (tenant parent)."""
+    location_ids = serializers.SerializerMethodField()
+    location_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Organization
+        fields = [
+            'id', 'name', 'owner', 'is_active',
+            'location_ids', 'location_count',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = [
+            'id', 'owner', 'location_ids', 'location_count',
+            'created_at', 'updated_at',
+        ]
+
+    def _locations(self, obj):
+        # values_list/count() ignore prefetch cache; all() uses it when present.
+        cache = getattr(self, '_locations_cache', None)
+        if cache is None:
+            cache = {}
+            self._locations_cache = cache
+        if obj.pk not in cache:
+            cache[obj.pk] = list(obj.locations.all())
+        return cache[obj.pk]
+
+    def get_location_ids(self, obj):
+        return [loc.id for loc in self._locations(obj)]
+
+    def get_location_count(self, obj):
+        return len(self._locations(obj))
+
+
+class OrganizationCreateSerializer(serializers.Serializer):
+    """Create an org and attach the caller's existing shop as location 1."""
+    name = serializers.CharField(max_length=255, required=False, allow_blank=True)
+
+
+class OrganizationUpdateSerializer(serializers.ModelSerializer):
+    """Staff-admin update: rename or disable/enable tenant."""
+
+    class Meta:
+        model = Organization
+        fields = ['name', 'is_active']
+
+
+class OrgModuleFlagsSerializer(serializers.ModelSerializer):
+    """Read representation of org module flags for client nav hiding."""
+
+    flags = serializers.SerializerMethodField()
+
+    class Meta:
+        model = OrgModuleFlags
+        fields = ['organization_id', 'flags', 'updated_at']
+        read_only_fields = fields
+
+    def get_flags(self, obj):
+        from .module_flags import module_flags_dict_from_row
+        return module_flags_dict_from_row(obj)
+
+
+class OrgModuleFlagsUpdateSerializer(serializers.Serializer):
+    """Partial update of module enablement flags."""
+
+    flags = serializers.DictField(
+        child=serializers.BooleanField(),
+        required=True,
+    )
+
+    def validate_flags(self, value):
+        if not value:
+            raise serializers.ValidationError(
+                'flags must include at least one module code'
+            )
+        try:
+            normalized, unknown = validate_module_flags(value)
+        except TypeError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+        if unknown:
+            raise serializers.ValidationError(
+                f'Unknown module codes: {unknown}'
+            )
+        return normalized
+
+
+class OrgNotificationConfigSerializer(serializers.ModelSerializer):
+    """Read representation of org notification preferences."""
+
+    organization_id = serializers.IntegerField(source='organization.id', read_only=True)
+
+    class Meta:
+        model = OrgNotificationConfig
+        fields = [
+            'organization_id',
+            'default_channel',
+            'disabled_types',
+            'channel_overrides',
+            'updated_at',
+        ]
+        read_only_fields = fields
+
+
+class OrgNotificationConfigUpdateSerializer(serializers.Serializer):
+    default_channel = serializers.CharField(max_length=16, required=False)
+    disabled_types = serializers.ListField(
+        child=serializers.CharField(max_length=64),
+        required=False,
+    )
+    channel_overrides = serializers.DictField(
+        child=serializers.CharField(max_length=16),
+        required=False,
+    )
+
+    def validate_default_channel(self, value):
+        try:
+            return validate_channel(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+
+    def validate_disabled_types(self, value):
+        try:
+            normalized, errors = validate_disabled_types(value)
+        except TypeError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+        if errors:
+            raise serializers.ValidationError(errors)
+        return normalized
+
+    def validate_channel_overrides(self, value):
+        if value is None:
+            return {}
+        normalized = {}
+        for key, channel in value.items():
+            try:
+                normalized[key] = validate_channel(channel)
+            except ValueError as exc:
+                raise serializers.ValidationError({key: str(exc)}) from exc
+        return normalized
+
+
+class OrgNotificationDeliverySerializer(serializers.ModelSerializer):
+    organization_id = serializers.IntegerField(source='organization.id', read_only=True)
+    recipient_user_id = serializers.IntegerField(
+        source='recipient_user.id',
+        read_only=True,
+        allow_null=True,
+    )
+    order_id = serializers.IntegerField(source='order.id', read_only=True, allow_null=True)
+
+    class Meta:
+        model = OrgNotificationDelivery
+        fields = [
+            'id',
+            'organization_id',
+            'order_id',
+            'recipient_user_id',
+            'notification_type',
+            'event_name',
+            'channel',
+            'status',
+            'retry_count',
+            'last_error',
+            'sent_at',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = fields
+
+
+class OrgNotificationBlastSerializer(serializers.Serializer):
+    notification_type = serializers.CharField(max_length=64)
+    recipient_user_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        allow_empty=False,
+        max_length=MAX_BLAST_RECIPIENTS,
+    )
+    context = serializers.DictField(required=False, default=dict)
+    channel = serializers.ChoiceField(choices=sorted(ALL_CHANNELS), required=False)
+
+    def validate_notification_type(self, value):
+        from common.notification_catalog import is_known_notification_type
+
+        if not is_known_notification_type(value):
+            raise serializers.ValidationError(f'Unknown notification type: {value}')
+        return value
+
+
+class OrgRoleSerializer(serializers.ModelSerializer):
+    """Named org role with versioned permission codes."""
+
+    class Meta:
+        model = OrgRole
+        fields = [
+            'id', 'organization', 'name', 'slug', 'permissions',
+            'is_system', 'created_at', 'updated_at',
+        ]
+        read_only_fields = [
+            'id', 'organization', 'is_system', 'created_at', 'updated_at',
+        ]
+
+    def validate_permissions(self, value):
+        try:
+            known, unknown = validate_permission_codes(value)
+        except TypeError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+        if unknown:
+            raise serializers.ValidationError(
+                f'Unknown permission codes: {unknown}'
+            )
+        return known
+
+    def validate_slug(self, value):
+        if not value:
+            raise serializers.ValidationError('slug is required')
+        return value
+
+
+class OrgRoleCreateSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=100)
+    slug = serializers.SlugField(max_length=50)
+    permissions = serializers.ListField(
+        child=serializers.CharField(max_length=64),
+        required=False,
+        default=list,
+    )
+
+    def validate_permissions(self, value):
+        try:
+            known, unknown = validate_permission_codes(value)
+        except TypeError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+        if unknown:
+            raise serializers.ValidationError(
+                f'Unknown permission codes: {unknown}'
+            )
+        return known
+
+
+class OrgRoleUpdateSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=100, required=False)
+    permissions = serializers.ListField(
+        child=serializers.CharField(max_length=64),
+        required=False,
+    )
+
+    def validate_permissions(self, value):
+        try:
+            known, unknown = validate_permission_codes(value)
+        except TypeError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+        if unknown:
+            raise serializers.ValidationError(
+                f'Unknown permission codes: {unknown}'
+            )
+        return known
+
+
+class OrgStaffMembershipSerializer(serializers.ModelSerializer):
+    """Staff seat bound to AUTH_USER_MODEL + named role."""
+    username = serializers.CharField(source='user.username', read_only=True)
+    email = serializers.EmailField(source='user.email', read_only=True)
+    role_slug = serializers.CharField(source='role.slug', read_only=True)
+    role_name = serializers.CharField(source='role.name', read_only=True)
+    permissions = serializers.SerializerMethodField()
+
+    class Meta:
+        model = OrgStaffMembership
+        fields = [
+            'id', 'organization', 'user', 'username', 'email',
+            'role', 'role_slug', 'role_name', 'permissions',
+            'is_active', 'created_at', 'updated_at',
+        ]
+        read_only_fields = fields
+
+    def get_permissions(self, obj):
+        return list(obj.role.permissions or [])
+
+
+class OrgApiKeySerializer(serializers.ModelSerializer):
+    """Public representation of an org API key (never includes the secret)."""
+    created_by_username = serializers.CharField(
+        source='created_by.username', read_only=True, allow_null=True,
+    )
+
+    class Meta:
+        model = OrgApiKey
+        fields = [
+            'id', 'organization', 'name', 'prefix', 'scopes',
+            'is_active', 'created_by', 'created_by_username',
+            'created_at', 'updated_at', 'last_used_at', 'revoked_at',
+        ]
+        read_only_fields = fields
+
+
+class OrgApiKeyCreateSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=100)
+    scopes = serializers.ListField(
+        child=serializers.CharField(max_length=64),
+        required=False,
+        default=list,
+    )
+
+    def validate_name(self, value):
+        name = (value or '').strip()
+        if not name:
+            raise serializers.ValidationError('name is required')
+        return name
+
+    def validate_scopes(self, value):
+        try:
+            known, unknown = validate_scope_codes(value)
+        except TypeError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+        if unknown:
+            raise serializers.ValidationError(
+                f'Unknown API scope codes: {unknown}'
+            )
+        return known
+
+
+class OrgApiKeyUpdateSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=100, required=False)
+    scopes = serializers.ListField(
+        child=serializers.CharField(max_length=64),
+        required=False,
+    )
+
+    def validate_name(self, value):
+        name = (value or '').strip()
+        if not name:
+            raise serializers.ValidationError('name is required')
+        return name
+
+    def validate_scopes(self, value):
+        try:
+            known, unknown = validate_scope_codes(value)
+        except TypeError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
+        if unknown:
+            raise serializers.ValidationError(
+                f'Unknown API scope codes: {unknown}'
+            )
+        return known
+
+
+class OrgAuditLogSerializer(serializers.ModelSerializer):
+    """Read-only audit log row for staff with ``audit.read``."""
+    actor_username = serializers.SerializerMethodField()
+
+    class Meta:
+        model = OrgAuditLog
+        fields = [
+            'id', 'organization', 'location', 'actor', 'actor_username',
+            'action', 'object_type', 'object_id',
+            'summary_before', 'summary_after', 'created_at',
+        ]
+        read_only_fields = fields
+
+    def get_actor_username(self, obj):
+        if obj.actor_id is None:
+            return None
+        return obj.actor.get_username()
+
+
+class PartnerOrganizationSerializer(serializers.ModelSerializer):
+    """Partner-facing org payload (no owner PII beyond id)."""
+    location_ids = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Organization
+        fields = [
+            'id', 'name', 'is_active', 'location_ids',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = fields
+
+    def _locations(self, obj):
+        # values_list/count() ignore prefetch cache; all() uses it when present.
+        cache = getattr(self, '_locations_cache', None)
+        if cache is None:
+            cache = {}
+            self._locations_cache = cache
+        if obj.pk not in cache:
+            cache[obj.pk] = list(obj.locations.all())
+        return cache[obj.pk]
+
+    def get_location_ids(self, obj):
+        return [loc.id for loc in self._locations(obj)]
+
+
+class PartnerLocationSerializer(serializers.ModelSerializer):
+    """Partner-facing shop location under the key's organization."""
+
+    class Meta:
+        model = RetailerProfile
+        fields = [
+            'id', 'shop_name', 'city', 'state', 'pincode',
+            'is_active', 'organization_id',
+        ]
+        read_only_fields = fields
+
+
+class PartnerOrgUpdateSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=255)
+
+
+class OrgStaffAssignSerializer(serializers.Serializer):
+    """
+    Assign a staff user to a named role.
+
+    Either ``user_id`` (existing AUTH_USER_MODEL retailer) or create credentials
+    (``username`` + ``password``) for a new retailer-type staff user.
+    Staff login uses password/JWT — not customer OTP.
+    """
+    role_id = serializers.IntegerField()
+    user_id = serializers.IntegerField(required=False)
+    username = serializers.CharField(max_length=150, required=False)
+    email = serializers.EmailField(required=False, allow_blank=True)
+    password = serializers.CharField(max_length=128, required=False, write_only=True)
+
+    def validate(self, attrs):
+        if not attrs.get('user_id') and not attrs.get('username'):
+            raise serializers.ValidationError(
+                'Provide user_id or username (+ password) to assign staff.'
+            )
+        if attrs.get('username') and not attrs.get('user_id') and not attrs.get('password'):
+            raise serializers.ValidationError(
+                'password is required when creating a new staff user.'
+            )
+        if attrs.get('password') and not attrs.get('user_id'):
+            from django.contrib.auth.password_validation import validate_password
+            from django.core.exceptions import ValidationError as DjangoValidationError
+            try:
+                validate_password(attrs['password'], user=User(username=attrs.get('username', '')))
+            except DjangoValidationError as exc:
+                raise serializers.ValidationError({'password': list(exc.messages)})
+        return attrs
+
+
+class OrgStaffUpdateSerializer(serializers.Serializer):
+    role_id = serializers.IntegerField(required=False)
+    is_active = serializers.BooleanField(required=False)
+
+    def validate(self, attrs):
+        if not attrs:
+            raise serializers.ValidationError('No fields to update.')
+        return attrs
 
 
 class RetailerCategorySerializer(serializers.ModelSerializer):
@@ -49,6 +515,9 @@ class RetailerProfileSerializer(serializers.ModelSerializer):
     loyalty_earning_value = serializers.DecimalField(source='reward_config.loyalty_earning_value', max_digits=10, decimal_places=2, read_only=True)
     loyalty_min_order_value = serializers.DecimalField(source='reward_config.loyalty_min_order_value', max_digits=10, decimal_places=2, read_only=True)
     is_reward_active = serializers.BooleanField(source='reward_config.is_active', read_only=True)
+    organization_id = serializers.IntegerField(read_only=True, allow_null=True)
+    organization_name = serializers.SerializerMethodField()
+    organization_is_active = serializers.SerializerMethodField()
     
     class Meta:
         model = RetailerProfile
@@ -65,7 +534,8 @@ class RetailerProfileSerializer(serializers.ModelSerializer):
             'is_reward_active', 'is_referral_enabled', 'referral_reward_points', 'min_referral_order_amount', 
             'cashback_percentage', 'loyalty_earning_type', 'loyalty_earning_value', 'loyalty_min_order_value',
             'operating_hours', 'is_currently_open', 'next_open_time', 'categories', 'created_at', 'updated_at',
-            'receipt_footer', 'show_gst_on_receipt', 'print_upi_qr_on_receipt', 'printer_size'
+            'receipt_footer', 'show_gst_on_receipt', 'print_upi_qr_on_receipt', 'printer_size',
+            'organization_id', 'organization_name', 'organization_is_active',
         ]
         read_only_fields = ['id', 'is_verified', 'verification_status', 'rejection_reason', 'average_rating', 'total_ratings', 'created_at', 'updated_at']
 
@@ -75,6 +545,12 @@ class RetailerProfileSerializer(serializers.ModelSerializer):
         if not data.get('contact_email') and instance.user and instance.user.email:
             data['contact_email'] = instance.user.email
         return data
+
+    def get_organization_name(self, obj):
+        return obj.organization.name if obj.organization_id else None
+
+    def get_organization_is_active(self, obj):
+        return obj.organization.is_active if obj.organization_id else None
 
     def get_is_currently_open(self, obj):
         from common.utils import get_retailer_status
@@ -356,7 +832,8 @@ class RetailerRewardConfigSerializer(serializers.ModelSerializer):
         fields = [
             'earning_type', 'loyalty_earning_value', 'loyalty_min_order_value',
             'cashback_percentage', 'max_reward_usage_percent',
-            'max_reward_usage_flat', 'conversion_rate', 'is_active',
+            'max_reward_usage_flat', 'conversion_rate', 'otp_required_for_redeem',
+            'is_active',
             'is_referral_enabled', 'referral_reward_points',
             'referee_reward_points', 'min_referral_order_amount'
         ]
@@ -364,10 +841,86 @@ class RetailerRewardConfigSerializer(serializers.ModelSerializer):
 
 class SupplierSerializer(serializers.ModelSerializer):
     """
-    Serializer for Supplier
+    Serializer for Supplier (OE-100 / F-0041).
+
+    GSTIN (``gst_number``) is optional. A duplicate non-blank GSTIN in the
+    same organization is flagged (``gstin_duplicate``). Payment-terms writes
+    are gated in the viewset (``purchasing.terms`` → 403).
     """
+    gst_number = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        max_length=15,
+    )
+    payment_terms = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+        max_length=80,
+    )
+
     class Meta:
         model = Supplier
-        fields = '__all__'
+        exclude = ['organization']
         read_only_fields = ['id', 'retailer', 'balance_due', 'created_at', 'updated_at']
+
+    def validate_gst_number(self, value):
+        from retailers.suppliers import normalize_gstin
+
+        return normalize_gstin(value)
+
+    def validate_payment_terms(self, value):
+        from retailers.suppliers import normalize_payment_terms
+
+        return normalize_payment_terms(value)
+
+    def validate(self, attrs):
+        from retailers.organization import get_organization_for_user
+        from retailers.suppliers import (
+            duplicate_gstin_error,
+            gstin_exists_in_org,
+            normalize_gstin,
+            supplier_organization,
+        )
+
+        gst = attrs.get('gst_number')
+        if gst is None:
+            gst = getattr(self.instance, 'gst_number', '') if self.instance else ''
+        gst = normalize_gstin(gst)
+        if 'gst_number' in attrs:
+            attrs['gst_number'] = gst
+        if not gst:
+            return attrs
+
+        request = self.context.get('request')
+        org = self.context.get('organization')
+        if org is None and request is not None and getattr(request, 'user', None):
+            org = get_organization_for_user(request.user)
+        if org is None:
+            org = supplier_organization(self.instance)
+        if org is None:
+            return attrs
+
+        exclude_id = self.instance.pk if self.instance is not None else None
+        if gstin_exists_in_org(org, gst, exclude_id=exclude_id):
+            raise duplicate_gstin_error()
+        return attrs
+
+
+class FulfillmentSlotConfigSerializer(serializers.ModelSerializer):
+    """Read shape for per-location fulfillment slot capacity (OE-243)."""
+
+    location_id = serializers.IntegerField(source='id', read_only=True)
+
+    class Meta:
+        model = RetailerProfile
+        fields = ['location_id', 'fulfillment_slot_capacity', 'timezone']
+        read_only_fields = ['location_id', 'timezone']
+
+
+class FulfillmentSlotConfigUpdateSerializer(serializers.Serializer):
+    """PATCH body for fulfillment slot capacity."""
+
+    fulfillment_slot_capacity = serializers.IntegerField(min_value=1, max_value=9999)
 

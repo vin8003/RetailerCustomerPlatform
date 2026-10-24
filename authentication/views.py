@@ -2,6 +2,7 @@ from rest_framework import status, permissions
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle, AnonRateThrottle
+from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from django.contrib.auth import authenticate
@@ -24,6 +25,39 @@ from .serializers import (
 from .utils import generate_otp, send_sms_otp, verify_otp_helper, verify_firebase_id_token, send_email_otp
 
 logger = logging.getLogger(__name__)
+
+
+class OrgAwareTokenRefreshView(TokenRefreshView):
+    """
+    Refresh that refuses new access tokens when the retailer's org is disabled.
+    """
+
+    def post(self, request, *args, **kwargs):
+        refresh_value = request.data.get('refresh')
+        if refresh_value:
+            try:
+                token = RefreshToken(refresh_value)
+            except TokenError:
+                # An invalid or expired refresh token is rejected by the parent view.
+                token = None
+            if token is not None:
+                try:
+                    user = User.objects.filter(pk=token.get('user_id')).first()
+                    if user is not None:
+                        from retailers.organization import organization_is_session_blocked
+                        if organization_is_session_blocked(user):
+                            return Response(
+                                {'error': 'Organization is disabled'},
+                                status=status.HTTP_403_FORBIDDEN,
+                            )
+                except Exception:
+                    # Fail closed: if the tenant check itself breaks, do not mint a token.
+                    logger.exception('Organization check failed during token refresh')
+                    return Response(
+                        {'error': 'Could not verify organization status'},
+                        status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    )
+        return super().post(request, *args, **kwargs)
 
 
 class LoginThrottle(UserRateThrottle):
@@ -67,6 +101,9 @@ def retailer_signup(request):
                 verification_status='pending',
                 is_active=False,  # Not live to customers until Admin approves
             )
+            # Implicit 1:1 org↔location for new single-shop tenants (OE-97)
+            from retailers.organization import ensure_organization_for_profile
+            ensure_organization_for_profile(profile)
 
             # (Removed manual hours creation to test for duplicates)
 
@@ -114,6 +151,14 @@ def retailer_login(request):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
+            # Disabled tenant blocks new sessions; history is retained (OE-97)
+            from retailers.organization import organization_is_session_blocked
+            if organization_is_session_blocked(user):
+                return Response(
+                    {'error': 'Organization is disabled'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
             # Generate JWT tokens
             refresh = RefreshToken.for_user(user)
 
@@ -144,22 +189,25 @@ def retailer_login(request):
 def customer_signup(request):
     """
     Register a new customer user with password.
-    If a stale unverified account with the same phone/email/username exists
-    (e.g. from a previous failed signup attempt), it is deleted before re-creating.
+    If a stale account with the same phone/email/username exists (a previous signup
+    that never verified anything and never ordered), it is deleted before re-creating.
     """
     try:
         data = request.data.copy()
         data['user_type'] = 'customer'
 
-        incoming_username   = data.get('username', '').strip()
-        incoming_phone      = data.get('phone_number', '').strip()
-        incoming_email      = data.get('email', '').strip()
+        incoming_username   = str(data.get('username') or '').strip()
+        incoming_phone      = str(data.get('phone_number') or '').strip()
+        incoming_email      = str(data.get('email') or '').strip()
 
-        # Match on username, phone_number, or email for customer accounts that
-        # have never verified email (is_email_verified=False) AND are not POS shadow users.
+        # Match on username, phone_number, or email for customer accounts that never
+        # verified an email or a phone and have no orders, and are not POS shadow users.
+        # An account that verified anything or placed an order is never replaced.
         stale_qs = User.objects.filter(
-            user_type='customer', 
-            is_email_verified=False
+            user_type='customer',
+            is_email_verified=False,
+            is_phone_verified=False,
+            orders__isnull=True,
         ).exclude(registration_status='shadow')
         if incoming_username:
             stale_qs = stale_qs.filter(username=incoming_username)
@@ -438,6 +486,16 @@ def verify_otp(request):
                                         closing_time='21:00'
                                     )
                                 logger.info(f"Created RetailerProfile for user: {user.username}")
+                            from retailers.organization import (
+                                ensure_organization_for_profile,
+                                organization_is_session_blocked,
+                            )
+                            ensure_organization_for_profile(profile)
+                            if organization_is_session_blocked(user):
+                                return Response(
+                                    {'error': 'Organization is disabled'},
+                                    status=status.HTTP_403_FORBIDDEN,
+                                )
                         
                         # Generate JWT tokens
                         refresh = RefreshToken.for_user(user)
@@ -536,6 +594,16 @@ def verify_otp(request):
                                 closing_time='21:00'
                             )
                         logger.info(f"Created RetailerProfile for user: {user.username}")
+                    from retailers.organization import (
+                        ensure_organization_for_profile,
+                        organization_is_session_blocked,
+                    )
+                    ensure_organization_for_profile(profile)
+                    if organization_is_session_blocked(user):
+                        return Response(
+                            {'error': 'Organization is disabled'},
+                            status=status.HTTP_403_FORBIDDEN,
+                        )
 
                 # Generate JWT tokens
                 refresh = RefreshToken.for_user(user)

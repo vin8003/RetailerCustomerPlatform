@@ -7,7 +7,7 @@ When stock arrives from a **supplier** (wholesaler, distributor, company van), r
 | Benefit | Explanation |
 |---------|-------------|
 | **Accurate stock** | Shelf quantity matches system |
-| **Cost tracking** | Know margin per product |
+| **Cost tracking** | Know margin per product. Purchase-role staff can see each supplier’s last billed cost for a product, and a margin% on the product list, product detail, POS catalog, and a dedicated preview — selling price versus the product’s draft cost or last purchase cost. If there is no cost yet, margin stays blank — it is not shown as zero. Cashiers do not see margin on the catalog. |
 | **Supplier khata** | Track what you owe each supplier |
 | **Batch history** | Link sales to purchase lots |
 
@@ -31,8 +31,13 @@ Stock increases automatically for each line.
 | Name | ABC Distributors |
 | Phone | Optional — for your reference |
 | Address | Optional |
+| GSTIN | Optional. The same GSTIN cannot be used twice in one shop group. |
+| Payment terms | Optional (for example Net 30). Only purchase-role staff can change terms. |
+| Active | Turn off a supplier you no longer buy from. Inactive suppliers cannot be picked on a **new** purchase. |
 
-Mobile number is **not required** — you can track suppliers by name alone.
+Mobile number is **not required** — you can track suppliers by name alone. GSTIN is also optional.
+
+Purchase orders (PO / GRN matching) are a later step. Today, new stock-in still uses **Purchases**. The same active-supplier rule will apply when POs arrive.
 
 ## Inactive suppliers
 

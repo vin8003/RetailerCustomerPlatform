@@ -1,15 +1,41 @@
+from datetime import timedelta
 from decimal import Decimal
 from rest_framework import viewsets, permissions, status
 from rest_framework.exceptions import ValidationError
-from rest_framework.filters import SearchFilter
+from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from common.client_input import (
+    date_value,
+    decimal_value,
+    error_message,
+    id_value,
+    list_of_objects,
+    money_value,
+    quantity_value,
+)
 from rest_framework.decorators import action, api_view, permission_classes
-from django.db import transaction
+from django.db import IntegrityError, transaction
+from retailers.credit_lock import (
+    CreditOverrideDenied,
+    assert_credit_sale_allowed,
+    record_credit_override_audit,
+)
 from retailers.models import Supplier, RetailerProfile, RetailerCustomerMapping
+from retailers.organization import get_organization_for_user, user_has_org_permission
 from retailers.serializers import SupplierSerializer
-from products.models import PurchaseInvoice, PurchaseItem, SupplierLedger, Product, ProductBatch, ProductInventoryLog
+from retailers.suppliers import (
+    assert_payment_terms_not_whitespace_only,
+    map_gstin_integrity_error,
+    org_suppliers_queryset,
+    payment_terms_would_change,
+    record_payment_terms_audit,
+    require_purchasing_terms,
+    resolve_supplier_home_retailer,
+)
+from products.models import PurchaseInvoice, PurchaseItem, SupplierLedger, Product, ProductBatch, ProductInventoryLog, shop_today
 from products.inventory_service import (
     apply_stock_decrease,
     apply_stock_increase,
@@ -24,11 +50,28 @@ from products.tax_service import (
 )
 from orders.models import Order, OrderItem
 from django.db.models import Sum, Q, Count, F, Case, When, DecimalField
-from products.serializers import PurchaseInvoiceSerializer, SupplierLedgerSerializer
+from products.serializers import (
+    ExpiringBatchListSerializer,
+    PurchaseInvoiceSerializer,
+    SkuLastSupplierCostsSerializer,
+    SkuMarginPreviewSerializer,
+    SupplierLedgerSerializer,
+)
+from products.supplier_last_costs import (
+    draft_or_last_pi_cost,
+    last_supplier_cost_rows_for_product,
+    require_purchase_role,
+    selling_margin_percent,
+)
 from orders.serializers import OrderDetailSerializer
 from common.permissions import IsRetailerOwner
 from authentication.utils import normalize_phone_number
 from customers.models import CustomerProfile
+
+def _caller_shop(user):
+    """The caller's shop profile; 404 (not 500) for customers and profile-less staff."""
+    return get_object_or_404(RetailerProfile, user=user)
+
 
 class SupplierViewSet(viewsets.ModelViewSet):
     serializer_class = SupplierSerializer
@@ -36,56 +79,211 @@ class SupplierViewSet(viewsets.ModelViewSet):
     filter_backends = [SearchFilter]
     search_fields = ['company_name', 'contact_person', 'phone_number']
 
+    def _caller_org(self):
+        """Resolve the caller org once; every action asks for it 2-3 times."""
+        if not hasattr(self, '_cached_caller_org'):
+            self._cached_caller_org = get_organization_for_user(self.request.user)
+        return self._cached_caller_org
+
+    def get_serializer_context(self):
+        ctx = super().get_serializer_context()
+        ctx['organization'] = self._caller_org()
+        return ctx
+
+    def _deny_if_not_tenant(self):
+        if getattr(self.request.user, 'user_type', None) != 'retailer':
+            return Response(
+                {'error': 'Only retailers can manage suppliers.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if self._caller_org() is None:
+            return Response(
+                {'error': 'Organization not found or access denied'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return None
+
+    def _deny_if_cannot_manage_suppliers(self):
+        denied = self._deny_if_not_tenant()
+        if denied is not None:
+            return denied
+        org = self._caller_org()
+        if not user_has_org_permission(self.request.user, org, 'purchasing.suppliers'):
+            return Response(
+                {'error': 'Supplier management permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        return None
+
+    def _check_payment_terms_write(self, instance=None):
+        denied = self._deny_if_not_tenant()
+        if denied is not None:
+            return denied
+        assert_payment_terms_not_whitespace_only(self.request.data)
+        return require_purchasing_terms(
+            self.request.user,
+            organization=self._caller_org(),
+            changing=payment_terms_would_change(instance, self.request.data),
+        )
+
     def get_queryset(self):
-        retailer = RetailerProfile.objects.get(user=self.request.user)
-        qs = Supplier.objects.filter(retailer=retailer).order_by('-id')
+        org = self._caller_org()
+        if org is None:
+            return Supplier.objects.none()
+        qs = org_suppliers_queryset(org).select_related('retailer').order_by('-id')
         is_active = self.request.query_params.get('is_active')
         if is_active is not None:
             qs = qs.filter(is_active=is_active.lower() == 'true')
         return qs
 
-    def perform_create(self, serializer):
-        retailer = RetailerProfile.objects.get(user=self.request.user)
-        serializer.save(retailer=retailer)
+    def list(self, request, *args, **kwargs):
+        denied = self._deny_if_not_tenant()
+        if denied is not None:
+            return denied
+        return super().list(request, *args, **kwargs)
+
+    def retrieve(self, request, *args, **kwargs):
+        denied = self._deny_if_not_tenant()
+        if denied is not None:
+            return denied
+        return super().retrieve(request, *args, **kwargs)
+
+    def create(self, request, *args, **kwargs):
+        denied = self._deny_if_cannot_manage_suppliers()
+        if denied is not None:
+            return denied
+        denied = self._check_payment_terms_write(None)
+        if denied is not None:
+            return denied
+        return super().create(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        denied = self._deny_if_cannot_manage_suppliers()
+        if denied is not None:
+            return denied
+        instance = self.get_object()
+        assert_payment_terms_not_whitespace_only(request.data)
+        terms_denied = require_purchasing_terms(
+            request.user,
+            organization=self._caller_org(),
+            changing=payment_terms_would_change(instance, request.data),
+        )
+        if terms_denied is not None:
+            return terms_denied
+        return super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        denied = self._deny_if_cannot_manage_suppliers()
+        if denied is not None:
+            return denied
+        instance = self.get_object()
+        assert_payment_terms_not_whitespace_only(request.data)
+        terms_denied = require_purchasing_terms(
+            request.user,
+            organization=self._caller_org(),
+            changing=payment_terms_would_change(instance, request.data),
+        )
+        if terms_denied is not None:
+            return terms_denied
+        return super().partial_update(request, *args, **kwargs)
 
     def destroy(self, request, *args, **kwargs):
-        instance = self.get_object()
+        denied = self._deny_if_cannot_manage_suppliers()
+        if denied is not None:
+            return denied
+        supplier = self.get_object()
         if (
-            instance.purchase_invoices.exists()
-            or instance.ledger_entries.exists()
-            or instance.purchase_returns.exists()
+            supplier.purchase_invoices.exists()
+            or supplier.ledger_entries.exists()
+            or supplier.purchase_returns.exists()
         ):
-            raise ValidationError(
-                "Cannot delete a supplier linked to purchases, payments, ledger, or returns. "
-                "Deactivate instead."
+            # Deleting would drop ledger rows and unlink invoices/returns; deactivate instead.
+            return Response(
+                {'error': 'This supplier has purchase history. Deactivate it instead of deleting.'},
+                status=status.HTTP_409_CONFLICT,
             )
         return super().destroy(request, *args, **kwargs)
+
+    def perform_create(self, serializer):
+        retailer = resolve_supplier_home_retailer(self.request.user)
+        if retailer is None:
+            raise ValidationError('Retailer profile not found.')
+        before = ''
+        try:
+            with transaction.atomic():
+                supplier = serializer.save(retailer=retailer)
+        except IntegrityError as exc:
+            map_gstin_integrity_error(exc)
+        record_payment_terms_audit(
+            self.request.user,
+            supplier,
+            before,
+            supplier.payment_terms,
+            organization=self._caller_org(),
+        )
+
+    def perform_update(self, serializer):
+        before = serializer.instance.payment_terms
+        try:
+            with transaction.atomic():
+                supplier = serializer.save()
+        except IntegrityError as exc:
+            map_gstin_integrity_error(exc)
+        record_payment_terms_audit(
+            self.request.user,
+            supplier,
+            before,
+            supplier.payment_terms,
+            organization=self._caller_org(),
+        )
 
 
 class PurchaseInvoiceViewSet(viewsets.ModelViewSet):
     serializer_class = PurchaseInvoiceSerializer
     permission_classes = [permissions.IsAuthenticated]
     parser_classes = [JSONParser, FormParser, MultiPartParser]
+    filter_backends = [SearchFilter, OrderingFilter]
+    ordering_fields = ['invoice_date', 'created_at', 'total_amount']
+
+    def _caller_retailer(self):
+        return (
+            RetailerProfile.objects.select_related('organization')
+            .filter(user=self.request.user)
+            .first()
+        )
+
+    def get_serializer_context(self):
+        ctx = super().get_serializer_context()
+        retailer = self._caller_retailer()
+        if retailer is not None:
+            ctx['retailer'] = retailer
+        return ctx
 
     def get_queryset(self):
-        retailer = RetailerProfile.objects.get(user=self.request.user)
-        qs = PurchaseInvoice.objects.filter(retailer=retailer).order_by('-invoice_date')
+        retailer = _caller_shop(self.request.user)
+        # supplier_name reads supplier.company_name on every row.
+        qs = (
+            PurchaseInvoice.objects.filter(retailer=retailer)
+            .select_related('supplier')
+            .order_by('-invoice_date')
+        )
         start_date = self.request.query_params.get('start_date')
         end_date = self.request.query_params.get('end_date')
         if start_date:
-            qs = qs.filter(invoice_date__gte=start_date)
+            qs = qs.filter(invoice_date__gte=date_value(start_date, 'start_date'))
         if end_date:
-            qs = qs.filter(invoice_date__lte=end_date)
+            qs = qs.filter(invoice_date__lte=date_value(end_date, 'end_date'))
         return qs
 
-    search_fields = ['invoice_number', 'supplier_name']
+    # supplier_name is a serializer alias, not a model field.
+    search_fields = ['invoice_number', 'supplier__company_name']
 
     def perform_create(self, serializer):
-        retailer = RetailerProfile.objects.get(user=self.request.user)
+        retailer = _caller_shop(self.request.user)
         invoice = serializer.save(retailer=retailer)
         
     def perform_destroy(self, instance):
-        retailer = RetailerProfile.objects.get(user=self.request.user)
+        retailer = _caller_shop(self.request.user)
         # Ensure retailer ownership
         if instance.retailer != retailer:
             raise ValidationError("You do not have permission to delete this invoice.")
@@ -118,26 +316,94 @@ class PurchaseInvoiceViewSet(viewsets.ModelViewSet):
             instance.delete()
 
 
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def sku_last_supplier_costs(request, product_id):
+    """
+    Last unit cost per supplier for a SKU, from purchase-invoice history.
+
+    Purchase-role only. Missing history is an empty list, not zero.
+    """
+    if getattr(request.user, 'user_type', None) != 'retailer':
+        return Response(
+            {'error': 'Only retailers can view supplier costs.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    org = get_organization_for_user(request.user)
+    denied = require_purchase_role(request.user, organization=org)
+    if denied is not None:
+        return denied
+    product = (
+        Product.objects.filter(pk=product_id, retailer__organization=org).first()
+    )
+    if product is None:
+        return Response(
+            {'error': 'Product not found'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    payload = {
+        'product_id': product.id,
+        'suppliers': last_supplier_cost_rows_for_product(product),
+    }
+    return Response(SkuLastSupplierCostsSerializer(payload).data)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def sku_margin_preview(request, product_id):
+    """
+    Margin % for a SKU from selling price vs draft-or-last PI cost.
+
+    Purchase-role only. Missing cost is null, not zero.
+    """
+    if getattr(request.user, 'user_type', None) != 'retailer':
+        return Response(
+            {'error': 'Only retailers can view purchase margin.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    org = get_organization_for_user(request.user)
+    denied = require_purchase_role(request.user, organization=org)
+    if denied is not None:
+        return denied
+    product = (
+        Product.objects.filter(pk=product_id, retailer__organization=org).first()
+    )
+    if product is None:
+        return Response(
+            {'error': 'Product not found'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    cost, cost_source = draft_or_last_pi_cost(product)
+    payload = {
+        'product_id': product.id,
+        'selling_price': product.price,
+        'cost': cost,
+        'cost_source': cost_source,
+        'margin_percent': selling_margin_percent(product.price, cost),
+    }
+    return Response(SkuMarginPreviewSerializer(payload).data)
+
+
 class SupplierLedgerViewSet(viewsets.ModelViewSet):
     serializer_class = SupplierLedgerSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        retailer = RetailerProfile.objects.get(user=self.request.user)
+        retailer = _caller_shop(self.request.user)
         qs = SupplierLedger.objects.filter(supplier__retailer=retailer)
         supplier_id = self.request.query_params.get('supplier')
         start_date = self.request.query_params.get('start_date')
         end_date = self.request.query_params.get('end_date')
         if supplier_id:
-            qs = qs.filter(supplier__id=supplier_id)
+            qs = qs.filter(supplier__id=id_value(supplier_id, 'supplier'))
         if start_date:
-            qs = qs.filter(date__gte=start_date)
+            qs = qs.filter(date__gte=date_value(start_date, 'start_date'))
         if end_date:
-            qs = qs.filter(date__lte=end_date)
+            qs = qs.filter(date__lte=date_value(end_date, 'end_date'))
         return qs
 
     def perform_create(self, serializer):
-        retailer = RetailerProfile.objects.get(user=self.request.user)
+        retailer = _caller_shop(self.request.user)
         supplier = serializer.validated_data.get('supplier')
         if not supplier or supplier.retailer_id != retailer.id:
             raise ValidationError({'supplier': 'Invalid supplier for this retailer.'})
@@ -161,17 +427,44 @@ def create_pos_order(request):
     }
     """
     try:
-        retailer = RetailerProfile.objects.get(user=request.user)
-    except RetailerProfile.DoesNotExist:
-        return Response({'error': 'Only retailers can use POS.'}, status=status.HTTP_403_FORBIDDEN)
+        from orders.access import resolve_pos_retailer_location
+
+        retailer, access_err = resolve_pos_retailer_location(
+            request.user,
+            request.data.get('location_id'),
+        )
+        if access_err is not None:
+            return access_err
+    except (RetailerProfile.DoesNotExist, ValueError, TypeError):
+        # Bad location_id or no shop profile; real errors should surface, not look like a 403.
+        return Response({'error': 'Invalid location or not a retailer.'}, status=status.HTTP_403_FORBIDDEN)
 
     data = request.data
     items_data = data.get('items', [])
     if not items_data:
         return Response({'error': 'Cart is empty.'}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        # A sale line needs a real product, a quantity above zero and a price; returns
+        # have their own flow, so a negative line cannot put stock back or pay cash out.
+        for row in list_of_objects(items_data, 'items'):
+            id_value(row.get('product_id'), 'product_id')
+            quantity_value(row.get('quantity'), 'quantity')
+            money_value(row.get('unit_price'), 'unit_price')
+            if row.get('batch_id') not in (None, ''):
+                id_value(row.get('batch_id'), 'batch_id')
+        if data.get('discount_amount') not in (None, ''):
+            money_value(data.get('discount_amount'), 'discount_amount')
+        payment_details = data.get('payment_details')
+        if isinstance(payment_details, dict):
+            # Negative credit settles khata, so only the number itself is checked.
+            for mode in ('cash', 'upi', 'card', 'credit'):
+                if payment_details.get(mode) not in (None, ''):
+                    decimal_value(payment_details.get(mode), f'payment_details.{mode}')
+    except ValidationError as exc:
+        return Response({'error': error_message(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
-    customer_name = data.get('customer_name', '').strip()
-    customer_mobile = data.get('customer_mobile', '').strip()
+    customer_name = str(data.get('customer_name') or '').strip()
+    customer_mobile = str(data.get('customer_mobile') or '').strip()
     
     order_customer = None
     if customer_mobile:
@@ -203,7 +496,8 @@ def create_pos_order(request):
             # Create Shadow User for this walk-in
             import secrets
             from django.db import IntegrityError
-            from django.core.exceptions import ValidationError
+            # Aliased: a plain local ValidationError would shadow DRF's for the whole function.
+            from django.core.exceptions import ValidationError as DjangoValidationError
             try:
                 # Use a clean username without prefix if possible
                 username_to_use = customer_mobile
@@ -219,7 +513,7 @@ def create_pos_order(request):
                     )
                     order_customer.set_password(secrets.token_urlsafe(12))
                     order_customer.save()
-            except (IntegrityError, ValidationError):
+            except (IntegrityError, DjangoValidationError):
                 # If creation fails, someone with this number/username exists, find them aggressively
                 order_customer = User.objects.filter(
                     Q(username__endswith=mobile_match_id) | 
@@ -246,11 +540,19 @@ def create_pos_order(request):
 
         pos_items = []
         for i, item in enumerate(items_data):
-            product = Product.objects.get(id=item['product_id'], retailer=retailer)
+            product = Product.objects.filter(id=item.get('product_id'), retailer=retailer).first()
+            if product is None:
+                raise ValueError(f"Product id={item.get('product_id')} is not in this shop.")
+            if not product.is_active or not product.is_available:
+                raise ValueError(
+                    f"Product '{product.name}' (id={product.id}) is inactive or unavailable and cannot be sold."
+                )
             batch_id = item.get('batch_id')
             batch = None
             if batch_id:
-                batch = ProductBatch.objects.get(id=batch_id, product=product)
+                batch = ProductBatch.objects.filter(id=batch_id, product=product).first()
+                if batch is None:
+                    raise ValueError(f"Batch id={batch_id} does not belong to {product.name}.")
             
             # Expected price is database price before discount
             expected_price = Decimal(str(batch.price if batch else product.price))
@@ -273,10 +575,29 @@ def create_pos_order(request):
         automated_discount = offer_results['total_savings']
         
         # Support cashier's manual discount in addition/override to automated offers
-        raw_discount = Decimal(str(data.get('discount_amount', 0)))
-        final_discount = max(automated_discount, raw_discount)
+        raw_discount = Decimal(str(data.get('discount_amount') or 0))
+        # A discount cannot exceed the bill, or the saved discount would not match the total.
+        final_discount = min(max(automated_discount, raw_discount), subtotal)
 
         with transaction.atomic():
+            # Selling below zero stock is a client request, so it needs its own permission.
+            allow_negative = data.get('allow_negative') is True
+            if allow_negative:
+                oversell_org = get_organization_for_user(request.user)
+                if oversell_org is not None and not user_has_org_permission(
+                    request.user, oversell_org, 'orders.oversell'
+                ):
+                    raise CreditOverrideDenied(
+                        'Selling more than the stock on hand needs the orders.oversell permission'
+                    )
+            # One pk-ASC lock for every sold SKU (+ pack parents). Do not
+            # lock child-then-parent ad hoc — that AB-BA deadlocks with
+            # place_order / modify lock_for_sale.
+            locked_products = Product.lock_for_sale(
+                retailer,
+                [pos_item.product for pos_item in pos_items],
+            )
+
             # Prepare the exact post-offer lines once so inventory, order items,
             # and tax snapshots all use the same quantities and prices.
             item_discounts = offer_results.get('item_discounts', {})
@@ -284,9 +605,7 @@ def create_pos_order(request):
             raw_lines = []
             offered_lines = []
             for i, item in enumerate(items_data):
-                product = Product.objects.select_for_update().get(
-                    id=item['product_id'], retailer=retailer
-                )
+                product = locked_products[item['product_id']]
                 batch_id = item.get('batch_id')
                 batch = None
                 if batch_id:
@@ -390,6 +709,22 @@ def create_pos_order(request):
             else:
                 payment_mode = 'cash'
 
+            mapping = None
+            pending_credit_override = None
+            if order_customer:
+                mapping, _created = RetailerCustomerMapping.objects.select_for_update().get_or_create(
+                    retailer=retailer,
+                    customer=order_customer,
+                )
+                if credit_amount > 0:
+                    pending_credit_override = assert_credit_sale_allowed(
+                        mapping,
+                        credit_amount,
+                        data,
+                        user=request.user,
+                        retailer=retailer,
+                    )
+
             order = Order.objects.create(
                 customer=order_customer,
                 guest_name=customer_name if not order_customer else None,
@@ -429,11 +764,7 @@ def create_pos_order(request):
             order.award_loyalty_points()
 
             # CRM Mapping and Credit Ledger Update
-            if order_customer:
-                mapping, created = RetailerCustomerMapping.objects.get_or_create(
-                    retailer=retailer,
-                    customer=order_customer
-                )
+            if order_customer and mapping is not None:
                 if customer_name and not mapping.nickname:
                     mapping.nickname = customer_name
                 
@@ -443,19 +774,13 @@ def create_pos_order(request):
                 
                 # Record Credit Transaction if any
                 if credit_amount > 0:
-                    # Enforce credit limit if set
-                    if mapping.credit_limit > 0:
-                        available_credit = mapping.credit_limit - mapping.current_balance
-                        if credit_amount > available_credit:
-                            # Rollback: delete the order we just created
-                            order.delete()
-                            raise ValueError(
-                                f"Credit limit exceeded. "
-                                f"Limit: ₹{mapping.credit_limit}, "
-                                f"Current balance: ₹{mapping.current_balance}, "
-                                f"Available: ₹{max(available_credit, 0)}"
-                            )
-                    
+                    if pending_credit_override:
+                        record_credit_override_audit(
+                            pending=pending_credit_override,
+                            actor=request.user,
+                            retailer=retailer,
+                            order=order,
+                        )
                     mapping.record_transaction(
                          transaction_type='SALE',
                          amount=credit_amount,
@@ -501,10 +826,28 @@ def create_pos_order(request):
                     if available_elsewhere >= qty:
                         stock_batch = None
 
-                # POS allows negative stock (allow_negative=True)
-                new_qty = apply_stock_decrease(
-                    product, qty, batch=stock_batch, allow_negative=True
-                )
+                if (
+                    stock_batch is not None
+                    and product.track_inventory
+                    and product.has_batches
+                    and not product.parent_bulk_product_id
+                    and stock_batch.is_expired()
+                ):
+                    # reduce_quantity refuses an expired lot (OE-149); say so instead of
+                    # "not enough stock", since the units are on the shelf.
+                    raise ValueError(
+                        f"Batch {stock_batch.batch_number or stock_batch.id} of {product.name} has expired "
+                        "and cannot be sold"
+                    )
+
+                # Sale deduct blocks when on-hand would go negative unless
+                # the caller passed allow_negative with orders.oversell (OE-146).
+                try:
+                    new_qty = apply_stock_decrease(
+                        product, qty, batch=stock_batch, allow_negative=allow_negative
+                    )
+                except ValueError:
+                    raise ValueError(f"Not enough saleable stock for {product.name}")
 
                 OrderItem.objects.create(
                     order=order,
@@ -535,12 +878,19 @@ def create_pos_order(request):
                         reason=f'POS Sale: Order #{order.order_number}',
                     )
 
+        from orders.access import order_detail_queryset
+
         response_data = {
             'message': 'POS Order created successfully!',
-            'order': OrderDetailSerializer(order, context={'request': request}).data
+            'order': OrderDetailSerializer(
+                order_detail_queryset().get(pk=order.pk),
+                context={'request': request},
+            ).data
         }
         return Response(response_data, status=status.HTTP_201_CREATED)
 
+    except CreditOverrideDenied as denied:
+        return Response({'error': str(denied)}, status=status.HTTP_403_FORBIDDEN)
     except ValueError as ve:
         return Response({'error': str(ve)}, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
@@ -706,22 +1056,37 @@ def get_inventory_ledger(request):
         retailer = RetailerProfile.objects.get(user=request.user)
     except RetailerProfile.DoesNotExist:
         return Response({'error': 'Unauthorized'}, status=status.HTTP_403_FORBIDDEN)
-        
+
     product_id = request.GET.get('product_id')
-    if not product_id:
-        return Response({'error': 'product_id is required'}, status=status.HTTP_400_BAD_REQUEST)
-        
-    try:
-        product = Product.objects.get(id=product_id, retailer=retailer)
-    except Product.DoesNotExist:
-        return Response({'error': 'Product not found'}, status=status.HTTP_404_NOT_FOUND)
-        
-    logs = (
-        ProductInventoryLog.objects.filter(product=product)
-        .select_related('created_by')
-        .order_by('-created_at')[:100]
-    )
-    balances = product_level_log_balances(product)
+    reason = request.GET.get('reason')
+    if reason is not None:
+        reason = str(reason).strip()
+    if not product_id and not reason:
+        return Response(
+            {'error': 'product_id or reason is required'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    product = None
+    if product_id:
+        try:
+            product = Product.objects.get(id=id_value(product_id, 'product_id'), retailer=retailer)
+        except ValidationError as exc:
+            return Response({'error': error_message(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except Product.DoesNotExist:
+            return Response({'error': 'Product not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    logs = ProductInventoryLog.objects.filter(
+        product__retailer=retailer
+    ).select_related('product', 'created_by', 'batch')
+    if product:
+        logs = logs.filter(product=product)
+    if reason:
+        # Comma-separated: the write-off list asks for every reason in one call.
+        logs = logs.filter(reason__in=[r.strip() for r in reason.split(',') if r.strip()])
+
+    logs = logs.order_by('-created_at')[:100]
+    balances = product_level_log_balances(product) if product else {}
 
     data = []
     for log in logs:
@@ -730,7 +1095,13 @@ def get_inventory_ledger(request):
         )
         data.append({
             'id': log.id,
+            'product_id': log.product_id,
+            'product_name': log.product.name,
+            'barcode': log.product.barcode,
             'log_type': log.log_type,
+            'batch_id': log.batch_id,
+            # Retailer write-off rows show it (OE-364); null when the log has no batch.
+            'batch_number': log.batch.batch_number if log.batch_id else None,
             'quantity_change': log.quantity_change,
             'previous_quantity': prev_qty,
             'new_quantity': new_qty,
@@ -738,8 +1109,103 @@ def get_inventory_ledger(request):
             'created_at': log.created_at,
             'created_by': log.created_by.get_full_name() if log.created_by else 'System'
         })
-        
+
     return Response(data)
+
+
+DEFAULT_EXPIRY_WINDOW_DAYS = 30
+# shortcut: no pagination, the soonest-expiring 500 rows only; paginate if shops outgrow it.
+EXPIRING_BATCHES_LIMIT = 500
+
+
+def _parse_expiry_window_days(raw):
+    """Default 30 when omitted. Reject negative or non-integer values."""
+    if raw is None:
+        return DEFAULT_EXPIRY_WINDOW_DAYS, None
+    try:
+        days = int(raw)
+    except (TypeError, ValueError):
+        return None, Response(
+            {'error': 'days must be a non-negative integer'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if days < 0 or days > 365:
+        return None, Response(
+            {'error': 'days must be between 0 and 365'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    return days, None
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def get_expiring_batches(request):
+    """
+    This shop's active on-hand batches with expiry_date <= today+N.
+
+    Default N=30 via ``days``. Includes already-expired lots still on the shelf.
+    """
+    if getattr(request.user, 'user_type', None) != 'retailer':
+        return Response(
+            {'error': 'Only retailers can view expiring batches.'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    from orders.access import staff_served_location_ids
+
+    org = get_organization_for_user(request.user)
+    if org is None:
+        return Response(
+            {'error': 'Shop not found or access denied'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    # Stock quantities are inventory data: need order or inventory access.
+    if not (
+        user_has_org_permission(request.user, org, 'orders.read')
+        or user_has_org_permission(request.user, org, 'inventory.adjust')
+    ):
+        return Response(
+            {'error': 'Inventory access required'}, status=status.HTTP_403_FORBIDDEN
+        )
+
+    served = staff_served_location_ids(request.user, org)
+    location_id = request.query_params.get('location_id')
+    if location_id not in (None, ''):
+        try:
+            location_id = int(location_id)
+        except (TypeError, ValueError):
+            return Response(
+                {'error': 'location_id must be an integer'}, status=status.HTTP_400_BAD_REQUEST
+            )
+        if location_id not in served:
+            return Response(
+                {'error': 'Location not found or access denied'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        served = [location_id]
+
+    days, invalid = _parse_expiry_window_days(request.query_params.get('days'))
+    if invalid is not None:
+        return invalid
+
+    cutoff = shop_today() + timedelta(days=days)
+    batches = (
+        ProductBatch.objects.filter(
+            retailer_id__in=served,
+            retailer__organization=org,
+            is_active=True,
+            quantity__gt=0,
+            expiry_date__isnull=False,
+            expiry_date__lte=cutoff,
+        )
+        .select_related('product')
+        .order_by('expiry_date', 'id')[:EXPIRING_BATCHES_LIMIT]
+    )
+    include_costs = user_has_org_permission(request.user, org, 'purchasing.costs.read')
+    return Response(
+        ExpiringBatchListSerializer(
+            batches, many=True, context={'include_costs': include_costs}
+        ).data
+    )
 
 
 @api_view(['GET'])

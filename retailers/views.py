@@ -1,9 +1,10 @@
 from rest_framework import status, permissions
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
+from rest_framework.exceptions import APIException, ValidationError
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.throttling import AnonRateThrottle
-from django.db.models import Q, Avg
+from django.db.models import Q, Avg, prefetch_related_objects
 from django.shortcuts import get_object_or_404
 from django.http import Http404
 from django_filters.rest_framework import DjangoFilterBackend
@@ -11,26 +12,86 @@ from rest_framework.filters import SearchFilter, OrderingFilter
 import ipaddress
 import logging
 import requests
+from common.client_input import decimal_value
 from common.error_utils import format_exception
 
 from .models import (
-    RetailerProfile, RetailerOperatingHours, RetailerCategory,
-    RetailerCategoryMapping, RetailerReview, RetailerRewardConfig
+    Organization, RetailerProfile, RetailerOperatingHours, RetailerCategory,
+    RetailerCategoryMapping, RetailerReview, RetailerRewardConfig,
+    OrgRole, OrgStaffMembership, OrgStaffRoleAudit, OrgApiKey, OrgAuditLog,
+    OrgModuleFlags,
+    OrgNotificationConfig,
+    OrgNotificationDelivery,
 )
 from .serializers import (
     RetailerProfileSerializer, RetailerProfileUpdateSerializer,
     RetailerListSerializer, RetailerReviewSerializer,
     RetailerCreateReviewSerializer, RetailerOperatingHoursUpdateSerializer,
     RetailerOperatingHoursSerializer,
-    RetailerCategorySerializer, RetailerRewardConfigSerializer
+    RetailerCategorySerializer, RetailerRewardConfigSerializer,
+    OrganizationSerializer, OrganizationCreateSerializer, OrganizationUpdateSerializer,
+    OrgRoleSerializer, OrgRoleCreateSerializer, OrgRoleUpdateSerializer,
+    OrgStaffMembershipSerializer, OrgStaffAssignSerializer, OrgStaffUpdateSerializer,
+    OrgApiKeySerializer, OrgApiKeyCreateSerializer, OrgApiKeyUpdateSerializer,
+    OrgAuditLogSerializer,
+    OrgModuleFlagsSerializer, OrgModuleFlagsUpdateSerializer,
+    OrgNotificationConfigSerializer, OrgNotificationConfigUpdateSerializer,
+    OrgNotificationDeliverySerializer, OrgNotificationBlastSerializer,
+    FulfillmentSlotConfigSerializer, FulfillmentSlotConfigUpdateSerializer,
 )
+from .audit_log import record_org_audit_event
+from .organization import (
+    ensure_organization_for_profile,
+    ensure_org_rbac_bootstrap,
+    user_is_org_staff_admin,
+    user_has_org_permission,
+    can_grant_permissions,
+    is_org_owner,
+    get_active_staff_membership,
+    user_belongs_to_organization,
+    would_remove_last_owner,
+    record_staff_role_audit,
+    resolve_org_blast_recipients,
+)
+from .api_keys import (
+    create_org_api_key,
+    revoke_org_api_key,
+    update_org_api_key_scopes,
+)
+from .api_scopes import scope_catalog_payload
+from .permissions_catalog import (
+    ALL_PERMISSION_CODES,
+    ROLE_SLUG_ADMIN,
+    catalog_payload,
+)
+from .module_flags import (
+    ensure_org_module_flags,
+    module_flags_dict_from_row,
+)
+from .module_flags_catalog import catalog_payload as module_flags_catalog_payload
+from common.notification_catalog import catalog_payload as notification_catalog_payload
+from common.notification_dispatcher import (
+    ensure_org_notification_config,
+    dispatch_bulk_notifications,
+    retry_notification_delivery,
+)
+from .module_flags import require_module_enabled
+from django.contrib.auth import get_user_model
+from django.db import transaction
 from common.permissions import IsRetailerOwner, IsCustomerUser
 
+User = get_user_model()
 logger = logging.getLogger(__name__)
 
 
 class GeoEstimateThrottle(AnonRateThrottle):
     scope = 'geo_estimate'
+
+
+class AuditLogPagination(PageNumberPagination):
+    page_size = 50
+    page_size_query_param = 'page_size'
+    max_page_size = 200
 
 
 # Map common state abbreviations ↔ full names for retailer filters
@@ -138,6 +199,18 @@ class RetailerPagination(PageNumberPagination):
     max_page_size = 100
 
 
+class OrgStaffPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
+class OrgApiKeyPagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
 @api_view(['GET'])
 @permission_classes([permissions.IsAuthenticated])
 def get_retailer_profile(request):
@@ -152,7 +225,13 @@ def get_retailer_profile(request):
             )
         
         try:
-            profile = RetailerProfile.objects.get(user=request.user)
+            profile = (
+                RetailerProfile.objects.select_related(
+                    'user', 'organization', 'reward_config'
+                )
+                .prefetch_related('operating_hours', 'categories__category')
+                .get(user=request.user)
+            )
             serializer = RetailerProfileSerializer(profile)
             return Response(serializer.data, status=status.HTTP_200_OK)
         except RetailerProfile.DoesNotExist:
@@ -192,7 +271,8 @@ def create_retailer_profile(request):
         serializer = RetailerProfileUpdateSerializer(data=request.data)
         if serializer.is_valid():
             profile = serializer.save(user=request.user)
-            
+            ensure_organization_for_profile(profile)
+
             # Create default operating hours (Monday to Sunday, 9 AM to 9 PM)
             days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
             for day in days:
@@ -304,10 +384,9 @@ def list_retailers(request):
         
         if min_rating:
             try:
-                min_rating = float(min_rating)
-                queryset = queryset.filter(average_rating__gte=min_rating)
-            except ValueError:
-                pass
+                queryset = queryset.filter(average_rating__gte=decimal_value(min_rating, 'min_rating'))
+            except ValidationError:
+                pass  # malformed (also nan / inf) is ignored, as before
         
         if has_referral:
             queryset = queryset.filter(reward_config__is_referral_enabled=has_referral.lower() == 'true')
@@ -400,6 +479,8 @@ def list_retailers(request):
         serializer = RetailerListSerializer(queryset, many=True, context={'request': request})
         return Response(serializer.data, status=status.HTTP_200_OK)
     
+    except (Http404, APIException):
+        raise
     except Exception as e:
         logger.error(f"Error listing retailers: {str(e)}")
         return Response(
@@ -550,6 +631,8 @@ def get_retailer_reviews(request, retailer_id):
         serializer = RetailerReviewSerializer(reviews, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
+    except (Http404, APIException):
+        raise
     except Exception as e:
         logger.error(f"Error getting retailer reviews: {str(e)}")
         return Response(
@@ -586,6 +669,8 @@ def create_retailer_review(request, retailer_id):
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
+    except (Http404, APIException):
+        raise
     except Exception as e:
         logger.error(f"Error creating retailer review: {str(e)}")
         return Response(
@@ -743,6 +828,12 @@ def manage_reward_configuration(request):
                 {'error': 'Only retailers can access this endpoint'}, 
                 status=status.HTTP_403_FORBIDDEN
             )
+
+        from .module_flags import require_module_enabled
+
+        _org, module_err = require_module_enabled(request.user, 'rewards')
+        if module_err is not None:
+            return module_err
             
         profile = get_object_or_404(RetailerProfile, user=request.user)
         
@@ -760,9 +851,1479 @@ def manage_reward_configuration(request):
                 return Response(serializer.data, status=status.HTTP_200_OK)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error managing reward config: {str(e)}")
         return Response(
             {'error': format_exception(e)}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+def _caller_profile_or_error(request):
+    """Return (profile, error_response). error_response is set on authz failure."""
+    if request.user.user_type != 'retailer':
+        return None, Response(
+            {'error': 'Only retailers can access organization endpoints'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    try:
+        profile = RetailerProfile.objects.select_related('organization').get(
+            user=request.user
+        )
+    except RetailerProfile.DoesNotExist:
+        return None, Response(
+            {'error': 'Retailer profile not found'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    return profile, None
+
+
+def _serialize_organization(org):
+    """Serialize org with locations prefetched (avoids N+1 on location_ids/count)."""
+    if org is not None:
+        prefetch_related_objects([org], 'locations')
+    return OrganizationSerializer(org).data
+
+
+def _resolve_org_for_caller(request, org_id, *, bootstrap=False):
+    """
+    Same-tenant org resolution for profile owners and staff members.
+
+    Cross-tenant / missing → 403 without leaking existence.
+    Does not create orgs on the deny path. Profile-bound tenants deny
+    cross-tenant probes without fetching the target org row (OE-97).
+    """
+    if request.user.user_type != 'retailer':
+        return None, Response(
+            {'error': 'Only retailers can access organization endpoints'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    try:
+        profile = RetailerProfile.objects.select_related('organization').get(
+            user=request.user
+        )
+    except RetailerProfile.DoesNotExist:
+        profile = None
+
+    if profile is not None:
+        if profile.organization_id == org_id:
+            org = profile.organization
+            if org is None:
+                try:
+                    org = Organization.objects.get(pk=org_id)
+                except Organization.DoesNotExist:
+                    return None, Response(
+                        {'error': 'Organization not found or access denied'},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+            if bootstrap:
+                ensure_org_rbac_bootstrap(org)
+            return org, None
+        if profile.organization_id is not None:
+            return None, Response(
+                {'error': 'Organization not found or access denied'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+    belongs = (
+        Organization.objects.filter(pk=org_id, owner_id=request.user.id).exists()
+        or OrgStaffMembership.objects.filter(
+            organization_id=org_id,
+            user=request.user,
+            is_active=True,
+        ).exists()
+    )
+    if not belongs:
+        return None, Response(
+            {'error': 'Organization not found or access denied'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    try:
+        org = Organization.objects.get(pk=org_id)
+    except Organization.DoesNotExist:
+        return None, Response(
+            {'error': 'Organization not found or access denied'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    if not user_belongs_to_organization(request.user, org):
+        return None, Response(
+            {'error': 'Organization not found or access denied'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    if bootstrap:
+        ensure_org_rbac_bootstrap(org)
+    return org, None
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_me(request):
+    """
+    GET  — caller's organization (implicit 1:1 for single-shop tenants).
+    POST — create an org and attach the existing shop as location 1 (staff-admin).
+    """
+    try:
+        profile, err = _caller_profile_or_error(request)
+        if err is not None:
+            return err
+
+        if request.method == 'GET':
+            org = profile.organization
+            if org is None:
+                org = ensure_organization_for_profile(profile)
+            return Response(
+                _serialize_organization(org),
+                status=status.HTTP_200_OK,
+            )
+
+        # POST — create org + attach shop as location 1
+        create_ser = OrganizationCreateSerializer(data=request.data)
+        if not create_ser.is_valid():
+            return Response(create_ser.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        if profile.organization_id:
+            if not user_is_org_staff_admin(request.user, profile.organization):
+                return Response(
+                    {'error': 'Organization staff-admin permission required'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            return Response(
+                {'error': 'Organization already exists for this shop'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        name = create_ser.validated_data.get('name') or None
+        org = ensure_organization_for_profile(profile, name=name)
+        logger.info("Organization created: %s (location=%s)", org.name, profile.pk)
+        return Response(
+            _serialize_organization(org),
+            status=status.HTTP_201_CREATED,
+        )
+
+    except Exception as e:
+        logger.error(f"Error in organization_me: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET', 'PATCH'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_detail(request, org_id):
+    """
+    GET/PATCH a specific organization.
+
+    Cross-tenant: callers may only access their own org; others get 403
+    and the resource is unchanged. PATCH requires ``org.update``.
+    """
+    try:
+        org, err = _resolve_org_for_caller(request, org_id, bootstrap=False)
+        if err is not None:
+            return err
+
+        if request.method == 'GET':
+            return Response(
+                _serialize_organization(org),
+                status=status.HTTP_200_OK,
+            )
+
+        ensure_org_rbac_bootstrap(org)
+
+        # PATCH — requires org.update; refuse without mutating
+        if not user_has_org_permission(request.user, org, 'org.update'):
+            return Response(
+                {'error': 'Organization update permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        update_ser = OrganizationUpdateSerializer(
+            org, data=request.data, partial=True
+        )
+        if not update_ser.is_valid():
+            return Response(update_ser.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        summary_before = {
+            'name': org.name,
+            'is_active': org.is_active,
+        }
+        org = update_ser.save()
+        record_org_audit_event(
+            organization=org,
+            actor=request.user,
+            action=OrgAuditLog.ACTION_UPDATE,
+            object_type=OrgAuditLog.OBJECT_ORGANIZATION,
+            object_id=org.id,
+            summary_before=summary_before,
+            summary_after={
+                'name': org.name,
+                'is_active': org.is_active,
+            },
+        )
+        logger.info("Organization updated: %s (active=%s)", org.pk, org.is_active)
+        return Response(
+            _serialize_organization(org),
+            status=status.HTTP_200_OK,
+        )
+
+    except Exception as e:
+        logger.error(f"Error in organization_detail: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_permission_catalog(request, org_id):
+    """Versioned permission catalog for this org (same-tenant read)."""
+    try:
+        org, err = _resolve_org_for_caller(request, org_id, bootstrap=True)
+        if err is not None:
+            return err
+        return Response(catalog_payload(), status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error in organization_permission_catalog: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_roles(request, org_id):
+    """
+    List or create named roles for an organization.
+
+    POST requires ``roles.manage``. Unknown permission codes → 400.
+    """
+    try:
+        org, err = _resolve_org_for_caller(request, org_id, bootstrap=True)
+        if err is not None:
+            return err
+
+        if request.method == 'GET':
+            roles = OrgRole.objects.filter(organization=org).order_by('slug')
+            return Response(
+                OrgRoleSerializer(roles, many=True).data,
+                status=status.HTTP_200_OK,
+            )
+
+        if not user_has_org_permission(request.user, org, 'roles.manage'):
+            return Response(
+                {'error': 'Role manage permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        ser = OrgRoleCreateSerializer(data=request.data)
+        if not ser.is_valid():
+            return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        if not can_grant_permissions(
+            request.user, org, ser.validated_data.get('permissions') or []
+        ):
+            return Response(
+                {'error': 'You cannot grant permissions you do not hold'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        slug = ser.validated_data['slug']
+        if OrgRole.objects.filter(organization=org, slug=slug).exists():
+            return Response(
+                {'error': 'Role slug already exists'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        role = OrgRole.objects.create(
+            organization=org,
+            name=ser.validated_data['name'],
+            slug=slug,
+            permissions=ser.validated_data.get('permissions') or [],
+            is_system=False,
+        )
+        record_org_audit_event(
+            organization=org,
+            actor=request.user,
+            action=OrgAuditLog.ACTION_CREATE,
+            object_type=OrgAuditLog.OBJECT_ORG_ROLE,
+            object_id=role.id,
+            summary_before={},
+            summary_after={
+                'slug': role.slug,
+                'name': role.name,
+                'permissions': list(role.permissions or []),
+            },
+        )
+        return Response(
+            OrgRoleSerializer(role).data,
+            status=status.HTTP_201_CREATED,
+        )
+    except Exception as e:
+        logger.error(f"Error in organization_roles: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET', 'PATCH'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_role_detail(request, org_id, role_id):
+    """Get or update a named role. PATCH requires ``roles.manage``."""
+    try:
+        org, err = _resolve_org_for_caller(request, org_id, bootstrap=True)
+        if err is not None:
+            return err
+
+        try:
+            role = OrgRole.objects.get(pk=role_id, organization=org)
+        except OrgRole.DoesNotExist:
+            return Response(
+                {'error': 'Role not found or access denied'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if request.method == 'GET':
+            return Response(OrgRoleSerializer(role).data, status=status.HTTP_200_OK)
+
+        if not user_has_org_permission(request.user, org, 'roles.manage'):
+            return Response(
+                {'error': 'Role manage permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        ser = OrgRoleUpdateSerializer(data=request.data, partial=True)
+        if not ser.is_valid():
+            return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        if not is_org_owner(request.user, org):
+            own = get_active_staff_membership(request.user, org)
+            if own is not None and own.role_id == role.id:
+                return Response(
+                    {'error': 'You cannot edit the role you hold'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            if 'permissions' in ser.validated_data:
+                added = set(ser.validated_data['permissions']) - set(role.permissions or [])
+                if not can_grant_permissions(request.user, org, added):
+                    return Response(
+                        {'error': 'You cannot grant permissions you do not hold'},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+
+        # System admin role must retain full catalog (owner bootstrap)
+        if role.slug == ROLE_SLUG_ADMIN and 'permissions' in ser.validated_data:
+            new_perms = set(ser.validated_data['permissions'])
+            if not ALL_PERMISSION_CODES.issubset(new_perms):
+                return Response(
+                    {'error': 'Admin role must retain all catalog permissions'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        summary_before = {
+            'slug': role.slug,
+            'name': role.name,
+            'permissions': list(role.permissions or []),
+        }
+        if 'name' in ser.validated_data:
+            role.name = ser.validated_data['name']
+        if 'permissions' in ser.validated_data:
+            role.permissions = ser.validated_data['permissions']
+        role.save()
+        record_org_audit_event(
+            organization=org,
+            actor=request.user,
+            action=OrgAuditLog.ACTION_UPDATE,
+            object_type=OrgAuditLog.OBJECT_ORG_ROLE,
+            object_id=role.id,
+            summary_before=summary_before,
+            summary_after={
+                'slug': role.slug,
+                'name': role.name,
+                'permissions': list(role.permissions or []),
+            },
+        )
+        return Response(OrgRoleSerializer(role).data, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error in organization_role_detail: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_staff(request, org_id):
+    """
+    List staff memberships or assign a user to a named role.
+
+    POST requires ``staff.manage``. Creates AUTH_USER_MODEL retailer users
+    for new cashiers (password auth — not customer OTP).
+    """
+    try:
+        org, err = _resolve_org_for_caller(request, org_id, bootstrap=True)
+        if err is not None:
+            return err
+
+        if request.method == 'GET':
+            if not (
+                user_has_org_permission(request.user, org, 'staff.manage')
+                or user_belongs_to_organization(request.user, org)
+            ):
+                return Response(
+                    {'error': 'Organization not found or access denied'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            memberships = (
+                OrgStaffMembership.objects.select_related('user', 'role')
+                .filter(organization=org)
+                .order_by('id')
+            )
+            if not user_has_org_permission(request.user, org, 'staff.manage'):
+                # Members without staff.manage see only their own seat (no other staff emails).
+                memberships = memberships.filter(user=request.user)
+            paginator = OrgStaffPagination()
+            page = paginator.paginate_queryset(memberships, request)
+            if page is not None:
+                return paginator.get_paginated_response(
+                    OrgStaffMembershipSerializer(page, many=True).data
+                )
+            return Response(
+                OrgStaffMembershipSerializer(memberships, many=True).data,
+                status=status.HTTP_200_OK,
+            )
+
+        if not user_has_org_permission(request.user, org, 'staff.manage'):
+            return Response(
+                {'error': 'Staff manage permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        ser = OrgStaffAssignSerializer(data=request.data)
+        if not ser.is_valid():
+            return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            role = OrgRole.objects.get(
+                pk=ser.validated_data['role_id'],
+                organization=org,
+            )
+        except OrgRole.DoesNotExist:
+            return Response(
+                {'error': 'Role not found in this organization'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not can_grant_permissions(request.user, org, role.permissions):
+            return Response(
+                {'error': 'You cannot assign a role with permissions you do not hold'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        with transaction.atomic():
+            user_id = ser.validated_data.get('user_id')
+            if user_id:
+                cannot_assign = Response(
+                    {'error': 'This user cannot be assigned'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+                staff_user = User.objects.filter(pk=user_id).first()
+                if (
+                    staff_user is None
+                    or staff_user.user_type != 'retailer'
+                    or staff_user.id == request.user.id
+                    or staff_user.owned_organizations.exclude(pk=org.pk).exists()
+                    or RetailerProfile.objects.filter(user=staff_user)
+                    .exclude(organization=org)
+                    .exists()
+                ):
+                    # One message for every refusal so ids cannot be probed.
+                    return cannot_assign
+            else:
+                username = ser.validated_data['username']
+                if User.objects.filter(username=username).exists():
+                    return Response(
+                        {'error': 'Username already taken'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                staff_user = User.objects.create_user(
+                    username=username,
+                    email=ser.validated_data.get('email') or '',
+                    password=ser.validated_data['password'],
+                    user_type='retailer',
+                    is_active=True,
+                )
+
+            existing = OrgStaffMembership.objects.filter(
+                organization=org, user=staff_user
+            ).select_related('role').first()
+
+            if existing:
+                if would_remove_last_owner(
+                    org, target_user=staff_user, new_role=role
+                ):
+                    return Response(
+                        {'error': 'Cannot remove the last owner'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                from_role = existing.role
+                action = (
+                    OrgStaffRoleAudit.ACTION_CHANGE
+                    if from_role.id != role.id
+                    else OrgStaffRoleAudit.ACTION_GRANT
+                )
+                existing.role = role
+                existing.is_active = True
+                existing.save(update_fields=['role', 'is_active', 'updated_at'])
+                membership = existing
+                record_staff_role_audit(
+                    organization=org,
+                    actor=request.user,
+                    target_user=staff_user,
+                    action=action,
+                    from_role=from_role,
+                    to_role=role,
+                )
+            else:
+                membership = OrgStaffMembership.objects.create(
+                    organization=org,
+                    user=staff_user,
+                    role=role,
+                    is_active=True,
+                )
+                record_staff_role_audit(
+                    organization=org,
+                    actor=request.user,
+                    target_user=staff_user,
+                    action=OrgStaffRoleAudit.ACTION_GRANT,
+                    from_role=None,
+                    to_role=role,
+                )
+
+        membership = (
+            OrgStaffMembership.objects.select_related('user', 'role')
+            .get(pk=membership.pk)
+        )
+        return Response(
+            OrgStaffMembershipSerializer(membership).data,
+            status=status.HTTP_201_CREATED,
+        )
+    except (Http404, APIException):
+        raise
+    except Exception as e:
+        logger.error(f"Error in organization_staff: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET', 'PATCH', 'DELETE'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_staff_detail(request, org_id, membership_id):
+    """
+    Get / change / revoke a staff membership.
+
+    Mutations require ``staff.manage``. 403 leaves the membership unchanged.
+    Unauthorized users cannot change another user's role.
+    """
+    try:
+        org, err = _resolve_org_for_caller(request, org_id, bootstrap=True)
+        if err is not None:
+            return err
+
+        try:
+            membership = (
+                OrgStaffMembership.objects.select_related('user', 'role')
+                .get(pk=membership_id, organization=org)
+            )
+        except OrgStaffMembership.DoesNotExist:
+            return Response(
+                {'error': 'Staff membership not found or access denied'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if request.method == 'GET':
+            return Response(
+                OrgStaffMembershipSerializer(membership).data,
+                status=status.HTTP_200_OK,
+            )
+
+        if not user_has_org_permission(request.user, org, 'staff.manage'):
+            return Response(
+                {'error': 'Staff manage permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if not is_org_owner(request.user, org):
+            if membership.user_id == request.user.id:
+                return Response(
+                    {'error': 'You cannot change your own membership'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            if not can_grant_permissions(
+                request.user, org, membership.role.permissions
+            ):
+                return Response(
+                    {'error': 'You cannot modify a member with permissions you do not hold'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        if request.method == 'DELETE':
+            if would_remove_last_owner(
+                org, target_user=membership.user, deactivate=True
+            ):
+                return Response(
+                    {'error': 'Cannot remove the last owner'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            from_role = membership.role
+            target = membership.user
+            membership.is_active = False
+            membership.save(update_fields=['is_active', 'updated_at'])
+            record_staff_role_audit(
+                organization=org,
+                actor=request.user,
+                target_user=target,
+                action=OrgStaffRoleAudit.ACTION_REVOKE,
+                from_role=from_role,
+                to_role=None,
+            )
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+        # PATCH
+        ser = OrgStaffUpdateSerializer(data=request.data, partial=True)
+        if not ser.is_valid():
+            return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        new_role = membership.role
+        if 'role_id' in ser.validated_data:
+            try:
+                new_role = OrgRole.objects.get(
+                    pk=ser.validated_data['role_id'],
+                    organization=org,
+                )
+            except OrgRole.DoesNotExist:
+                return Response(
+                    {'error': 'Role not found in this organization'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        if not can_grant_permissions(request.user, org, new_role.permissions):
+            return Response(
+                {'error': 'You cannot assign a role with permissions you do not hold'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        deactivate = (
+            'is_active' in ser.validated_data
+            and ser.validated_data['is_active'] is False
+        )
+        if would_remove_last_owner(
+            org,
+            target_user=membership.user,
+            new_role=new_role if 'role_id' in ser.validated_data else None,
+            deactivate=deactivate,
+        ):
+            return Response(
+                {'error': 'Cannot remove the last owner'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        from_role = membership.role
+        updates = []
+        action = None
+        if 'role_id' in ser.validated_data and new_role.id != membership.role_id:
+            membership.role = new_role
+            updates.append('role')
+            action = OrgStaffRoleAudit.ACTION_CHANGE
+        if 'is_active' in ser.validated_data:
+            membership.is_active = ser.validated_data['is_active']
+            updates.append('is_active')
+            if deactivate:
+                action = OrgStaffRoleAudit.ACTION_REVOKE
+            elif ser.validated_data['is_active'] and action is None:
+                action = OrgStaffRoleAudit.ACTION_GRANT
+
+        if updates:
+            updates.append('updated_at')
+            membership.save(update_fields=updates)
+            if action:
+                record_staff_role_audit(
+                    organization=org,
+                    actor=request.user,
+                    target_user=membership.user,
+                    action=action,
+                    from_role=from_role,
+                    to_role=(
+                        membership.role
+                        if action != OrgStaffRoleAudit.ACTION_REVOKE
+                        else None
+                    ),
+                )
+
+        membership = (
+            OrgStaffMembership.objects.select_related('user', 'role')
+            .get(pk=membership.pk)
+        )
+        return Response(
+            OrgStaffMembershipSerializer(membership).data,
+            status=status.HTTP_200_OK,
+        )
+    except Exception as e:
+        logger.error(f"Error in organization_staff_detail: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_api_scope_catalog(request, org_id):
+    """Versioned partner API scope catalog (same-tenant JWT read)."""
+    try:
+        org, err = _resolve_org_for_caller(request, org_id)
+        if err is not None:
+            return err
+        return Response(scope_catalog_payload(), status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error in organization_api_scope_catalog: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_api_keys(request, org_id):
+    """
+    List or create org-scoped partner API keys (JWT / staff).
+
+    POST requires ``api_keys.manage``. Raw secret is returned once on create.
+    """
+    try:
+        org, err = _resolve_org_for_caller(request, org_id)
+        if err is not None:
+            return err
+
+        if request.method == 'GET':
+            if not user_has_org_permission(request.user, org, 'api_keys.manage'):
+                return Response(
+                    {'error': 'API key management permission required'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            keys = (
+                OrgApiKey.objects.filter(organization=org)
+                .select_related('created_by')
+                .order_by('-created_at')
+            )
+            paginator = OrgApiKeyPagination()
+            page = paginator.paginate_queryset(keys, request)
+            if page is not None:
+                return paginator.get_paginated_response(
+                    OrgApiKeySerializer(page, many=True).data
+                )
+            return Response(
+                OrgApiKeySerializer(keys, many=True).data,
+                status=status.HTTP_200_OK,
+            )
+
+        if not user_has_org_permission(request.user, org, 'api_keys.manage'):
+            return Response(
+                {'error': 'API key management permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        create_ser = OrgApiKeyCreateSerializer(data=request.data)
+        if not create_ser.is_valid():
+            return Response(create_ser.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        api_key, raw = create_org_api_key(
+            organization=org,
+            name=create_ser.validated_data['name'],
+            scopes=create_ser.validated_data.get('scopes') or [],
+            created_by=request.user,
+        )
+        payload = OrgApiKeySerializer(api_key).data
+        payload['api_key'] = raw  # shown once
+        return Response(payload, status=status.HTTP_201_CREATED)
+    except (Http404, APIException):
+        raise
+    except Exception as e:
+        logger.error(f"Error in organization_api_keys: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET', 'PATCH', 'DELETE'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_api_key_detail(request, org_id, key_id):
+    """
+    Read / update scopes / revoke an org API key.
+
+    Mutations require ``api_keys.manage``. DELETE soft-revokes (next request 401).
+    Cross-tenant key ids return 403 without mutating.
+    """
+    try:
+        org, err = _resolve_org_for_caller(request, org_id)
+        if err is not None:
+            return err
+
+        if not user_has_org_permission(request.user, org, 'api_keys.manage'):
+            return Response(
+                {'error': 'API key management permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        try:
+            api_key = OrgApiKey.objects.select_related('created_by').get(
+                pk=key_id, organization=org,
+            )
+        except OrgApiKey.DoesNotExist:
+            return Response(
+                {'error': 'API key not found or access denied'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if request.method == 'GET':
+            return Response(
+                OrgApiKeySerializer(api_key).data,
+                status=status.HTTP_200_OK,
+            )
+
+        if request.method == 'DELETE':
+            revoke_org_api_key(api_key=api_key, actor=request.user)
+            api_key.refresh_from_db()
+            return Response(
+                OrgApiKeySerializer(api_key).data,
+                status=status.HTTP_200_OK,
+            )
+
+        # PATCH — name and/or scopes
+        update_ser = OrgApiKeyUpdateSerializer(data=request.data, partial=True)
+        if not update_ser.is_valid():
+            return Response(update_ser.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        data = update_ser.validated_data
+        if 'name' in data:
+            summary_before = {
+                'api_key_id': api_key.id,
+                'prefix': api_key.prefix,
+                'name': api_key.name,
+                'scopes': list(api_key.scopes or []),
+            }
+            api_key.name = data['name']
+            api_key.save(update_fields=['name', 'updated_at'])
+            record_org_audit_event(
+                organization=org,
+                actor=request.user,
+                action=OrgAuditLog.ACTION_UPDATE,
+                object_type=OrgAuditLog.OBJECT_API_KEY,
+                object_id=api_key.id,
+                summary_before=summary_before,
+                summary_after={
+                    'api_key_id': api_key.id,
+                    'prefix': api_key.prefix,
+                    'name': api_key.name,
+                    'scopes': list(api_key.scopes or []),
+                },
+            )
+        if 'scopes' in data:
+            update_org_api_key_scopes(
+                api_key=api_key,
+                scopes=data['scopes'],
+                actor=request.user,
+            )
+            api_key.refresh_from_db()
+
+        return Response(
+            OrgApiKeySerializer(api_key).data,
+            status=status.HTTP_200_OK,
+        )
+    except Exception as e:
+        logger.error(f"Error in organization_api_key_detail: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_audit_log(request, org_id):
+    """
+    List immutable audit rows for this organization (OE-99 / F-0003).
+
+    Requires ``audit.read``. Cross-tenant callers get 403. Optional
+    ``location_id`` query param filters to location-scoped rows only.
+    Append-only: no POST/PATCH/DELETE.
+    """
+    try:
+        org, err = _resolve_org_for_caller(request, org_id)
+        if err is not None:
+            return err
+
+        if not user_has_org_permission(request.user, org, 'audit.read'):
+            return Response(
+                {'error': 'Audit read permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        qs = (
+            OrgAuditLog.objects.filter(organization=org)
+            .select_related('organization', 'actor', 'location')
+            .order_by('-created_at', '-id')
+        )
+
+        location_id = request.query_params.get('location_id')
+        if location_id is not None:
+            try:
+                location_pk = int(location_id)
+            except (TypeError, ValueError):
+                return Response(
+                    {'error': 'location_id must be an integer'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if not org.locations.filter(pk=location_pk).exists():
+                return Response(
+                    {'error': 'Location not found in this organization'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            qs = qs.filter(location_id=location_pk)
+
+        paginator = AuditLogPagination()
+        page = paginator.paginate_queryset(qs, request)
+        serializer = OrgAuditLogSerializer(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
+    except (Http404, APIException):
+        raise
+    except Exception as e:
+        logger.error(f"Error in organization_audit_log: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_module_flags_catalog(request, org_id):
+    """Versioned module flag catalog for this org (same-tenant read)."""
+    try:
+        org, err = _resolve_org_for_caller(request, org_id)
+        if err is not None:
+            return err
+        return Response(module_flags_catalog_payload(), status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error in organization_module_flags_catalog: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET', 'PATCH'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_module_flags(request, org_id):
+    """
+    Read or update org module flags (OE-101 / F-0004).
+
+    GET — any same-tenant retailer (for client nav hiding).
+    PATCH — requires ``modules.manage``; writes OrgAuditLog row.
+    """
+    try:
+        org, err = _resolve_org_for_caller(request, org_id)
+        if err is not None:
+            return err
+
+        row = ensure_org_module_flags(org)
+
+        if request.method == 'GET':
+            return Response(
+                OrgModuleFlagsSerializer(row).data,
+                status=status.HTTP_200_OK,
+            )
+
+        if not user_has_org_permission(request.user, org, 'modules.manage'):
+            return Response(
+                {'error': 'Module manage permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        update_ser = OrgModuleFlagsUpdateSerializer(data=request.data)
+        if not update_ser.is_valid():
+            return Response(update_ser.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        incoming = update_ser.validated_data['flags']
+        with transaction.atomic():
+            # Lock the row so two concurrent PATCHes merge instead of overwriting each other.
+            row = OrgModuleFlags.objects.select_for_update().get(pk=row.pk)
+            summary_before = module_flags_dict_from_row(row)
+            merged = dict(summary_before)
+            merged.update(incoming)
+            row.flags = merged
+            row.save(update_fields=['flags', 'updated_at'])
+
+        record_org_audit_event(
+            organization=org,
+            actor=request.user,
+            action=OrgAuditLog.ACTION_UPDATE,
+            object_type=OrgAuditLog.OBJECT_MODULE_FLAGS,
+            object_id=org.id,
+            summary_before=summary_before,
+            summary_after=merged,
+        )
+        return Response(
+            OrgModuleFlagsSerializer(row).data,
+            status=status.HTTP_200_OK,
+        )
+    except Exception as e:
+        logger.error(f"Error in organization_module_flags: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_notification_catalog(request, org_id):
+    """Versioned notification type catalog for this org (same-tenant read)."""
+    try:
+        org, err = _resolve_org_for_caller(request, org_id)
+        if err is not None:
+            return err
+        return Response(notification_catalog_payload(), status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error in organization_notification_catalog: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET', 'PATCH'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_notification_config(request, org_id):
+    """
+    Read or update org notification preferences (OE-183 / F-0005).
+
+    GET — any same-tenant retailer.
+    PATCH — requires ``notifications.manage``; writes OrgAuditLog row.
+    """
+    try:
+        org, err = _resolve_org_for_caller(request, org_id)
+        if err is not None:
+            return err
+
+        org, module_err = require_module_enabled(request.user, 'notifications')
+        if module_err is not None:
+            return module_err
+
+        row = ensure_org_notification_config(org)
+
+        if request.method == 'GET':
+            return Response(
+                OrgNotificationConfigSerializer(row).data,
+                status=status.HTTP_200_OK,
+            )
+
+        if not user_has_org_permission(request.user, org, 'notifications.manage'):
+            return Response(
+                {'error': 'Notification manage permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        update_ser = OrgNotificationConfigUpdateSerializer(data=request.data, partial=True)
+        if not update_ser.is_valid():
+            return Response(update_ser.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        summary_before = OrgNotificationConfigSerializer(row).data
+        data = update_ser.validated_data
+        updates = []
+        if 'default_channel' in data:
+            row.default_channel = data['default_channel']
+            updates.append('default_channel')
+        if 'disabled_types' in data:
+            row.disabled_types = data['disabled_types']
+            updates.append('disabled_types')
+        if 'channel_overrides' in data:
+            merged = dict(row.channel_overrides or {})
+            merged.update(data['channel_overrides'])
+            row.channel_overrides = merged
+            updates.append('channel_overrides')
+        if updates:
+            updates.append('updated_at')
+            row.save(update_fields=updates)
+
+        record_org_audit_event(
+            organization=org,
+            actor=request.user,
+            action=OrgAuditLog.ACTION_UPDATE,
+            object_type=OrgAuditLog.OBJECT_NOTIFICATION_CONFIG,
+            object_id=org.id,
+            summary_before=summary_before,
+            summary_after=OrgNotificationConfigSerializer(row).data,
+        )
+        return Response(
+            OrgNotificationConfigSerializer(row).data,
+            status=status.HTTP_200_OK,
+        )
+    except Exception as e:
+        logger.error(f"Error in organization_notification_config: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_notification_deliveries(request, org_id):
+    """List notification delivery rows for this org (same-tenant read)."""
+    try:
+        org, err = _resolve_org_for_caller(request, org_id)
+        if err is not None:
+            return err
+
+        org, module_err = require_module_enabled(request.user, 'notifications')
+        if module_err is not None:
+            return module_err
+
+        qs = (
+            OrgNotificationDelivery.objects.filter(organization=org)
+            .select_related('organization', 'recipient_user', 'order')
+            .order_by('-created_at')
+        )
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+
+        paginator = AuditLogPagination()
+        page = paginator.paginate_queryset(qs, request)
+        if page is not None:
+            serializer = OrgNotificationDeliverySerializer(page, many=True)
+            return paginator.get_paginated_response(serializer.data)
+
+        serializer = OrgNotificationDeliverySerializer(qs, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except (Http404, APIException):
+        raise
+    except Exception as e:
+        logger.error(f"Error in organization_notification_deliveries: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_notification_delivery_retry(request, org_id, delivery_id):
+    """Retry a failed notification delivery when retries remain."""
+    try:
+        org, err = _resolve_org_for_caller(request, org_id)
+        if err is not None:
+            return err
+
+        org, module_err = require_module_enabled(request.user, 'notifications')
+        if module_err is not None:
+            return module_err
+
+        if not user_has_org_permission(request.user, org, 'notifications.manage'):
+            return Response(
+                {'error': 'Notification manage permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        try:
+            delivery = OrgNotificationDelivery.objects.select_related(
+                'organization', 'recipient_user', 'order'
+            ).get(
+                pk=delivery_id,
+                organization=org,
+            )
+        except OrgNotificationDelivery.DoesNotExist:
+            return Response(
+                {'error': 'Delivery not found or access denied'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        delivery, retry_error = retry_notification_delivery(delivery)
+        payload = OrgNotificationDeliverySerializer(delivery).data
+        if retry_error and delivery.status != delivery.STATUS_SENT:
+            payload['retry_error'] = retry_error
+        return Response(payload, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error in organization_notification_delivery_retry: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_notification_blast(request, org_id):
+    """
+    Staff bulk notification blast (OE-183 / F-0005).
+
+    Requires ``notifications.blast``. Cross-tenant recipient ids are ignored.
+    """
+    try:
+        org, err = _resolve_org_for_caller(request, org_id)
+        if err is not None:
+            return err
+
+        org, module_err = require_module_enabled(request.user, 'notifications')
+        if module_err is not None:
+            return module_err
+
+        if not user_has_org_permission(request.user, org, 'notifications.blast'):
+            return Response(
+                {'error': 'Notification blast permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        blast_ser = OrgNotificationBlastSerializer(data=request.data)
+        if not blast_ser.is_valid():
+            return Response(blast_ser.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        data = blast_ser.validated_data
+        recipient_ids = data['recipient_user_ids']
+        recipients = resolve_org_blast_recipients(org, recipient_ids)
+        if not recipients:
+            return Response(
+                {'error': 'No valid customer recipients found for this organization'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        results = dispatch_bulk_notifications(
+            organization=org,
+            actor=request.user,
+            notification_type=data['notification_type'],
+            recipient_users=recipients,
+            context=data.get('context') or {},
+            channel=data.get('channel'),
+        )
+        deliveries = []
+        for delivery, skip in results:
+            if delivery is not None:
+                deliveries.append(OrgNotificationDeliverySerializer(delivery).data)
+            elif skip:
+                deliveries.append({'skipped': skip})
+        return Response({'deliveries': deliveries}, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error in organization_notification_blast: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+class FulfillmentSlotsThrottle(AnonRateThrottle):
+    scope = 'fulfillment_slots'
+
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+@throttle_classes([FulfillmentSlotsThrottle])
+def list_fulfillment_slots(request, retailer_id):
+    """
+    List open pickup/delivery fulfillment slots for a shop location (OE-243).
+
+    Slots are 30 minutes, derived from existing operating hours. Capacity is
+    retailer-configurable; express is out of scope for v1.
+    """
+    from orders.fulfillment_slots import (
+        FulfillmentSlotError,
+        MAX_SLOT_LIST_DAYS,
+        build_slot_payloads,
+        slot_capacity,
+    )
+
+    retailer = get_object_or_404(RetailerProfile.objects.public(), id=retailer_id)
+    try:
+        delivery_mode = request.query_params.get('delivery_mode', 'pickup')
+        if delivery_mode not in {'pickup', 'delivery'}:
+            return Response(
+                {'error': 'delivery_mode must be pickup or delivery'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            days = int(request.query_params.get('days', 7))
+        except (TypeError, ValueError):
+            return Response(
+                {'error': 'days must be an integer'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if days < 1 or days > MAX_SLOT_LIST_DAYS:
+            return Response(
+                {'error': f'days must be between 1 and {MAX_SLOT_LIST_DAYS}'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        slots = build_slot_payloads(
+            retailer,
+            delivery_mode=delivery_mode,
+            days=days,
+        )
+        is_shop_staff = (
+            request.user.is_authenticated
+            and getattr(request.user, 'user_type', None) == 'retailer'
+        )
+        body = {
+            'retailer_id': retailer.id,
+            'delivery_mode': delivery_mode,
+            'timezone': retailer.timezone or 'Asia/Kolkata',
+            'slots': slots,
+        }
+        if is_shop_staff:
+            body['slot_capacity'] = slot_capacity(retailer)
+        else:
+            # Shoppers only need to know whether a slot is open, not how busy the shop is.
+            body['slots'] = [
+                {k: v for k, v in slot.items() if k not in ('capacity', 'booked', 'remaining')}
+                for slot in slots
+            ]
+        return Response(
+            body,
+            status=status.HTTP_200_OK,
+        )
+    except FulfillmentSlotError as exc:
+        return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Error in list_fulfillment_slots: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+def _org_locations(org):
+    return RetailerProfile.objects.filter(organization=org)
+
+
+def _resolve_org_location(org, location_id):
+    locations = _org_locations(org)
+    if location_id is None:
+        location = locations.first()
+        if location is None:
+            return None, Response(
+                {'error': 'No shop location found for this organization'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return location, None
+    try:
+        return locations.get(pk=location_id), None
+    except RetailerProfile.DoesNotExist:
+        return None, Response(
+            {'error': 'Location not found for this organization'},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+
+@api_view(['GET', 'PATCH'])
+@permission_classes([permissions.IsAuthenticated])
+def organization_fulfillment_slot_config(request, org_id):
+    """
+    Read or update per-location fulfillment slot capacity (OE-243).
+
+    GET — any same-tenant retailer.
+    PATCH — requires ``fulfillment.manage``; writes OrgAuditLog row.
+    """
+    try:
+        org, err = _resolve_org_for_caller(request, org_id)
+        if err is not None:
+            return err
+
+        location_id = request.query_params.get('location_id')
+        if location_id is not None:
+            try:
+                location_id = int(location_id)
+            except (TypeError, ValueError):
+                return Response(
+                    {'error': 'location_id must be an integer'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        if request.method == 'GET':
+            locations = _org_locations(org)
+            if location_id is not None:
+                location, loc_err = _resolve_org_location(org, location_id)
+                if loc_err is not None:
+                    return loc_err
+                locations = [location]
+            data = FulfillmentSlotConfigSerializer(locations, many=True).data
+            return Response({'locations': data}, status=status.HTTP_200_OK)
+
+        if not user_has_org_permission(request.user, org, 'fulfillment.manage'):
+            return Response(
+                {'error': 'Fulfillment manage permission required'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        body_location_id = request.data.get('location_id', location_id)
+        if body_location_id is not None:
+            try:
+                body_location_id = int(body_location_id)
+            except (TypeError, ValueError):
+                return Response(
+                    {'error': 'location_id must be an integer'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        location, loc_err = _resolve_org_location(org, body_location_id)
+        if loc_err is not None:
+            return loc_err
+
+        update_ser = FulfillmentSlotConfigUpdateSerializer(data=request.data)
+        if not update_ser.is_valid():
+            return Response(update_ser.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        summary_before = {
+            'fulfillment_slot_capacity': location.fulfillment_slot_capacity,
+        }
+        location.fulfillment_slot_capacity = update_ser.validated_data[
+            'fulfillment_slot_capacity'
+        ]
+        location.save(update_fields=['fulfillment_slot_capacity', 'updated_at'])
+        summary_after = {
+            'fulfillment_slot_capacity': location.fulfillment_slot_capacity,
+        }
+
+        record_org_audit_event(
+            organization=org,
+            actor=request.user,
+            action=OrgAuditLog.ACTION_UPDATE,
+            object_type='fulfillment_slot_config',
+            object_id=location.id,
+            summary_before=summary_before,
+            summary_after=summary_after,
+            location=location,
+        )
+        return Response(
+            FulfillmentSlotConfigSerializer(location).data,
+            status=status.HTTP_200_OK,
+        )
+    except Exception as e:
+        logger.error(f"Error in organization_fulfillment_slot_config: {str(e)}")
+        return Response(
+            {'error': format_exception(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )

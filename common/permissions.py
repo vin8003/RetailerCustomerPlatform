@@ -156,6 +156,26 @@ class IsActiveRetailer(permissions.BasePermission):
             return False
 
 
+class IsOrgStaffAdmin(permissions.BasePermission):
+    """
+    Org staff-admin for org APIs (OE-98).
+
+    Qualifies when the user holds ``staff.manage`` (org owner always does).
+    """
+    message = 'Organization staff-admin permission required.'
+
+    def has_permission(self, request, view):
+        return (
+            request.user
+            and request.user.is_authenticated
+            and request.user.user_type == 'retailer'
+        )
+
+    def has_object_permission(self, request, view, obj):
+        from retailers.organization import user_is_org_staff_admin
+        return user_is_org_staff_admin(request.user, obj)
+
+
 class CanManageOrders(permissions.BasePermission):
     """
     Custom permission for order management

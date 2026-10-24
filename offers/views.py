@@ -1,7 +1,10 @@
 from decimal import Decimal
 from rest_framework import viewsets, permissions
 from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
+from django.shortcuts import get_object_or_404
+from common.client_input import error_message, id_value, list_of_objects, money_value, quantity_value
 from .models import Offer, OfferTarget
 from products.models import Product
 from .serializers import OfferSerializer, OfferTargetSerializer
@@ -43,10 +46,23 @@ class OfferViewSet(viewsets.ModelViewSet):
         
         items_data = request.data.get('items', [])
         cart_items = []
-        for i in items_data:
-            cart_items.append(DummyItem(i.get('product_id'), i.get('quantity'), i.get('price')))
-            
-        retailer_id = request.data.get('retailer_id')
+        try:
+            # The POS calls this on every cart change; a malformed line is a 400, not a 500.
+            for i in list_of_objects(items_data, 'items'):
+                # Zero is allowed: the till re-prices while a quantity is being typed.
+                qty = quantity_value(i.get('quantity'), 'quantity', allow_zero=True)
+                cart_items.append(DummyItem(
+                    id_value(i.get('product_id'), 'product_id'),
+                    # Same number type the JSON body gives, so the response shape is unchanged.
+                    int(qty) if qty == qty.to_integral_value() else float(qty),
+                    money_value(i.get('price'), 'price'),
+                ))
+            retailer_id = request.data.get('retailer_id')
+            if retailer_id:
+                retailer_id = id_value(retailer_id, 'retailer_id')
+        except ValidationError as exc:
+            return Response({"error": error_message(exc)}, status=400)
+
         if not retailer_id:
              # Default to current user's retailer if creating from own dashboard
              # But if Customer calls this? Customer won't call this ViewSet (Restricted to Retailer/Owner).
@@ -57,7 +73,7 @@ class OfferViewSet(viewsets.ModelViewSet):
                  return Response({"error": "Retailer ID required"}, status=400)
         else:
             from retailers.models import RetailerProfile
-            retailer = RetailerProfile.objects.get(id=retailer_id)
+            retailer = get_object_or_404(RetailerProfile, id=retailer_id)
             
         user_type = getattr(request.user, 'user_type', 'customer')
         default_channel = 'pos' if user_type == 'retailer' else 'mobile'

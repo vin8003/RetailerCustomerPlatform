@@ -2,7 +2,7 @@ from django.contrib import admin
 from .models import (
     CustomerProfile, CustomerAddress, CustomerWishlist, 
     CustomerNotification, CustomerSearchHistory, CustomerLoyalty,
-    LoyaltyTransaction, CustomerReferral
+    LoyaltyTransaction, LoyaltyRedeemOTP, CustomerReferral
 )
 
 
@@ -123,6 +123,15 @@ class LoyaltyTransactionAdmin(admin.ModelAdmin):
     list_display = ['customer', 'retailer', 'amount', 'transaction_type', 'expiry_date', 'is_expired', 'created_at']
     list_filter = ['transaction_type', 'is_expired', 'created_at']
     search_fields = ['customer__username', 'retailer__shop_name', 'description']
+
+
+@admin.register(LoyaltyRedeemOTP)
+class LoyaltyRedeemOTPAdmin(admin.ModelAdmin):
+    list_display = ['customer', 'retailer', 'is_used', 'attempts', 'expires_at', 'created_at']
+    list_filter = ['is_used', 'created_at']
+    search_fields = ['customer__username', 'retailer__shop_name']
+    exclude = ['otp_code']
+    readonly_fields = ['created_at']
 
 
 @admin.register(CustomerReferral)

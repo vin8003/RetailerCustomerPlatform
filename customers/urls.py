@@ -30,9 +30,13 @@ urlpatterns = [
     path('loyalty/transactions/', views.get_loyalty_transactions, name='get_loyalty_transactions'),
     path('credit/all/', views.get_all_customer_credit, name='get_all_customer_credit'),
     path('loyalty/retailer-customers/', views.get_retailer_customers_loyalty, name='get_retailer_customers_loyalty'),
+    path('loyalty/redeem-otp/', views.customer_loyalty_redeem_otp, name='customer_loyalty_redeem_otp'),
+    path('retailer/loyalty/redeem-otp/', views.staff_loyalty_redeem_otp, name='staff_loyalty_redeem_otp'),
+    path('retailer/loyalty/redeem/', views.staff_loyalty_redeem, name='staff_loyalty_redeem'),
     
     # Retailer Customer Management
     path('retailer/list/', views.get_retailer_customers, name='get_retailer_customers'),
+    path('retailer/lookup/', views.lookup_retailer_customer, name='lookup_retailer_customer'),
     path('retailer/details/<int:customer_id>/', views.get_customer_details_for_retailer, name='get_customer_details_for_retailer'),
     path('retailer/update/<int:customer_id>/', views.update_retailer_customer, name='update_retailer_customer'),
     path('retailer/blacklist/toggle/', views.toggle_blacklist, name='toggle_blacklist'),

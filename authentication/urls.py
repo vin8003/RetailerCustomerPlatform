@@ -1,5 +1,5 @@
 from django.urls import path
-from rest_framework_simplejwt.views import TokenRefreshView, TokenVerifyView
+from rest_framework_simplejwt.views import TokenVerifyView
 from . import views
 
 urlpatterns = [
@@ -21,8 +21,8 @@ urlpatterns = [
     path('change-password/', views.change_password, name='change_password'),
     path('logout/', views.logout, name='logout'),
 
-    # JWT token management
-    path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    # JWT token management (org-aware refresh blocks disabled tenants)
+    path('token/refresh/', views.OrgAwareTokenRefreshView.as_view(), name='token_refresh'),
     path('token/verify/', TokenVerifyView.as_view(), name='token_verify'),
     path('device/register/', views.register_device, name='register_device'),
 

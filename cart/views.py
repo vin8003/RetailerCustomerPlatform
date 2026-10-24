@@ -3,15 +3,15 @@ import logging
 
 from rest_framework import status, permissions
 from rest_framework.decorators import api_view, permission_classes
+from rest_framework.generics import get_object_or_404  # malformed ids are a 404, not a 500
 from rest_framework.response import Response
 from django.http import Http404
-from django.shortcuts import get_object_or_404
 from django.db import transaction
 from django.db.models import prefetch_related_objects
 
 from .models import Cart, CartItem, CartHistory
 from .serializers import (
-    CartSerializer, CartItemSerializer, AddToCartSerializer,
+    CartSerializer, CartItemSerializer, AddToCartSerializer, cart_items_prefetch,
     UpdateCartItemSerializer, CartSummarySerializer
 )
 from products.models import Product
@@ -19,6 +19,15 @@ from products.tax_service import quantize_2, split_inclusive_line
 from retailers.models import RetailerProfile
 
 logger = logging.getLogger(__name__)
+
+
+def _public_shop(retailer_id):
+    """The public shop a client names; DoesNotExist (404 here) for unknown or malformed ids."""
+    try:
+        pk = int(str(retailer_id).strip())
+    except (TypeError, ValueError):
+        raise RetailerProfile.DoesNotExist from None
+    return RetailerProfile.objects.public().get(id=pk)
 
 
 @api_view(['GET'])
@@ -39,12 +48,12 @@ def get_cart(request):
         
         if retailer_id:
             try:
-                retailer = RetailerProfile.objects.public().get(id=retailer_id)
+                retailer = _public_shop(retailer_id)
                 cart, created = Cart.objects.get_or_create(
                     customer=request.user,
                     retailer=retailer
                 )
-                prefetch_related_objects([cart], 'items__product', 'retailer')
+                prefetch_related_objects([cart], cart_items_prefetch(), 'retailer')
                 serializer = CartSerializer(cart)
                 data = serializer.data
                 
@@ -97,7 +106,7 @@ def get_cart(request):
                 )
         else:
             # Get all carts for customer
-            carts = Cart.objects.filter(customer=request.user).select_related('retailer').prefetch_related('items__product')
+            carts = Cart.objects.filter(customer=request.user).select_related('retailer').prefetch_related(cart_items_prefetch())
             serializer = CartSerializer(carts, many=True)
             return Response(serializer.data, status=status.HTTP_200_OK)
     
@@ -184,6 +193,8 @@ def update_cart_item(request, item_id):
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error updating cart item: {str(e)}")
         return Response(
@@ -233,6 +244,8 @@ def remove_cart_item(request, item_id):
         logger.info(f"Item removed from cart: {product.name} by {request.user.username}")
         return Response(cart_serializer.data, status=status.HTTP_200_OK)
     
+    except Http404:
+        raise
     except Exception as e:
         logger.error(f"Error removing cart item: {str(e)}")
         return Response(
@@ -263,7 +276,7 @@ def clear_cart(request):
             )
         
         try:
-            retailer = RetailerProfile.objects.public().get(id=retailer_id)
+            retailer = _public_shop(retailer_id)
             cart = Cart.objects.get(customer=request.user, retailer=retailer)
             
             # Log cart history
@@ -326,7 +339,7 @@ def get_cart_summary(request):
             )
         
         try:
-            retailer = RetailerProfile.objects.public().get(id=retailer_id)
+            retailer = _public_shop(retailer_id)
             cart = Cart.objects.prefetch_related('items__product').get(customer=request.user, retailer=retailer)
             
             # Calculate summary using OfferEngine
@@ -452,7 +465,7 @@ def validate_cart(request):
             )
         
         try:
-            retailer = RetailerProfile.objects.public().get(id=retailer_id)
+            retailer = _public_shop(retailer_id)
             cart = Cart.objects.prefetch_related('items__product').get(customer=request.user, retailer=retailer)
             
             if cart.is_empty:

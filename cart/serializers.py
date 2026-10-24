@@ -1,8 +1,10 @@
 from rest_framework import serializers
 from decimal import Decimal
 from django.db import transaction
+from django.db.models import Prefetch, prefetch_related_objects
 from .models import Cart, CartItem, CartHistory
 from products.models import Product
+from products.channel_price import CHANNEL_APP, resolve_channel_price
 from retailers.models import RetailerProfile
 
 
@@ -11,8 +13,11 @@ class CartItemSerializer(serializers.ModelSerializer):
     Serializer for cart items
     """
     product_name = serializers.CharField(source='product.name', read_only=True)
+    brand_name = serializers.CharField(
+        source='product.brand.name', read_only=True, allow_null=True, default=None
+    )
     product_image = serializers.CharField(source='product.image_display_url', read_only=True)
-    product_price = serializers.DecimalField(source='product.price', max_digits=10, decimal_places=2, read_only=True)
+    product_price = serializers.SerializerMethodField()
     product_unit = serializers.CharField(source='product.unit', read_only=True)
     batch_number = serializers.CharField(source='batch.batch_number', read_only=True)
     stock_quantity = serializers.SerializerMethodField()
@@ -25,12 +30,15 @@ class CartItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = CartItem
         fields = [
-            'id', 'product', 'product_name', 'product_image', 'product_price',
+            'id', 'product', 'product_name', 'brand_name', 'product_image', 'product_price',
             'product_unit', 'batch', 'batch_number', 'quantity', 'unit_price', 'total_price', 'is_available',
             'stock_quantity', 'minimum_order_quantity', 'maximum_order_quantity',
             'added_at', 'updated_at'
         ]
         read_only_fields = ['id', 'unit_price', 'added_at', 'updated_at']
+
+    def get_product_price(self, obj):
+        return resolve_channel_price(obj.product, CHANNEL_APP)
 
     def get_stock_quantity(self, obj):
         # When inventory tracking is disabled, there is no real stock limit.
@@ -39,7 +47,12 @@ class CartItemSerializer(serializers.ModelSerializer):
         if not obj.product.track_inventory:
             return 99999
 
-        qty = obj.batch.quantity if obj.batch else obj.product.quantity
+        # The stock this customer can still buy, the same figure add/update check (OE-149):
+        # expired batches do not count, and a pack child sells from its parent's stock.
+        if obj.batch:
+            qty = Decimal('0') if obj.batch.is_expired() else obj.batch.quantity
+        else:
+            qty = obj.product.saleable_quantity()
         if qty is not None:
             # If it's a whole number (e.g. 10.000), return as int 10
             # If it's a fractional number (e.g. 10.500), return 10.5
@@ -92,12 +105,20 @@ class CartItemSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError("Product is not available")
             
             # Check stock availability
-            if product.track_inventory and quantity > product.quantity:
+            if product.track_inventory and quantity > product.saleable_quantity():
                 raise serializers.ValidationError(
-                    f"Only {product.quantity} items available in stock"
+                    f"Only {product.saleable_quantity()} items available in stock"
                 )
         
         return data
+
+
+def cart_items_prefetch():
+    """Cart items with product and brand joined. Views and CartSerializer share it."""
+    return Prefetch(
+        'items',
+        queryset=CartItem.objects.select_related('product', 'product__brand'),
+    )
 
 
 class CartSerializer(serializers.ModelSerializer):
@@ -131,6 +152,13 @@ class CartSerializer(serializers.ModelSerializer):
     
     def get_minimum_order_amount(self, obj):
         return float(obj.retailer.minimum_order_amount)
+
+    def to_representation(self, instance):
+        # No-op when the view already used cart_items_prefetch().
+        prefetch_related_objects([instance], cart_items_prefetch())
+        items = instance.items.all()
+        Product.cache_saleable_quantities([item.product for item in items])
+        return super().to_representation(instance)
 
 
 class AddToCartSerializer(serializers.Serializer):
@@ -179,15 +207,15 @@ class AddToCartSerializer(serializers.Serializer):
                 if not is_valid:
                     raise serializers.ValidationError(msg)
             else:
-                if product.track_inventory and quantity > product.quantity:
+                if product.track_inventory and quantity > product.saleable_quantity():
                      raise serializers.ValidationError(
-                        f"Only {product.quantity} items available in stock"
+                        f"Only {product.saleable_quantity()} items available in stock"
                     )
         else:
-            if product.track_inventory and quantity > product.quantity:
+            if product.track_inventory and quantity > product.saleable_quantity():
                  raise serializers.ValidationError(
-                    f"Only {product.quantity} items available in stock"
-                )
+                    f"Only {product.saleable_quantity()} items available in stock"
+                 )
         
         # Check if retailer is accepting orders
         if not product.retailer.offers_delivery and not product.retailer.offers_pickup:
@@ -212,11 +240,12 @@ class AddToCartSerializer(serializers.Serializer):
             # Smart Fulfillment: Use cheapest batches first
             remaining = quantity
             # Get active batches that are allowed on app and have stock
+            from products.models import ProductBatch
             batches = product.batches.filter(
-                is_active=True, 
-                show_on_app=True, 
-                quantity__gt=0
-            ).order_by('price', 'created_at')
+                is_active=True,
+                show_on_app=True,
+                quantity__gt=0,
+            ).filter(ProductBatch.saleable_q()).order_by('price', 'created_at')
             
             for batch in batches:
                 if remaining <= 0: break
@@ -238,7 +267,12 @@ class AddToCartSerializer(serializers.Serializer):
             if remaining > 0:
                 # Fallback to FIFO or just the first available batch even if it's over its limit
                 # (The order validation will stop it later if track_inventory is ON)
-                batch = product.batches.filter(is_active=True).order_by('price').first()
+                batch = (
+                    product.batches.filter(is_active=True)
+                    .filter(ProductBatch.saleable_q())
+                    .order_by('price')
+                    .first()
+                )
                 last_item = cart.add_item(product, remaining, batch)
         else:
             # Standard single-price product
@@ -251,7 +285,9 @@ class AddToCartSerializer(serializers.Serializer):
             product=product,
             action='add',
             quantity=quantity,
-            price=last_item.unit_price if last_item else product.price
+            price=last_item.unit_price if last_item else resolve_channel_price(
+                product, CHANNEL_APP
+            )
         )
         
         return last_item

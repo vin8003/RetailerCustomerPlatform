@@ -5,6 +5,516 @@ from django.core.validators import RegexValidator
 from common.utils import generate_upload_path, resize_image
 
 
+class Organization(models.Model):
+    """
+    Tenant parent for shop locations (RetailerProfile).
+
+    v1 keeps a 1:1 org↔location mapping for existing kirana shops.
+    GSTIN, UPI, and receipt footer stay on RetailerProfile, not here.
+    Disabling (is_active=False) blocks new sessions without deleting history.
+    """
+    name = models.CharField(max_length=255)
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='owned_organizations',
+    )
+    is_active = models.BooleanField(
+        default=True,
+        help_text='When false, new sessions are blocked; history is retained.',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'organization'
+        indexes = [
+            models.Index(fields=['owner']),
+            models.Index(fields=['is_active']),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+class OrgRole(models.Model):
+    """
+    Named staff role within an Organization (OE-98 / F-0002).
+
+    Permissions are a list of catalog codes (see permissions_catalog).
+    Unknown codes are rejected on save by the API/serializers.
+    """
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='roles',
+    )
+    name = models.CharField(max_length=100)
+    slug = models.SlugField(max_length=50)
+    permissions = models.JSONField(
+        default=list,
+        help_text='List of permission catalog codes granted by this role.',
+    )
+    is_system = models.BooleanField(
+        default=False,
+        help_text='Bootstrap roles (admin/cashier) that cannot be deleted.',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'org_role'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['organization', 'slug'],
+                name='uniq_org_role_slug',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['organization']),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.organization_id})"
+
+
+class OrgStaffMembership(models.Model):
+    """
+    Binds an AUTH_USER_MODEL user to an Organization with a named role.
+
+    Staff identity is org-scoped. Cashiers are retailer-type users authenticated
+    with password/JWT — not customer OTP. See docs/requirements/shop-staff-roles.md.
+    """
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='staff_memberships',
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='org_staff_memberships',
+    )
+    role = models.ForeignKey(
+        OrgRole,
+        on_delete=models.PROTECT,
+        related_name='memberships',
+    )
+    is_active = models.BooleanField(default=True)
+    served_location_ids = models.JSONField(
+        default=list,
+        blank=True,
+        help_text=(
+            'RetailerProfile ids this staff member may operate on. '
+            'Empty on a multi-location org means no locations until assigned.'
+        ),
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'org_staff_membership'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['organization', 'user'],
+                name='uniq_org_staff_user',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['organization', 'is_active']),
+            models.Index(fields=['user']),
+        ]
+
+    def __str__(self):
+        return f"{self.user_id}@{self.organization_id}:{self.role.slug}"
+
+
+class OrgStaffRoleAudit(models.Model):
+    """
+    Audit row for every staff role grant / revoke / change (OE-98 security).
+    """
+    ACTION_GRANT = 'grant'
+    ACTION_REVOKE = 'revoke'
+    ACTION_CHANGE = 'change'
+    ACTION_CHOICES = [
+        (ACTION_GRANT, 'Grant'),
+        (ACTION_REVOKE, 'Revoke'),
+        (ACTION_CHANGE, 'Change'),
+    ]
+
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='staff_role_audits',
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='staff_role_audits_made',
+    )
+    target_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='staff_role_audits_received',
+    )
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    from_role = models.ForeignKey(
+        OrgRole,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='+',
+    )
+    to_role = models.ForeignKey(
+        OrgRole,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='+',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'org_staff_role_audit'
+        indexes = [
+            models.Index(fields=['organization', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.action} {self.target_user_id} @ {self.organization_id}"
+
+
+class OrgApiKey(models.Model):
+    """
+    Org-scoped partner API key (OE-182 / F-0006).
+
+    Only the hashed secret is stored. Revocation sets is_active=False and is
+    enforced on the next authenticated request (live DB check).
+    """
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='api_keys',
+    )
+    name = models.CharField(max_length=100)
+    prefix = models.CharField(
+        max_length=16,
+        unique=True,
+        help_text='Public key prefix used for lookup (not secret).',
+    )
+    key_hash = models.CharField(max_length=64)
+    scopes = models.JSONField(
+        default=list,
+        help_text='List of partner API scope codes granted to this key.',
+    )
+    is_active = models.BooleanField(default=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='org_api_keys_created',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'org_api_key'
+        indexes = [
+            models.Index(fields=['organization', 'is_active']),
+            models.Index(fields=['prefix']),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.prefix})"
+
+    def has_scope(self, scope_code):
+        return scope_code in (self.scopes or [])
+
+
+class OrgApiKeyAudit(models.Model):
+    """
+    Audit row for every partner API key grant / revoke / change (OE-182).
+    """
+    ACTION_GRANT = 'grant'
+    ACTION_REVOKE = 'revoke'
+    ACTION_CHANGE = 'change'
+    ACTION_CHOICES = [
+        (ACTION_GRANT, 'Grant'),
+        (ACTION_REVOKE, 'Revoke'),
+        (ACTION_CHANGE, 'Change'),
+    ]
+
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='api_key_audits',
+    )
+    api_key = models.ForeignKey(
+        OrgApiKey,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='audits',
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='org_api_key_audits_made',
+    )
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    key_prefix = models.CharField(max_length=16, blank=True)
+    scopes_before = models.JSONField(default=list, blank=True)
+    scopes_after = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'org_api_key_audit'
+        indexes = [
+            models.Index(fields=['organization', 'created_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.action} {self.key_prefix} @ {self.organization_id}"
+
+
+class ImmutableAuditError(Exception):
+    """Raised when code tries to change or delete an append-only audit row."""
+
+
+class AppendOnlyQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise ImmutableAuditError('Audit rows cannot be updated')
+
+    def delete(self):
+        raise ImmutableAuditError('Audit rows cannot be deleted')
+
+
+class OrgAuditLog(models.Model):
+    """
+    Immutable org-scoped audit row for sensitive shop mutations (OE-99 / F-0003).
+
+    Append-only: product APIs expose GET list only; no update/delete endpoints.
+    """
+    ACTION_CREATE = 'create'
+    ACTION_UPDATE = 'update'
+    ACTION_GRANT = 'grant'
+    ACTION_REVOKE = 'revoke'
+    ACTION_CHANGE = 'change'
+    ACTION_CHOICES = [
+        (ACTION_CREATE, 'Create'),
+        (ACTION_UPDATE, 'Update'),
+        (ACTION_GRANT, 'Grant'),
+        (ACTION_REVOKE, 'Revoke'),
+        (ACTION_CHANGE, 'Change'),
+    ]
+
+    OBJECT_ORGANIZATION = 'organization'
+    OBJECT_ORG_ROLE = 'org_role'
+    OBJECT_STAFF_MEMBERSHIP = 'staff_membership'
+    OBJECT_API_KEY = 'api_key'
+    OBJECT_MODULE_FLAGS = 'module_flags'
+    OBJECT_NOTIFICATION_CONFIG = 'notification_config'
+    OBJECT_CREDIT_OVERRIDE = 'credit_override'
+    OBJECT_CHANNEL_PRICE = 'channel_price'
+    OBJECT_PRODUCT_IMAGE = 'product_image'
+    OBJECT_SUPPLIER = 'supplier'
+    OBJECT_CUSTOMER_LOOKUP = 'customer_lookup'
+    OBJECT_STOCK_WRITE_OFF = 'stock_write_off'
+
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='audit_logs',
+    )
+    location = models.ForeignKey(
+        'RetailerProfile',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='audit_logs',
+        help_text='Shop location when the mutation is location-scoped; null for org-wide.',
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='org_audit_logs_made',
+    )
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    object_type = models.CharField(max_length=64)
+    object_id = models.CharField(max_length=64)
+    summary_before = models.JSONField(default=dict, blank=True)
+    summary_after = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'org_audit_log'
+        indexes = [
+            models.Index(fields=['organization', 'created_at']),
+            models.Index(fields=['organization', 'location', 'created_at']),
+            models.Index(fields=['organization', 'object_type', 'object_id']),
+        ]
+        ordering = ['-created_at']
+
+    objects = AppendOnlyQuerySet.as_manager()
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None and not self._state.adding:
+            raise ImmutableAuditError('Audit rows cannot be changed')
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ImmutableAuditError('Audit rows cannot be deleted')
+
+    def __str__(self):
+        return (
+            f"{self.action} {self.object_type}:{self.object_id} "
+            f"@ org {self.organization_id}"
+        )
+
+
+class OrgModuleFlags(models.Model):
+    """
+    Per-organization module enablement (OE-101 / F-0004).
+
+    One row per org. ``flags`` maps catalog module codes to booleans.
+    All modules default to enabled on bootstrap.
+    """
+    organization = models.OneToOneField(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='module_flags',
+    )
+    flags = models.JSONField(
+        default=dict,
+        help_text='Map of module catalog code -> enabled (bool).',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'org_module_flags'
+
+    def __str__(self):
+        return f"module_flags org={self.organization_id}"
+
+
+class OrgNotificationConfig(models.Model):
+    """
+    Per-organization notification preferences (OE-183 / F-0005).
+
+    Non-statutory types may be disabled. Channel overrides are optional.
+    """
+    organization = models.OneToOneField(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='notification_config',
+    )
+    default_channel = models.CharField(
+        max_length=16,
+        default='push',
+        help_text='Default channel when no per-type override is set.',
+    )
+    disabled_types = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='Non-statutory notification type codes disabled for this org.',
+    )
+    channel_overrides = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='Optional map of notification_type -> channel code.',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'org_notification_config'
+
+    def __str__(self):
+        return f"notification_config org={self.organization_id}"
+
+
+class OrgNotificationDelivery(models.Model):
+    """
+    Outbox / delivery log for org notifications (OE-183 / F-0005).
+
+    Failed sends retain last_error and support bounded retries.
+    """
+    STATUS_PENDING = 'pending'
+    STATUS_SENT = 'sent'
+    STATUS_FAILED = 'failed'
+    STATUS_CHOICES = [
+        (STATUS_PENDING, 'Pending'),
+        (STATUS_SENT, 'Sent'),
+        (STATUS_FAILED, 'Failed'),
+    ]
+
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name='notification_deliveries',
+    )
+    location = models.ForeignKey(
+        'RetailerProfile',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='notification_deliveries',
+    )
+    order = models.ForeignKey(
+        'orders.Order',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='notification_deliveries',
+    )
+    recipient_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='notification_deliveries_received',
+    )
+    notification_type = models.CharField(max_length=64)
+    event_name = models.CharField(max_length=64)
+    channel = models.CharField(max_length=16)
+    status = models.CharField(
+        max_length=16,
+        choices=STATUS_CHOICES,
+        default=STATUS_PENDING,
+    )
+    retry_count = models.PositiveSmallIntegerField(default=0)
+    last_error = models.TextField(blank=True, default='')
+    payload = models.JSONField(default=dict, blank=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'org_notification_delivery'
+        indexes = [
+            models.Index(fields=['organization', 'created_at']),
+            models.Index(fields=['organization', 'status']),
+            models.Index(fields=['order', 'notification_type']),
+        ]
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return (
+            f"{self.notification_type} via {self.channel} "
+            f"({self.status}) org={self.organization_id}"
+        )
+
+
 class RetailerProfileQuerySet(models.QuerySet):
     def public(self):
         """Retailers visible to customers: live and approved by a platform admin."""
@@ -13,12 +523,20 @@ class RetailerProfileQuerySet(models.QuerySet):
 
 class RetailerProfile(models.Model):
     """
-    Extended profile for retailer users
+    Extended profile for retailer users (operational shop / location record).
     """
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL, 
         on_delete=models.CASCADE, 
         related_name='retailer_profile'
+    )
+    organization = models.ForeignKey(
+        'Organization',
+        on_delete=models.PROTECT,
+        related_name='locations',
+        null=True,
+        blank=True,
+        help_text='Tenant parent. Implicit for existing single-shop tenants (1:1).',
     )
     shop_name = models.CharField(max_length=255)
     shop_description = models.TextField(blank=True)
@@ -71,6 +589,14 @@ class RetailerProfile(models.Model):
     minimum_order_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     delivery_charge = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     free_delivery_threshold = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    pickup_uncollected_hours = models.PositiveIntegerField(
+        default=48,
+        help_text='Hours after pickup-ready before uncollected orders expire and ATP is restored',
+    )
+    fulfillment_slot_capacity = models.PositiveIntegerField(
+        default=5,
+        help_text='Max orders per 30-minute pickup/delivery slot at this location',
+    )
     
     # Status and ratings
     VERIFICATION_STATUS_CHOICES = [
@@ -295,6 +821,10 @@ class RetailerRewardConfig(models.Model):
     max_reward_usage_percent = models.DecimalField(max_digits=5, decimal_places=2, default=50.0)
     max_reward_usage_flat = models.DecimalField(max_digits=10, decimal_places=2, default=500.0)
     conversion_rate = models.DecimalField(max_digits=10, decimal_places=2, default=1.0)
+    otp_required_for_redeem = models.BooleanField(
+        default=False,
+        help_text='When true, point burn requires a one-time code on the customer mobile.',
+    )
     
     # Referral settings
     is_referral_enabled = models.BooleanField(default=False)
@@ -344,6 +874,9 @@ class RetailerBlacklist(models.Model):
         return f"{self.customer.username} blacklisted by {self.retailer.shop_name}"
 
 
+UNIQ_ORG_SUPPLIER_GSTIN = 'uniq_org_supplier_nonblank_gstin'
+
+
 class Supplier(models.Model):
     """
     Distributor/Wholesaler for purchasing goods
@@ -353,10 +886,28 @@ class Supplier(models.Model):
         on_delete=models.CASCADE, 
         related_name='suppliers'
     )
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.PROTECT,
+        related_name='suppliers',
+        null=True,
+        blank=True,
+        help_text='Denormalized from retailer.organization for org-unique GSTIN.',
+    )
     company_name = models.CharField(max_length=255)
     contact_person = models.CharField(max_length=255, blank=True)
     phone_number = models.CharField(max_length=20, blank=True)
-    gst_number = models.CharField(max_length=15, blank=True)
+    email = models.EmailField(blank=True, default='', help_text='Optional supplier contact email (OE-337).')
+    gst_number = models.CharField(
+        max_length=15,
+        blank=True,
+        help_text='GSTIN. Optional. Non-blank values are unique per organization.',
+    )
+    payment_terms = models.CharField(
+        max_length=80,
+        blank=True,
+        help_text='Vendor payment terms (e.g. Net 30, COD). Changes require purchasing.terms.',
+    )
     address = models.TextField(blank=True)
     balance_due = models.DecimalField(max_digits=12, decimal_places=2, default=0.0)
     is_active = models.BooleanField(default=True)
@@ -367,7 +918,55 @@ class Supplier(models.Model):
         db_table = 'supplier'
         indexes = [
             models.Index(fields=['retailer', 'company_name']),
+            # Name pinned to migration 0027 so makemigrations stays clean.
+            models.Index(fields=['gst_number'], name='supplier_gst_num_8c1e4a_idx'),
         ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['organization', 'gst_number'],
+                condition=models.Q(organization__isnull=False) & ~models.Q(gst_number=''),
+                name=UNIQ_ORG_SUPPLIER_GSTIN,
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        before = (self.organization_id, self.gst_number, self.payment_terms)
+        if self.retailer_id:
+            retailer = getattr(self, 'retailer', None)
+            org_id = (
+                getattr(retailer, 'organization_id', None)
+                if retailer is not None
+                else None
+            )
+            if org_id is None:
+                org_id = (
+                    RetailerProfile.objects.filter(pk=self.retailer_id)
+                    .values_list('organization_id', flat=True)
+                    .first()
+                )
+            if org_id is not None:
+                self.organization_id = org_id
+        if self.gst_number is None:
+            self.gst_number = ''
+        else:
+            self.gst_number = str(self.gst_number).strip().upper()
+        if self.payment_terms is None:
+            self.payment_terms = ''
+        else:
+            self.payment_terms = str(self.payment_terms).strip()
+        update_fields = kwargs.get('update_fields')
+        if update_fields is not None:
+            # Only add the columns this save() actually normalised, so a narrow
+            # update_fields save does not rewrite unrelated values.
+            touched = set(update_fields)
+            if self.organization_id != before[0]:
+                touched.add('organization')
+            if self.gst_number != before[1]:
+                touched.add('gst_number')
+            if self.payment_terms != before[2]:
+                touched.add('payment_terms')
+            kwargs['update_fields'] = list(touched)
+        return super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.company_name} ({self.retailer.shop_name})"
@@ -414,6 +1013,16 @@ class RetailerCustomerMapping(models.Model):
     # Credit Management
     credit_limit = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
     current_balance = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'), help_text="Outstanding amount the customer owes to this retailer")
+    credit_due_days = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Days after outstanding opens before new credit sales lock. Null = no due-days lock.",
+    )
+    outstanding_since = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When running khata balance last became positive. Cleared when balance returns to zero.",
+    )
     
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -425,17 +1034,28 @@ class RetailerCustomerMapping(models.Model):
         amount: positive decimal
         """
         from django.db import transaction
+        from django.utils import timezone
         with transaction.atomic():
             # Refresh to get latest balance and lock the row
             mapping = RetailerCustomerMapping.objects.select_for_update().get(pk=self.pk)
-            
+            previous_balance = mapping.current_balance
+
             if transaction_type in ['SALE', 'ADJUSTMENT']:
                 mapping.current_balance += amount
             elif transaction_type in ['PAYMENT', 'RETURN']:
                 mapping.current_balance -= amount
-            
-            mapping.save(update_fields=['current_balance', 'updated_at'])
+
+            update_fields = ['current_balance', 'updated_at']
+            if previous_balance <= 0 and mapping.current_balance > 0:
+                mapping.outstanding_since = timezone.now()
+                update_fields.append('outstanding_since')
+            elif mapping.current_balance <= 0 and mapping.outstanding_since is not None:
+                mapping.outstanding_since = None
+                update_fields.append('outstanding_since')
+
+            mapping.save(update_fields=update_fields)
             self.current_balance = mapping.current_balance # Update local instance
+            self.outstanding_since = mapping.outstanding_since
             
             return CustomerLedger.objects.create(
                 mapping=mapping,

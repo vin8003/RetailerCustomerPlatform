@@ -1,9 +1,79 @@
 from django.contrib import admin
 from .models import (
-    RetailerProfile, RetailerOperatingHours, RetailerCategory,
+    Organization, RetailerProfile, RetailerOperatingHours, RetailerCategory,
     RetailerCategoryMapping, RetailerReview, RetailerRewardConfig,
-    RetailerBlacklist, Supplier, RetailerCustomerMapping, CustomerLedger
+    RetailerBlacklist, Supplier, RetailerCustomerMapping, CustomerLedger,
+    OrgRole, OrgStaffMembership, OrgStaffRoleAudit, OrgApiKey, OrgApiKeyAudit,
 )
+
+
+@admin.register(Organization)
+class OrganizationAdmin(admin.ModelAdmin):
+    """Admin for retailer tenant organizations (OE-97)."""
+    list_display = ['name', 'owner', 'is_active', 'created_at']
+    list_filter = ['is_active']
+    search_fields = ['name', 'owner__username', 'owner__email']
+    ordering = ['-created_at']
+    readonly_fields = ['created_at', 'updated_at']
+
+
+@admin.register(OrgRole)
+class OrgRoleAdmin(admin.ModelAdmin):
+    list_display = ['name', 'slug', 'organization', 'is_system', 'updated_at']
+    list_filter = ['is_system']
+    search_fields = ['name', 'slug', 'organization__name']
+    readonly_fields = ['created_at', 'updated_at']
+
+
+@admin.register(OrgStaffMembership)
+class OrgStaffMembershipAdmin(admin.ModelAdmin):
+    list_display = ['user', 'organization', 'role', 'is_active', 'updated_at']
+    list_filter = ['is_active']
+    search_fields = ['user__username', 'organization__name', 'role__slug']
+    readonly_fields = ['created_at', 'updated_at']
+
+
+@admin.register(OrgStaffRoleAudit)
+class OrgStaffRoleAuditAdmin(admin.ModelAdmin):
+    list_display = [
+        'organization', 'action', 'actor', 'target_user',
+        'from_role', 'to_role', 'created_at',
+    ]
+    list_filter = ['action']
+    search_fields = [
+        'organization__name', 'actor__username', 'target_user__username',
+    ]
+    readonly_fields = [
+        'organization', 'actor', 'target_user', 'action',
+        'from_role', 'to_role', 'created_at',
+    ]
+
+
+@admin.register(OrgApiKey)
+class OrgApiKeyAdmin(admin.ModelAdmin):
+    list_display = [
+        'name', 'prefix', 'organization', 'is_active',
+        'created_at', 'revoked_at', 'last_used_at',
+    ]
+    list_filter = ['is_active']
+    search_fields = ['name', 'prefix', 'organization__name']
+    readonly_fields = [
+        'prefix', 'key_hash', 'created_at', 'updated_at',
+        'last_used_at', 'revoked_at',
+    ]
+
+
+@admin.register(OrgApiKeyAudit)
+class OrgApiKeyAuditAdmin(admin.ModelAdmin):
+    list_display = [
+        'organization', 'action', 'key_prefix', 'actor', 'created_at',
+    ]
+    list_filter = ['action']
+    search_fields = ['organization__name', 'key_prefix', 'actor__username']
+    readonly_fields = [
+        'organization', 'api_key', 'actor', 'action', 'key_prefix',
+        'scopes_before', 'scopes_after', 'created_at',
+    ]
 
 
 @admin.register(RetailerProfile)
@@ -11,15 +81,15 @@ class RetailerProfileAdmin(admin.ModelAdmin):
     """
     Admin configuration for retailer profiles
     """
-    list_display = ['shop_name', 'user', 'city', 'state', 'verification_status', 'is_verified', 'is_active', 'average_rating', 'created_at']
+    list_display = ['shop_name', 'organization', 'user', 'city', 'state', 'verification_status', 'is_verified', 'is_active', 'average_rating', 'created_at']
     list_filter = ['verification_status', 'is_verified', 'is_active', 'city', 'state', 'offers_delivery', 'offers_pickup']
-    search_fields = ['shop_name', 'user__username', 'city', 'state', 'business_type']
+    search_fields = ['shop_name', 'user__username', 'city', 'state', 'business_type', 'organization__name']
     ordering = ['-created_at']
     readonly_fields = ['average_rating', 'total_ratings', 'created_at', 'updated_at']
     
     fieldsets = (
         ('Basic Information', {
-            'fields': ('user', 'shop_name', 'shop_description', 'shop_image')
+            'fields': ('user', 'organization', 'shop_name', 'shop_description', 'shop_image')
         }),
         ('Contact Information', {
             'fields': ('contact_email', 'contact_phone', 'whatsapp_number')
@@ -86,8 +156,8 @@ class RetailerReviewAdmin(admin.ModelAdmin):
 
 @admin.register(RetailerRewardConfig)
 class RetailerRewardConfigAdmin(admin.ModelAdmin):
-    list_display = ['retailer', 'earning_type', 'loyalty_earning_value', 'is_referral_enabled', 'is_active']
-    list_filter = ['earning_type', 'is_referral_enabled', 'is_active']
+    list_display = ['retailer', 'earning_type', 'loyalty_earning_value', 'otp_required_for_redeem', 'is_referral_enabled', 'is_active']
+    list_filter = ['earning_type', 'otp_required_for_redeem', 'is_referral_enabled', 'is_active']
     search_fields = ['retailer__shop_name']
 
 
@@ -100,14 +170,21 @@ class RetailerBlacklistAdmin(admin.ModelAdmin):
 
 @admin.register(Supplier)
 class SupplierAdmin(admin.ModelAdmin):
-    list_display = ['company_name', 'retailer', 'contact_person', 'phone_number', 'balance_due', 'is_active']
+    list_display = [
+        'company_name', 'retailer', 'contact_person', 'phone_number',
+        'gst_number', 'payment_terms', 'balance_due', 'is_active',
+    ]
     list_filter = ['is_active', 'created_at']
-    search_fields = ['company_name', 'contact_person', 'phone_number', 'retailer__shop_name']
+    search_fields = [
+        'company_name', 'contact_person', 'phone_number',
+        'gst_number', 'retailer__shop_name',
+    ]
+    readonly_fields = ['organization']
 
 
 @admin.register(RetailerCustomerMapping)
 class RetailerCustomerMappingAdmin(admin.ModelAdmin):
-    list_display = ['retailer', 'customer', 'nickname', 'customer_type', 'current_balance', 'credit_limit', 'total_orders', 'total_spent']
+    list_display = ['retailer', 'customer', 'nickname', 'customer_type', 'current_balance', 'credit_limit', 'credit_due_days', 'total_orders', 'total_spent']
     list_filter = ['customer_type', 'created_at']
     search_fields = ['retailer__shop_name', 'customer__username', 'customer__phone_number', 'nickname', 'tags']
     readonly_fields = ['total_orders', 'total_spent', 'last_order_date', 'created_at', 'updated_at']

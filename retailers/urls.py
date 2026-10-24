@@ -12,7 +12,100 @@ urlpatterns = [
     path('profile/update/', views.update_retailer_profile, name='update_retailer_profile'),
     path('operating-hours/', views.update_operating_hours, name='update_operating_hours'),
     path('reward-config/', views.manage_reward_configuration, name='manage_reward_configuration'),
-    
+
+    # Organization (tenant parent) — staff-admin writes (OE-97 / F-0001)
+    # Staff roles / RBAC (OE-98 / F-0002)
+    # Registered before <int:retailer_id>/ so "org" is not captured as an id.
+    path('org/', views.organization_me, name='organization_me'),
+    path('org/<int:org_id>/', views.organization_detail, name='organization_detail'),
+    path(
+        'org/<int:org_id>/permissions/',
+        views.organization_permission_catalog,
+        name='organization_permission_catalog',
+    ),
+    path(
+        'org/<int:org_id>/roles/',
+        views.organization_roles,
+        name='organization_roles',
+    ),
+    path(
+        'org/<int:org_id>/roles/<int:role_id>/',
+        views.organization_role_detail,
+        name='organization_role_detail',
+    ),
+    path(
+        'org/<int:org_id>/staff/',
+        views.organization_staff,
+        name='organization_staff',
+    ),
+    path(
+        'org/<int:org_id>/staff/<int:membership_id>/',
+        views.organization_staff_detail,
+        name='organization_staff_detail',
+    ),
+    # Partner API keys (OE-182 / F-0006) — JWT management; partners call /api/v1/partner/
+    path(
+        'org/<int:org_id>/api-scopes/',
+        views.organization_api_scope_catalog,
+        name='organization_api_scope_catalog',
+    ),
+    path(
+        'org/<int:org_id>/api-keys/',
+        views.organization_api_keys,
+        name='organization_api_keys',
+    ),
+    path(
+        'org/<int:org_id>/api-keys/<int:key_id>/',
+        views.organization_api_key_detail,
+        name='organization_api_key_detail',
+    ),
+    path(
+        'org/<int:org_id>/audit-log/',
+        views.organization_audit_log,
+        name='organization_audit_log',
+    ),
+    path(
+        'org/<int:org_id>/module-flags/catalog/',
+        views.organization_module_flags_catalog,
+        name='organization_module_flags_catalog',
+    ),
+    path(
+        'org/<int:org_id>/module-flags/',
+        views.organization_module_flags,
+        name='organization_module_flags',
+    ),
+    path(
+        'org/<int:org_id>/notifications/catalog/',
+        views.organization_notification_catalog,
+        name='organization_notification_catalog',
+    ),
+    path(
+        'org/<int:org_id>/notifications/config/',
+        views.organization_notification_config,
+        name='organization_notification_config',
+    ),
+    path(
+        'org/<int:org_id>/notifications/deliveries/',
+        views.organization_notification_deliveries,
+        name='organization_notification_deliveries',
+    ),
+    path(
+        'org/<int:org_id>/notifications/deliveries/<int:delivery_id>/retry/',
+        views.organization_notification_delivery_retry,
+        name='organization_notification_delivery_retry',
+    ),
+    path(
+        'org/<int:org_id>/notifications/blast/',
+        views.organization_notification_blast,
+        name='organization_notification_blast',
+    ),
+
+    path(
+        'org/<int:org_id>/fulfillment-slots/config/',
+        views.organization_fulfillment_slot_config,
+        name='organization_fulfillment_slot_config',
+    ),
+
     # Public retailer endpoints
     path('', views.list_retailers, name='list_retailers'),
     path('cities/', views.list_operational_cities, name='list_operational_cities'),
@@ -20,7 +113,12 @@ urlpatterns = [
     path('search/', views.search_retailers, name='search_retailers'),
     path('categories/', views.get_retailer_categories, name='get_retailer_categories'),
     path('<int:retailer_id>/', views.get_retailer_detail, name='get_retailer_detail'),
-    
+    path(
+        '<int:retailer_id>/fulfillment-slots/',
+        views.list_fulfillment_slots,
+        name='list_fulfillment_slots',
+    ),
+
     # Reviews
     path('<int:retailer_id>/reviews/', views.get_retailer_reviews, name='get_retailer_reviews'),
     path('<int:retailer_id>/reviews/create/', views.create_retailer_review, name='create_retailer_review'),

@@ -1,0 +1,95 @@
+"""
+Versioned shop staff permission catalog (OE-98 / F-0002 / S-0002A).
+
+Deny-by-default: only codes listed here may be stored on a role.
+Org owner always has every permission (implicit admin) until they delegate.
+"""
+
+PERMISSION_CATALOG_VERSION = 10
+
+# code -> human description
+PERMISSION_DEFINITIONS = {
+    'org.update': 'Update organization name and active flag',
+    'roles.manage': 'Create and edit named roles and their permission lists',
+    'staff.manage': 'Assign, change, and revoke staff memberships and roles',
+    'api_keys.manage': 'Create, list, and revoke org-scoped partner API keys',
+    'audit.read': 'Read immutable shop audit log entries for this organization',
+    'modules.manage': 'Enable or disable shop module flags for this organization',
+    'notifications.manage': 'Configure order notification preferences for this organization',
+    'notifications.blast': 'Send bulk order notifications to selected customers',
+    'orders.read': 'View orders for this organization',
+    'orders.create': 'Create orders from POS and staff APIs',
+    'orders.update': 'Update order status and retailer-side order mutations',
+    'orders.oversell': 'Complete a POS sale that takes stock below zero (allow_negative)',
+    'fulfillment.manage': 'Configure fulfillment slot capacity for shop locations',
+    'inventory.adjust': 'Hand-set on-hand quantity on product update or bulk update; change parent-child pack links on product create or update; set or change ProductBatch expiry_date on product update; post damage / expiry / spoilage write-off',
+    'catalog.price': 'Set or clear Product.app_price (owned-app list). Store price stays on existing product update. Echoing the current app_price does not require this permission.',
+    'catalog.image': 'Bulk-import and replace Product photos (zip or csv+files) for this shop. Unauthenticated callers cannot upload.',
+    'purchasing.terms': 'Set or change supplier payment terms. Echoing the current terms does not require this permission. Creating a supplier without terms is allowed.',
+    'purchasing.suppliers': 'Create, edit, deactivate and delete suppliers for this organization',
+    'purchasing.costs.read': 'View supplier purchase costs and margin figures',
+    'credit.manage': 'Change a customer credit limit or credit due days',
+    'credit.override': 'Complete a POS credit sale that is blocked by the credit limit or overdue lock',
+}
+
+ALL_PERMISSION_CODES = frozenset(PERMISSION_DEFINITIONS.keys())
+
+ROLE_SLUG_ADMIN = 'admin'
+ROLE_SLUG_CASHIER = 'cashier'
+
+# Bootstrap templates: admin gets everything; cashier gets none (deny-by-default).
+BOOTSTRAP_ROLES = (
+    {
+        'slug': ROLE_SLUG_ADMIN,
+        'name': 'Admin',
+        'permissions': sorted(ALL_PERMISSION_CODES),
+        'is_system': True,
+    },
+    {
+        'slug': ROLE_SLUG_CASHIER,
+        'name': 'Cashier',
+        # Order access (OE-131) is required for POS and the inbox; without it every
+        # existing cashier would be locked out when the orders permissions ship.
+        'permissions': ['orders.create', 'orders.read'],
+        'is_system': True,
+    },
+)
+
+
+def is_known_permission(code: str) -> bool:
+    return code in ALL_PERMISSION_CODES
+
+
+def validate_permission_codes(codes):
+    """
+    Return (normalized_list, unknown_list).
+
+    Normalized list is sorted unique known codes. Unknown codes are rejected
+    by callers on role save.
+    """
+    if codes is None:
+        return [], []
+    if not isinstance(codes, (list, tuple, set)):
+        raise TypeError('permissions must be a list of strings')
+    unknown = []
+    known = set()
+    for raw in codes:
+        if not isinstance(raw, str) or not raw:
+            unknown.append(raw)
+            continue
+        if raw in ALL_PERMISSION_CODES:
+            known.add(raw)
+        else:
+            unknown.append(raw)
+    return sorted(known), unknown
+
+
+def catalog_payload():
+    """API-friendly snapshot of the versioned catalog."""
+    return {
+        'version': PERMISSION_CATALOG_VERSION,
+        'permissions': [
+            {'code': code, 'description': desc}
+            for code, desc in sorted(PERMISSION_DEFINITIONS.items())
+        ],
+    }
