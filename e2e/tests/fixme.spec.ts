@@ -92,7 +92,7 @@ test('F6 an order and a khata entry made at 00:30 IST are dated that IST day (29
   djangoShell(
     'from datetime import datetime, timezone\nfrom orders.models import Order\nfrom retailers.models import CustomerLedger\n'
     + `Order.objects.filter(id=${order.id}).update(created_at=${STAMP})\n`
-    + `CustomerLedger.objects.filter(customer_id=${seed.customers.C1}, retailer__user__username='${R1.username}').update(created_at=${STAMP})\n`,
+    + `CustomerLedger.objects.filter(mapping__customer_id=${seed.customers.C1}, mapping__retailer__user__username='${R1.username}').update(created_at=${STAMP})\n`,
   );
 
   const body = JSON.stringify(await (await api.get(`orders/${order.id}/`, authed(token))).json());
@@ -110,7 +110,8 @@ test('F6 an order and a khata entry made at 00:30 IST are dated that IST day (29
   await retailer.goto(`${urls.retailer}/dashboard/orders/details?id=${order.id}`);
   await expect(retailer.getByText(/29 Oct|Oct 29/).first()).toBeVisible();
   await retailer.goto(`${urls.retailer}/dashboard/customers/details?id=${seed.customers.C1}`);
-  await expect(retailer.getByText(/29 Oct|Oct 29/).first()).toBeVisible();
+  await retailer.getByText('Khata / Ledger', { exact: true }).click();
+  await expect(retailer.getByRole('cell', { name: /^29 Oct 26/ })).toHaveCount(1);
 });
 
 /** YYYY-MM-DD of an API timestamp, read in IST. */
