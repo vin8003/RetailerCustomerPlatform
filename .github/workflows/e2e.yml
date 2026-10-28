@@ -1,0 +1,159 @@
+name: e2e
+
+# Playwright journeys (OE-367/368/369) against a throwaway local stack:
+# Postgres service + Django runserver + both Next.js apps in `next dev`.
+# Nothing here points at a live OrderEasy host; guard.spec.ts (G3) checks this file.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+    inputs:
+      retailer_ref:
+        description: retailer_ordereasy_njs ref to test (FE PRs pass their head ref)
+        type: string
+        default: main
+      customer_ref:
+        description: customer_ordereasy_njs ref to test (FE PRs pass their head ref)
+        type: string
+        default: main
+
+concurrency:
+  group: e2e-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: oe_e2e
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      DJANGO_SETTINGS_MODULE: ordering_platform.settings_e2e
+      DB_ENGINE: django.db.backends.postgresql
+      DB_NAME: oe_e2e
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_HOST: 127.0.0.1
+      DB_PORT: '5432'
+      E2E_API_ORIGIN: http://127.0.0.1:8100
+      E2E_API_URL: http://127.0.0.1:8100/api/
+      E2E_RETAILER_URL: http://127.0.0.1:4273
+      E2E_CUSTOMER_URL: http://127.0.0.1:4276
+      NEXT_PUBLIC_API_URL: http://127.0.0.1:8100/api/
+      NEXT_PUBLIC_RETAILER_PORTAL_URL: http://127.0.0.1:4273
+      # Dummy, non-secret Firebase config so the SDK initialises offline; Playwright aborts all Google traffic.
+      NEXT_PUBLIC_FIREBASE_API_KEY: AIzaSyE2E-dummy-key-not-real-000000000
+      NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: e2e-dummy.firebaseapp.com
+      NEXT_PUBLIC_FIREBASE_PROJECT_ID: e2e-dummy
+      NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: e2e-dummy.appspot.com
+      NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: '000000000000'
+      NEXT_PUBLIC_FIREBASE_APP_ID: '1:000000000000:web:e2e'
+      NEXT_PUBLIC_FIREBASE_VAPID_KEY: e2e-dummy
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - name: Checkout RetailerCustomerPlatform
+        uses: actions/checkout@v4
+        with:
+          repository: vin8003/RetailerCustomerPlatform
+          # Called from an FE repo: use RCP main. Run in RCP itself: use the commit under test.
+          ref: ${{ github.repository == 'vin8003/RetailerCustomerPlatform' && github.sha || 'main' }}
+          token: ${{ github.repository == 'vin8003/RetailerCustomerPlatform' && github.token || secrets.E2E_REPO_TOKEN }}
+          path: rcp
+
+      - name: Checkout retailer app
+        uses: actions/checkout@v4
+        with:
+          repository: vin8003/retailer_ordereasy_njs
+          ref: ${{ inputs.retailer_ref || 'main' }}
+          token: ${{ secrets.E2E_REPO_TOKEN || github.token }}
+          path: retailer
+
+      - name: Checkout customer app
+        uses: actions/checkout@v4
+        with:
+          repository: vin8003/customer_ordereasy_njs
+          ref: ${{ inputs.customer_ref || 'main' }}
+          token: ${{ secrets.E2E_REPO_TOKEN || github.token }}
+          path: customer
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: rcp/requirements.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install backend
+        working-directory: rcp
+        run: pip install -r requirements.txt
+
+      - name: Migrate and seed
+        working-directory: rcp
+        run: |
+          python manage.py migrate --noinput
+          python manage.py seed_e2e
+
+      - name: Start API on :8100
+        working-directory: rcp
+        run: nohup python manage.py runserver 127.0.0.1:8100 --noreload > ../api.log 2>&1 &
+
+      - name: Install and start retailer app on :4273 (next dev)
+        working-directory: retailer
+        run: |
+          npm ci
+          nohup npx next dev -p 4273 -H 127.0.0.1 > ../retailer.log 2>&1 &
+
+      - name: Install and start customer app on :4276 (next dev)
+        working-directory: customer
+        run: |
+          npm ci
+          nohup npx next dev -p 4276 -H 127.0.0.1 > ../customer.log 2>&1 &
+
+      - name: Install Playwright
+        working-directory: rcp/e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Wait for the stack
+        run: |
+          for url in http://127.0.0.1:8100/api/ http://127.0.0.1:4273/login http://127.0.0.1:4276/login; do
+            for i in $(seq 1 120); do
+              code=$(curl -s -o /dev/null -w '%{http_code}' "$url" || true)
+              if [ "$code" != "000" ] && [ "$code" -lt 500 ]; then echo "$url up ($code)"; break; fi
+              if [ "$i" = 120 ]; then echo "$url never came up"; exit 1; fi
+              sleep 5
+            done
+          done
+
+      - name: Playwright (chromium, headless)
+        working-directory: rcp/e2e
+        env:
+          CI: 'true'
+        run: npx playwright test
+
+      - name: Server logs
+        if: ${{ !cancelled() }}
+        run: tail -n 200 api.log retailer.log customer.log || true
+
+      - name: Upload Playwright report and traces
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            rcp/e2e/playwright-report/
+            rcp/e2e/test-results/
+          retention-days: 14
