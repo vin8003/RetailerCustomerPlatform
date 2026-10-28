@@ -1,6 +1,7 @@
 import { type Page } from '@playwright/test';
 import { test, expect, urls } from '../fixtures';
 import { getJson, khataBalance, retailerLogin, rupees } from '../helpers';
+import { R2 } from '../seed';
 
 async function openKhata(page: Page, customerId: number) {
   await page.goto(`${urls.retailer}/dashboard/customers/details?id=${customerId}`);
@@ -19,7 +20,7 @@ async function recordPayment(page: Page, amount: string) {
   return saved;
 }
 
-test.describe('Journey C - khata payments (C1 at R1, opening 500)', () => {
+test.describe('Journey C - khata payments (C1 at R1, opening 500)', { tag: ['@retailer', '@khata'] }, () => {
   test.beforeEach(async ({ page, seed }) => {
     await retailerLogin(page);
     await openKhata(page, seed.customers.C1);
@@ -35,7 +36,7 @@ test.describe('Journey C - khata payments (C1 at R1, opening 500)', () => {
     const ledger = await getJson(api, `customer/retailer/ledger/${seed.customers.C1}/`, r1);
     expect(ledger.results).toHaveLength(1);
     expect(Number(ledger.results[0].amount)).toBe(200);
-    expect(await khataBalance(api, await retailerToken('e2e_retailer2'), seed.customers.C1)).toBe(1000);
+    expect(await khataBalance(api, await retailerToken(R2.username), seed.customers.C1)).toBe(1000);
   });
 
   test('C2 pay full 500: outstanding 0, khata still visible', async ({ page }) => {
@@ -67,17 +68,21 @@ test.describe('Journey C - khata payments (C1 at R1, opening 500)', () => {
 
   test('C4 overpay 600: accepted means advance -100, rejected means 500 unchanged, never a 5xx', async ({ page, api, seed, retailerToken }) => {
     // CASES.md C4: QA does not pick the rule (reject vs advance), but the balance must match the answer.
+    const r1 = await retailerToken();
+    const ledgerRows = async () => (await getJson(api, `customer/retailer/ledger/${seed.customers.C1}/`, r1)).results.length;
+    const rowsBefore = await ledgerRows();
     const response = await recordPayment(page, '600');
     const status = response.status();
-    const balance = await khataBalance(api, await retailerToken(), seed.customers.C1);
+    const balance = await khataBalance(api, r1, seed.customers.C1);
     test.info().annotations.push({ type: 'current-behaviour', description: `overpay 600 on 500: HTTP ${status}, balance now ${balance}` });
     expect(status, 'overpay must never be a 5xx').toBeLessThan(500);
     expect(balance).toBe(status < 300 ? -100 : 500);
+    if (status >= 400) expect(await ledgerRows(), 'a rejected overpay writes no ledger row').toBe(rowsBefore);
   });
 });
 
-test('C5 regression (OE-61): R2 view of C1 shows 1000 with credit_limit 0, no R1 numbers', async ({ page, seed }) => {
-  await retailerLogin(page, 'e2e_retailer2');
+test('C5 regression (OE-61): R2 view of C1 shows 1000 with credit_limit 0, no R1 numbers @retailer @khata', async ({ page, seed }) => {
+  await retailerLogin(page, R2.username);
   await openKhata(page, seed.customers.C1);
   await expect.poll(() => balanceOnScreen(page)).toBe(1000);
   expect(rupees(await page.getByTestId('customer-credit-limit').textContent())).toBe(0);

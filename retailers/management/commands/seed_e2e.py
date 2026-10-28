@@ -8,6 +8,7 @@ Refuses to run unless the database host is local or a CI service container.
 """
 import json
 import os
+from pathlib import Path
 from datetime import time
 from decimal import Decimal
 
@@ -26,38 +27,21 @@ from retailers.organization import ensure_organization_for_profile
 
 ALLOWED_DB_HOSTS = {'localhost', '127.0.0.1', '::1', 'postgres'}
 
-DEFAULT_PASSWORD = 'E2e-Pass-123!'
+# Names, phones, barcodes, prices and khata live in e2e/seed-data.json, shared with the specs.
+SEED_DATA = json.loads((Path(settings.BASE_DIR) / 'e2e' / 'seed-data.json').read_text())
+DEFAULT_PASSWORD = SEED_DATA['password']
 
 SHOP_LATITUDE = Decimal('28.61390000')
 SHOP_LONGITUDE = Decimal('77.20900000')
 
-RETAILERS = [
-    # key, username, shop_name, phone
-    ('R1', 'e2e_retailer', 'E2E Kirana', '+919100000001'),
-    ('R2', 'e2e_retailer2', 'E2E Second Shop', '+919100000002'),
-]
-
-CUSTOMERS = [
-    # key, username, first_name, phone
-    ('C1', 'e2e_khata_cust', 'E2E Khata Cust', '+919000000001'),
-    ('C2', 'e2e_app_cust', 'E2E App Cust', '+919000000002'),
-]
-
-PRODUCTS = [
-    # key, name, barcode, price
-    ('P1', 'Atta 5kg', '8900000000011', Decimal('250.00')),
-    ('P2', 'Toor Dal 1kg', '8900000000028', Decimal('140.00')),
-    ('P3', 'Sunflower Oil 1L', '8900000000035', Decimal('165.00')),
-    ('P4', 'Biscuit pack', '8900000000042', Decimal('30.00')),
-    ('P5', 'Ghee 500g', '8900000000059', Decimal('100.00')),
+RETAILERS = [(key, r['username'], r['shop_name'], r['phone']) for key, r in SEED_DATA['retailers'].items()]
+CUSTOMERS = [(key, c['username'], c['first_name'], c['phone']) for key, c in SEED_DATA['customers'].items()]
+PRODUCTS = [(key, p['name'], p['barcode'], Decimal(p['price'])) for key, p in SEED_DATA['products'].items()]
+KHATA = [
+    (k['customer'], k['retailer'], Decimal(k['credit_limit']), Decimal(k['balance'])) for k in SEED_DATA['khata']
 ]
 PRODUCT_STOCK = Decimal('100')
 
-KHATA = [
-    # customer key, retailer key, credit_limit, current_balance
-    ('C1', 'R1', Decimal('5000.00'), Decimal('500.00')),
-    ('C1', 'R2', Decimal('0.00'), Decimal('1000.00')),
-]
 
 DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
 # SL1: every day 10:00-12:00 IST, so "next day 10:00-12:00" always exists.

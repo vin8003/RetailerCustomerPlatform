@@ -1,8 +1,8 @@
 import { type Page } from '@playwright/test';
 import { test, expect, urls } from '../fixtures';
 import { addToCart, customerLogin, customerToken, customerUseSeedCity, placeCodOrder, retailerLogin, sl1 } from '../helpers';
+import { C2_MOBILE as C2_PHONE } from '../seed';
 
-const C2_PHONE = '9000000002';
 
 /** Replace every created_at in the order-history response with `iso`: the order is placed "now" on the pinned clock. */
 async function pinOrderCreatedAt(page: Page, iso: string) {
@@ -22,7 +22,7 @@ async function pinOrderCreatedAt(page: Page, iso: string) {
   });
 }
 
-test('T1 order date flips 28 Oct → 29 Oct exactly at IST midnight @T1', async ({ page, api, seed }) => {
+test('T1 order date flips 28 Oct → 29 Oct exactly at IST midnight @T1 @customer @orders', async ({ page, api, seed }) => {
   const token = await customerToken(api, C2_PHONE);
   await addToCart(api, token, seed.products.P4, 1);
   await placeCodOrder(api, token, seed.retailers.R1, seed.c2_address);
@@ -43,7 +43,7 @@ test('T1 order date flips 28 Oct → 29 Oct exactly at IST midnight @T1', async 
   await expect(page.getByTestId('order-card').first()).toContainText('29 Oct 2026');
 });
 
-test('T2 next-day slot shows the correct IST date on both apps at 23:59:30 IST @T2', async ({ page, context, api, seed }) => {
+test('T2 next-day slot shows the correct IST date on both apps at 23:59:30 IST @T2 @customer @retailer @orders', async ({ page, context, api, seed }) => {
   // Pin both apps to 23:59:30 IST today: the browser clock is 30s from the IST date change.
   // 'today' is read once; the pin, the expected labels and the booked slot all derive from it,
   // so a run that crosses real IST midnight still books and checks the same day.

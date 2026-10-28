@@ -1,11 +1,11 @@
 import { type Page } from '@playwright/test';
 import { test, expect, urls } from '../fixtures';
 import { sl1, customerLogin, customerUseSeedCity, getJson, retailerLogin } from '../helpers';
+import { C2_MOBILE as C2_PHONE, PRODUCT, R1 } from '../seed';
 
 // Journey B: C2 orders P3 x2 + P4 x1 = ₹360.00 (COD, SL1) from R1; R1 walks it to delivered.
 // SL1 is the 10:00–12:00 IST window; the platform books it as 30-minute slots, so we book 10:00–10:30 next day.
 
-const C2_PHONE = '9000000002';
 const RAW_ENUM = /[a-z]+_[a-z_]+|[A-Z]+_[A-Z_]+/;
 
 /** SL1 = tomorrow (IST) 10:00. Labels are built the way each app formats them. */
@@ -13,7 +13,7 @@ async function placeOrder(page: Page, p3: number, p4: number, addressId: number)
   await customerUseSeedCity(page);
   await customerLogin(page, C2_PHONE);
   await page.goto(`${urls.customer}/retailers`);
-  await page.getByText('E2E Kirana').first().click();
+  await page.getByText(R1.shop_name).first().click();
   await page.waitForURL('**/retailer?id=*');
 
   await page.getByTestId(`add-to-cart-${p3}`).first().click();
@@ -59,14 +59,14 @@ async function expectRetailerView(page: Page, orderId: number) {
   await page.goto(`${urls.retailer}/dashboard/orders/details?id=${orderId}`);
   await expect(page.getByTestId('order-total')).toHaveText('₹360.00');
   await expect(page.getByTestId('order-slot')).toHaveText(sl1().retailerLabel);
-  await expect(page.getByText('Sunflower Oil 1L').filter({ visible: true }).first()).toBeVisible();
-  await expect(page.getByText('Biscuit pack').filter({ visible: true }).first()).toBeVisible();
+  await expect(page.getByText(PRODUCT.P3.name).filter({ visible: true }).first()).toBeVisible();
+  await expect(page.getByText(PRODUCT.P4.name).filter({ visible: true }).first()).toBeVisible();
 }
 
-test('B1–B4 customer order walks pending → confirmed → packed → out for delivery → delivered @B1 @B2 @B3 @B4', async ({ context, seed, api, retailerToken }) => {
+test('B1–B4 customer order walks pending → confirmed → packed → out for delivery → delivered @B1 @B2 @B3 @B4 @customer @retailer @orders', async ({ context, seed, api, retailerToken }) => {
   const customer = await context.newPage();
   const retailer = await context.newPage();
-  const token = await retailerToken('e2e_retailer');
+  const token = await retailerToken(R1.username);
 
   let orderId = 0;
   await test.step('B1 place order', async () => {

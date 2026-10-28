@@ -5,7 +5,7 @@ import { ALL_URLS } from '../env';
 import { guardDecision, LIVE_HOST } from '../fixtures';
 import config from '../playwright.config';
 
-test('G1 guard aborts any *.ordereasy.win request and names the URL @G1', async () => {
+test('G1 guard aborts any *.ordereasy.win request and names the URL @G1 @core', async () => {
   const hits: string[] = [];
   for (const url of [
     'https://retailer.ordereasy.win/login',
@@ -24,7 +24,7 @@ test('G1 guard aborts any *.ordereasy.win request and names the URL @G1', async 
   expect(other).toHaveLength(0);
 });
 
-test('G1 page and API contexts record and block .win requests @G1', async ({ page, api, liveHits }) => {
+test('G1 page and API contexts record and block .win requests @G1 @core', async ({ page, api, liveHits }) => {
   const pageUrl = 'https://customer.ordereasy.win/';
   const pageError = await page.goto(pageUrl).then(() => null, (e: Error) => e);
   expect(pageError?.message).toContain('ERR_BLOCKED_BY_CLIENT');
@@ -38,12 +38,12 @@ test('G1 page and API contexts record and block .win requests @G1', async ({ pag
   liveHits.length = 0;
 });
 
-test('G2 guard self-test: a .win request fails the test (expected to fail) @G2', async ({ page }) => {
+test('G2 guard self-test: a .win request fails the test (expected to fail) @G2 @core', async ({ page }) => {
   test.fail(true, 'Proves the guard fails a run; the request is aborted inside the route handler, never sent.');
   await page.goto('https://retailer.ordereasy.win/').catch(() => undefined);
 });
 
-test('G3 config and env point only at local hosts; CI workflow has no .win @G3', async () => {
+test('G3 config and env point only at local hosts; CI workflow has no .win @G3 @core', async () => {
   const configured = [config.use?.baseURL, ...Object.values(ALL_URLS)].filter(Boolean) as string[];
   for (const url of configured) {
     expect(new URL(url).hostname, url).not.toMatch(LIVE_HOST);

@@ -1,20 +1,21 @@
 import { type Page } from '@playwright/test';
 import { expect, urls } from './fixtures';
 import { rupees } from './helpers';
+import { PRODUCT } from './seed';
 
 export const BARCODE = {
-  P1: '8900000000011',
-  P2: '8900000000028',
-  P3: '8900000000035',
-  P4: '8900000000042',
-  P5: '8900000000059',
+  P1: PRODUCT.P1.barcode,
+  P2: PRODUCT.P2.barcode,
+  P3: PRODUCT.P3.barcode,
+  P4: PRODUCT.P4.barcode,
+  P5: PRODUCT.P5.barcode,
   UNKNOWN: '8900000000999',
 };
 
 export async function openPos(page: Page) {
   await page.goto(`${urls.retailer}/dashboard/pos`);
   // Products are loaded once the seeded items render in the grid.
-  await expect(page.getByText('Atta 5kg').first()).toBeVisible();
+  await expect(page.getByText(PRODUCT.P1.name).first()).toBeVisible();
 }
 
 export async function scan(page: Page, barcode: string) {

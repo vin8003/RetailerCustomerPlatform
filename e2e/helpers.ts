@@ -2,8 +2,9 @@ import { type APIRequestContext, type Page, type Response } from '@playwright/te
 import { execSync } from 'node:child_process';
 import { expect, urls } from './fixtures';
 import { MANAGE_CMD, PASSWORD } from './env';
+import { R1 } from './seed';
 
-export async function retailerLogin(page: Page, username = 'e2e_retailer') {
+export async function retailerLogin(page: Page, username = R1.username) {
   await page.goto(`${urls.retailer}/login`);
   await page.getByTestId('login-username').fill(username);
   await page.getByTestId('login-password').fill(PASSWORD);

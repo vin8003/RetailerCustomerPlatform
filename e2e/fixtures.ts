@@ -1,6 +1,7 @@
 import { execSync } from 'node:child_process';
 import { test as base, expect, type APIRequestContext, type BrowserContext } from '@playwright/test';
 import { API_URL, PASSWORD, RETAILER_URL, CUSTOMER_URL, SEED_CMD } from './env';
+import { R1 } from './seed';
 
 /** Live OrderEasy hosts. Any request to one fails the test (G1). */
 export const LIVE_HOST = /(^|\.)ordereasy\.win$/i;
@@ -94,7 +95,7 @@ export const test = base.extend<Fixtures>({
   },
 
   retailerToken: async ({ api }, use) => {
-    await use(async (username = 'e2e_retailer') => {
+    await use(async (username = R1.username) => {
       const response = await api.post('auth/retailer/login/', { data: { username, password: PASSWORD } });
       expect(response.status(), await response.text()).toBe(200);
       const body = await response.json();

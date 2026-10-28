@@ -2,13 +2,21 @@ name: e2e
 
 # Playwright journeys (OE-367/368/369) against a throwaway local stack:
 # Postgres service + Django runserver + both Next.js apps in `next dev`.
+# (Not `next build`: both apps' production builds hard-wire the live API host and ignore NEXT_PUBLIC_API_URL.)
 # Nothing here points at a live OrderEasy host; guard.spec.ts (G3) checks this file.
+# Full suite on push to main and nightly; PRs run only the areas they touch (see "Pick test areas").
 on:
   pull_request:
   push:
     branches: [main]
+  schedule:
+    - cron: '30 21 * * *' # 03:00 IST
   workflow_call:
     inputs:
+      area:
+        description: test area tag(s) to run, e.g. retailer or customer (FE PRs pass their app); empty = full suite
+        type: string
+        default: ''
       retailer_ref:
         description: retailer_ordereasy_njs ref to test (FE PRs pass their head ref)
         type: string
@@ -128,6 +136,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: npm
+          cache-dependency-path: |
+            retailer/package-lock.json
+            customer/package-lock.json
+            rcp/e2e/package-lock.json
 
       - name: Install backend
         working-directory: rcp
@@ -172,11 +185,40 @@ jobs:
             done
           done
 
+      # PR scope: FE callers pass `area`; RCP PRs map changed paths to tags. Anything else
+      # (seed, settings, workflow, shared helpers, unmapped): full suite. @core (guard + seed) always runs.
+      - name: Pick test areas
+        id: areas
+        working-directory: rcp
+        env:
+          AREA_INPUT: ${{ inputs.area }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          tags="$AREA_INPUT"
+          if [ -z "$tags" ] && [ "$GITHUB_EVENT_NAME" = pull_request ] && [ "$GITHUB_REPOSITORY" = vin8003/RetailerCustomerPlatform ]; then
+            git fetch --no-tags --depth=1 "https://github.com/$GITHUB_REPOSITORY.git" "$BASE_SHA"
+            tags=core
+            for path in $(git diff --name-only "$BASE_SHA" HEAD); do
+              case "$path" in
+                e2e/tests/pos.spec.ts|e2e/pos.ts) tags="$tags pos" ;;
+                e2e/tests/khata.spec.ts) tags="$tags khata" ;;
+                e2e/tests/order.spec.ts|e2e/tests/time.spec.ts|orders/*) tags="$tags orders" ;;
+                e2e/tests/fixme.spec.ts|offers/*|cart/*) tags="$tags offers" ;;
+                e2e/tests/guard.spec.ts|e2e/tests/seed.spec.ts|*.md|docs/*) ;;
+                *) tags=""; break ;; # full suite
+              esac
+            done
+          fi
+          grep=""
+          for t in $tags; do grep="${grep:-@core}|@${t#@}"; done
+          echo "grep=$grep" | tee -a "$GITHUB_OUTPUT"
+
       - name: Playwright (chromium, headless)
         working-directory: rcp/e2e
         env:
           CI: 'true'
-        run: npx playwright test
+          GREP: ${{ steps.areas.outputs.grep }}
+        run: npx playwright test ${GREP:+--grep "$GREP"}
 
       - name: Server logs
         if: ${{ !cancelled() }}

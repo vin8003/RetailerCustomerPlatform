@@ -1,10 +1,10 @@
 import { test, expect } from '../fixtures';
 import { getJson, khataBalance, posCheckoutResponse, productStock, retailerLogin } from '../helpers';
 import { BARCODE, attachCustomer, openPos, scan, scanCommonCart } from '../pos';
+import { C1_MOBILE, R2 } from '../seed';
 
-const C1_MOBILE = '9000000001';
 
-test.describe('Journey A - retailer POS bill (R1)', () => {
+test.describe('Journey A - retailer POS bill (R1)', { tag: ['@retailer', '@pos', '@khata'] }, () => {
   test.beforeEach(async ({ page }) => {
     await retailerLogin(page);
     await openPos(page);
@@ -45,7 +45,7 @@ test.describe('Journey A - retailer POS bill (R1)', () => {
 
     const r1 = await retailerToken();
     expect(await khataBalance(api, r1, seed.customers.C1)).toBe(1120);
-    expect(await khataBalance(api, await retailerToken('e2e_retailer2'), seed.customers.C1)).toBe(1000);
+    expect(await khataBalance(api, await retailerToken(R2.username), seed.customers.C1)).toBe(1000);
     const ledger = await getJson(api, `customer/retailer/ledger/${seed.customers.C1}/`, r1);
     expect(ledger.results).toHaveLength(1);
     expect(Number(ledger.results[0].amount)).toBe(620);
@@ -81,7 +81,7 @@ test.describe('Journey A - retailer POS bill (R1)', () => {
     expect(Number(saved.upi_amount)).toBe(300);
     expect(Number(saved.credit_amount)).toBe(320);
     expect(await khataBalance(api, r1, seed.customers.C1)).toBe(820);
-    expect(await khataBalance(api, await retailerToken('e2e_retailer2'), seed.customers.C1)).toBe(1000);
+    expect(await khataBalance(api, await retailerToken(R2.username), seed.customers.C1)).toBe(1000);
   });
 
   test('A4 unknown barcode shows not-found, cart unchanged', async ({ page }) => {
