@@ -51,3 +51,8 @@ Deviation: SL1 is "next day 10:00–12:00"; the API offers it as 30-minute slots
 
 ## Test ids
 See [TESTIDS.md](TESTIDS.md). Ids are attributes only.
+
+## CI: which FE code is tested
+- **RCP pull_request:** for each FE repo, CI checks out the branch with the same name as the RCP PR head branch if one exists, otherwise `main`. For paired changes, use the same branch name in all three repos (for example `e2e/pr1-suite`). The "Pick FE refs" step logs the refs it picked.
+- **FE-repo PRs** (via `workflow_call`): CI uses the FE PR head that was passed in, and `main` for the other FE repo.
+- **Push to main:** CI uses both FE `main` branches.

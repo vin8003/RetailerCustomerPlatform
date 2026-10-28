@@ -12,11 +12,11 @@ on:
       retailer_ref:
         description: retailer_ordereasy_njs ref to test (FE PRs pass their head ref)
         type: string
-        default: main
+        default: ''
       customer_ref:
         description: customer_ordereasy_njs ref to test (FE PRs pass their head ref)
         type: string
-        default: main
+        default: ''
 
 concurrency:
   group: e2e-${{ github.repository }}-${{ github.ref }}
@@ -69,11 +69,31 @@ jobs:
           token: ${{ github.repository == 'vin8003/RetailerCustomerPlatform' && github.token || secrets.E2E_REPO_TOKEN }}
           path: rcp
 
+      # Paired PRs: on an RCP pull_request, use the FE branch with the same name as the RCP head branch
+      # if it exists, else main. workflow_call inputs (FE-repo PRs) always win.
+      - name: Pick FE refs (same-named branch, else main)
+        id: fe
+        env:
+          HEAD_BRANCH: ${{ github.head_ref }}
+          RETAILER_INPUT: ${{ inputs.retailer_ref }}
+          CUSTOMER_INPUT: ${{ inputs.customer_ref }}
+        run: |
+          pick() {
+            if [ -n "$2" ]; then echo "$2"; return; fi
+            if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ -n "$HEAD_BRANCH" ] \
+               && git ls-remote --exit-code --heads "https://github.com/vin8003/$1.git" "$HEAD_BRANCH" > /dev/null; then
+              echo "$HEAD_BRANCH"; return
+            fi
+            echo main
+          }
+          echo "retailer=$(pick retailer_ordereasy_njs "$RETAILER_INPUT")" | tee -a "$GITHUB_OUTPUT"
+          echo "customer=$(pick customer_ordereasy_njs "$CUSTOMER_INPUT")" | tee -a "$GITHUB_OUTPUT"
+
       - name: Checkout retailer app
         uses: actions/checkout@v4
         with:
           repository: vin8003/retailer_ordereasy_njs
-          ref: ${{ inputs.retailer_ref || 'main' }}
+          ref: ${{ steps.fe.outputs.retailer }}
           token: ${{ secrets.E2E_REPO_TOKEN || github.token }}
           path: retailer
 
@@ -81,7 +101,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: vin8003/customer_ordereasy_njs
-          ref: ${{ inputs.customer_ref || 'main' }}
+          ref: ${{ steps.fe.outputs.customer }}
           token: ${{ secrets.E2E_REPO_TOKEN || github.token }}
           path: customer
 
