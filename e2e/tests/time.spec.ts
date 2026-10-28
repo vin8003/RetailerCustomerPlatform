@@ -45,15 +45,16 @@ test('T1 order date flips 28 Oct → 29 Oct exactly at IST midnight @T1', async 
 
 test('T2 next-day slot shows the correct IST date on both apps at 23:59:30 IST @T2', async ({ page, context, api, seed }) => {
   // Pin both apps to 23:59:30 IST today: the browser clock is 30s from the IST date change.
+  // 'today' is read once; the pin, the expected labels and the booked slot all derive from it,
+  // so a run that crosses real IST midnight still books and checks the same day.
   const todayIst = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
   const pinned = new Date(`${todayIst}T23:59:30+05:30`);
-  const slot = sl1(); // computed from the real clock, which is the server's view of "tomorrow"
-  expect(sl1(pinned.getTime()).start, 'pinned and real clocks agree on the IST date').toBe(slot.start);
+  const slot = sl1(pinned.getTime());
   await context.clock.setFixedTime(pinned);
 
   const token = await customerToken(api, C2_PHONE);
   await addToCart(api, token, seed.products.P4, 1);
-  const order = await placeCodOrder(api, token, seed.retailers.R1, seed.c2_address);
+  const order = await placeCodOrder(api, token, seed.retailers.R1, seed.c2_address, slot.start);
 
   await customerUseSeedCity(page);
   await customerLogin(page, C2_PHONE);

@@ -32,7 +32,7 @@ NEXT_PUBLIC_API_URL=http://127.0.0.1:8100/api/ NEXT_PUBLIC_RETAILER_PORTAL_URL=h
 cd e2e && npm ci && npx playwright install chromium
 npx playwright test            # headless; every test reseeds (one worker)
 npx playwright test --list     # every CASES.md id
-E2E_RUN_FIXME=1 npx playwright test tests/fixme.spec.ts   # check whether F1–F8 bugs are still there
+E2E_RUN_FIXME=1 npx playwright test tests/fixme.spec.ts   # check whether F1–F9 bugs are still there
 ```
 Override hosts with `E2E_API_URL`, `E2E_RETAILER_URL`, `E2E_CUSTOMER_URL`; the manage command with `E2E_MANAGE_CMD`.
 
@@ -42,7 +42,7 @@ Override hosts with `E2E_API_URL`, `E2E_RETAILER_URL`, `E2E_CUSTOMER_URL`; the m
 | A1–A6 POS bills | `tests/pos.spec.ts` |
 | B1–B4 customer order lifecycle (+ filters/detail regression) | `tests/order.spec.ts` |
 | C1–C5 khata payments | `tests/khata.spec.ts` |
-| F1–F8 known bugs (`test.fixme` + `bug` annotation, assert correct values) | `tests/fixme.spec.ts` |
+| F1–F9 known bugs (`test.fixme` + `bug` annotation, assert correct values) | `tests/fixme.spec.ts` |
 | G1–G3 network guard | `tests/guard.spec.ts` (G2 is `test.fail` by design) |
 | T1–T2 IST midnight | `tests/time.spec.ts` |
 | S1 seed idempotent / refuses remote DB | `tests/seed.spec.ts` + `retailers/tests/test_seed_e2e.py` |

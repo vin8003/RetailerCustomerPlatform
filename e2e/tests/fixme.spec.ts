@@ -1,5 +1,5 @@
 /**
- * F1–F8: known product bugs (CASES.md §4). Each asserts the CORRECT value and is marked
+ * F1–F8: known product bugs (CASES.md §4); F9: Confirmed → Packed 400 (review). Each asserts the CORRECT value and is marked
  * test.fixme with a bug annotation, so the suite stays green until the fix lands.
  * When a bug is fixed, drop the fixme and the test becomes a regression guard.
  * E2E_RUN_FIXME=1 runs them anyway (to confirm a bug is still there, or is gone).
@@ -134,4 +134,20 @@ fixme('F8 offer and coupon discounts each show once in the cart @F8',
     await page.goto(`${urls.customer}/cart`);
     await expect(page.getByText('-₹30.00', { exact: true })).toHaveCount(1);
     await expect(page.getByText('-₹50.00', { exact: true })).toHaveCount(1); // total savings = 20 + 30, once
+  });
+
+fixme('F9 Packed straight from Confirmed (offered by the UI) is accepted, not a 400 @F9',
+  known('The retailer UI offers Confirmed → Packed but the API rejects it with 400; B3 goes via Processing'),
+  async ({ page, api, seed }) => {
+    const token = await customerToken(api, C2_PHONE);
+    await addToCart(api, token, seed.products.P4, 1);
+    const order = await placeCodOrder(api, token, seed.retailers.R1, seed.c2_address);
+
+    await retailerLogin(page);
+    await page.goto(`${urls.retailer}/dashboard/orders/details?id=${order.id}`);
+    await page.getByTestId('order-status-next-confirmed').click();
+    await page.getByTestId('order-confirm-submit').click();
+    await expect(page.getByTestId('order-status')).toHaveText('CONFIRMED');
+    await page.getByTestId('order-status-next-packed').click();
+    await expect(page.getByTestId('order-status')).toHaveText('PACKED');
   });

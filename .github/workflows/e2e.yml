@@ -17,6 +17,13 @@ on:
         description: customer_ordereasy_njs ref to test (FE PRs pass their head ref)
         type: string
         default: ''
+    secrets:
+      E2E_REPO_TOKEN:
+        description: optional read token for the app repos (only needed if they are private)
+        required: false
+
+permissions:
+  contents: read
 
 concurrency:
   group: e2e-${{ github.repository }}-${{ github.ref }}
@@ -68,6 +75,7 @@ jobs:
           ref: ${{ github.repository == 'vin8003/RetailerCustomerPlatform' && github.sha || 'main' }}
           token: ${{ github.repository == 'vin8003/RetailerCustomerPlatform' && github.token || secrets.E2E_REPO_TOKEN }}
           path: rcp
+          persist-credentials: false
 
       # Paired PRs: on an RCP pull_request, use the FE branch with the same name as the RCP head branch
       # if it exists, else main. workflow_call inputs (FE-repo PRs) always win.
@@ -96,6 +104,7 @@ jobs:
           ref: ${{ steps.fe.outputs.retailer }}
           token: ${{ secrets.E2E_REPO_TOKEN || github.token }}
           path: retailer
+          persist-credentials: false
 
       - name: Checkout customer app
         uses: actions/checkout@v4
@@ -104,6 +113,7 @@ jobs:
           ref: ${{ steps.fe.outputs.customer }}
           token: ${{ secrets.E2E_REPO_TOKEN || github.token }}
           path: customer
+          persist-credentials: false
 
       - uses: actions/setup-python@v5
         with:

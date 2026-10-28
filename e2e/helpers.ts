@@ -85,10 +85,12 @@ export function sl1(now = Date.now()) {
 }
 
 /** Place a COD delivery order for whatever is in the customer's cart at that retailer, in the SL1 slot. */
-export async function placeCodOrder(api: APIRequestContext, token: string, retailerId: number, addressId: number) {
+export async function placeCodOrder(
+  api: APIRequestContext, token: string, retailerId: number, addressId: number, slotStart = sl1().start,
+) {
   const slots = await getJson(api, `retailers/${retailerId}/fulfillment-slots/?delivery_mode=delivery`, token);
-  const slot = slots.slots.find((s: { slot_start_local: string }) => s.slot_start_local === sl1().start);
-  expect(slot, `SL1 slot ${sl1().start} offered`).toBeTruthy();
+  const slot = slots.slots.find((s: { slot_start_local: string }) => s.slot_start_local === slotStart);
+  expect(slot, `SL1 slot ${slotStart} offered`).toBeTruthy();
   const response = await api.post('orders/place/', {
     ...authed(token),
     data: {
