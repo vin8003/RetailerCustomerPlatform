@@ -65,15 +65,14 @@ test.describe('Journey C - khata payments (C1 at R1, opening 500)', () => {
     expect(await khataBalance(api, r1, seed.customers.C1)).toBe(500);
   });
 
-  test('C4 overpay 600: records current behaviour, fails only on a 500', async ({ page, api, seed, retailerToken }) => {
-    // CASES.md C4: QA does not pick the overpay rule (reject vs advance); only a 500 is a FAIL.
+  test('C4 overpay 600: accepted means advance -100, rejected means 500 unchanged, never a 5xx', async ({ page, api, seed, retailerToken }) => {
+    // CASES.md C4: QA does not pick the rule (reject vs advance), but the balance must match the answer.
     const response = await recordPayment(page, '600');
-    expect(response.status()).toBeLessThan(500);
+    const status = response.status();
     const balance = await khataBalance(api, await retailerToken(), seed.customers.C1);
-    test.info().annotations.push({
-      type: 'current-behaviour',
-      description: `overpay 600 on 500: HTTP ${response.status()}, balance now ${balance}`,
-    });
+    test.info().annotations.push({ type: 'current-behaviour', description: `overpay 600 on 500: HTTP ${status}, balance now ${balance}` });
+    expect(status, 'overpay must never be a 5xx').toBeLessThan(500);
+    expect(balance).toBe(status < 300 ? -100 : 500);
   });
 });
 
