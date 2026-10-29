@@ -15,8 +15,9 @@ from decimal import Decimal
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
+from django.db.models import Q
 
-from authentication.models import User
+from authentication.models import EmailOTPVerification, OTPVerification, User
 from cart.models import Cart
 from customers.models import CustomerAddress, CustomerProfile
 from offers.models import Offer
@@ -41,6 +42,12 @@ KHATA = [
     (k['customer'], k['retailer'], Decimal(k['credit_limit']), Decimal(k['balance'])) for k in SEED_DATA['khata']
 ]
 PRODUCT_STOCK = Decimal('100')
+
+# Phase 2 auth journeys (OE-368 follow-up).
+ADMIN = SEED_DATA['admin']
+PENDING = SEED_DATA['pending_retailer']
+SIGNUP_RETAILER = SEED_DATA['signup']['retailer']
+SIGNUP_CUSTOMER = SEED_DATA['signup']['customer']
 
 
 DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
@@ -67,6 +74,7 @@ class Command(BaseCommand):
         self.stdout.write(json.dumps(ids, sort_keys=True))
 
     def seed(self, password):
+        self.reset_auth_accounts()
         retailers = {}
         for key, username, shop_name, phone in RETAILERS:
             user = self.upsert_user(username, shop_name, phone, 'retailer', password)
@@ -123,12 +131,48 @@ class Command(BaseCommand):
             is_default=True,
         )
 
+        admin = self.upsert_user(ADMIN['username'], ADMIN['shop_name'], ADMIN['phone'], 'retailer', password)
+        admin.is_staff = True
+        admin.save(update_fields=['is_staff'])
+        admin_shop = self.upsert_shop(admin, ADMIN['shop_name'], ADMIN['phone'])
+        # Hidden from customers: the admin shop exists only so the dashboard has a profile to load.
+        RetailerProfile.objects.filter(pk=admin_shop.pk).update(is_active=False)
+
+        pending = self.upsert_user(PENDING['username'], PENDING['shop_name'], PENDING['phone'], 'retailer', password)
+        pending_shop = self.upsert_shop(pending, PENDING['shop_name'], PENDING['phone'])
+        RetailerProfile.objects.filter(pk=pending_shop.pk).update(
+            verification_status='pending', is_verified=False, is_active=False, rejection_reason=None,
+        )
+
         return {
+            'admin_shop': admin_shop.id,
+            'pending_shop': pending_shop.id,
             'retailers': {key: shop.id for key, shop in retailers.items()},
             'customers': {key: user.id for key, user in customers.items()},
             'products': {key: product.id for key, product in products.items()},
             'c2_address': address.id,
         }
+
+    def reset_auth_accounts(self):
+        """Free the signup journeys' username/email/phone for the next run, and drop E2E users' pending OTPs.
+
+        Signup-created accounts are retired rather than deleted: their organization is PROTECT-referenced.
+        """
+        signup_users = User.objects.filter(
+            Q(username__in=[SIGNUP_RETAILER['username'], SIGNUP_CUSTOMER['phone'][-10:]])
+            | Q(email__in=[SIGNUP_RETAILER['email'], SIGNUP_CUSTOMER['email']])
+            | Q(phone_number__in=[SIGNUP_RETAILER['phone'], SIGNUP_CUSTOMER['phone']])
+        )
+        for user in signup_users:
+            RetailerProfile.objects.filter(user=user).update(is_active=False, contact_phone='')
+            user.username = f'e2e_retired_{user.pk}'
+            user.email = f'e2e_retired_{user.pk}@e2e.invalid'
+            user.phone_number = None
+            user.is_active = False
+            user.save(update_fields=['username', 'email', 'phone_number', 'is_active'])
+        e2e_users = User.objects.filter(email__endswith='@e2e.invalid')
+        OTPVerification.objects.filter(user__in=e2e_users).delete()
+        EmailOTPVerification.objects.filter(user__in=e2e_users).delete()
 
     def upsert_user(self, username, first_name, phone, user_type, password):
         user, _created = User.objects.update_or_create(

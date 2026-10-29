@@ -1,8 +1,8 @@
 name: e2e
 
 # Playwright journeys (OE-367/368/369) against a throwaway local stack:
-# Postgres service + Django runserver + both Next.js apps in `next dev`.
-# (Not `next build`: both apps' production builds hard-wire the live API host and ignore NEXT_PUBLIC_API_URL.)
+# Postgres service + Django runserver + both Next.js apps as production static builds
+# (API/media base from NEXT_PUBLIC_API_BASE_URL; "Bundle guard" fails the run if a build still names a live host).
 # Nothing here points at a live OrderEasy host; guard.spec.ts (G3) checks this file.
 # Full suite on push to main and nightly; PRs run only the areas they touch (see "Pick test areas").
 on:
@@ -68,6 +68,7 @@ jobs:
       E2E_RETAILER_URL: http://127.0.0.1:4273
       E2E_CUSTOMER_URL: http://127.0.0.1:4276
       NEXT_PUBLIC_API_URL: http://127.0.0.1:8100/api/
+      NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:8100
       NEXT_PUBLIC_RETAILER_PORTAL_URL: http://127.0.0.1:4273
       # Dummy, non-secret Firebase config so the SDK initialises offline; Playwright aborts all Google traffic.
       NEXT_PUBLIC_FIREBASE_API_KEY: AIzaSyE2E-dummy-key-not-real-000000000
@@ -156,17 +157,25 @@ jobs:
         working-directory: rcp
         run: nohup python manage.py runserver 127.0.0.1:8100 --noreload > ../api.log 2>&1 &
 
-      - name: Install and start retailer app on :4273 (next dev)
+      - name: Build retailer app
         working-directory: retailer
-        run: |
-          npm ci
-          nohup npx next dev -p 4273 -H 127.0.0.1 > ../retailer.log 2>&1 &
+        run: npm ci && npm run build
 
-      - name: Install and start customer app on :4276 (next dev)
+      - name: Build customer app
         working-directory: customer
+        run: npm ci && npm run build
+
+      # Built bundles must call only the local API: any live OrderEasy URL in them fails the run.
+      - name: Bundle guard (no live host URLs in the builds)
         run: |
-          npm ci
-          nohup npx next dev -p 4276 -H 127.0.0.1 > ../customer.log 2>&1 &
+          if grep -rEoh '://([a-z]+[.])?ordereasy[.]win' retailer/out customer/out | sort -u | grep .; then
+            echo "::error::a build still contains a live OrderEasy URL"; exit 1
+          fi
+
+      - name: Serve the builds on :4273 and :4276
+        run: |
+          nohup npx --yes serve@14 retailer/out -l tcp://127.0.0.1:4273 > retailer.log 2>&1 &
+          nohup npx --yes serve@14 customer/out -l tcp://127.0.0.1:4276 > customer.log 2>&1 &
 
       - name: Install Playwright
         working-directory: rcp/e2e
@@ -204,6 +213,7 @@ jobs:
                 e2e/tests/khata.spec.ts) tags="$tags khata" ;;
                 e2e/tests/order.spec.ts|e2e/tests/time.spec.ts|orders/*) tags="$tags orders" ;;
                 e2e/tests/fixme.spec.ts|offers/*|cart/*) tags="$tags offers" ;;
+                e2e/tests/auth-*.spec.ts|authentication/*) tags="$tags auth" ;;
                 e2e/tests/guard.spec.ts|e2e/tests/seed.spec.ts|*.md|docs/*) ;;
                 *) tags=""; break ;; # full suite
               esac
@@ -233,3 +243,25 @@ jobs:
             rcp/e2e/playwright-report/
             rcp/e2e/test-results/
           retention-days: 14
+
+  # A red full run on main or the nightly opens (or comments on) one tracking issue.
+  alert:
+    name: alert on main/nightly failure
+    needs: e2e
+    if: ${{ failure() && github.repository == 'vin8003/RetailerCustomerPlatform' && (github.event_name == 'push' || github.event_name == 'schedule') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      EVENT: ${{ github.event_name }}
+    steps:
+      - name: Open or update the e2e failure issue
+        run: |
+          gh label create e2e-nightly-failure --color B60205 --description "e2e failed on main or nightly" 2>/dev/null || true
+          body="e2e failed on $EVENT ($GITHUB_SHA): $RUN_URL"
+          issue=$(gh issue list --label e2e-nightly-failure --state open --json number --jq '.[0].number')
+          if [ -n "$issue" ]; then gh issue comment "$issue" --body "$body"
+          else gh issue create --title "e2e failing on main/nightly" --label e2e-nightly-failure --body "$body"; fi

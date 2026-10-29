@@ -23,6 +23,12 @@ Ids are attributes only: no behaviour, style or copy changed (CASES.md §7, cove
 | `order-total`, `order-slot` | order detail total, slot | B1–B4, T2 |
 | `order-status-next-<status>` | next-status buttons (e.g. `order-status-next-confirmed`) | B2–B4 |
 | `order-confirm-submit`, `order-dispatch-submit` | confirm / dispatch dialogs | B2, B4 |
+| `khata-panel` | customer detail Stats Overview card (C5 scopes its "no R1 numbers" check to it) | C5 |
+| `signup-username`, `signup-email`, `signup-phone`, `signup-password`, `signup-confirm-password`, `signup-submit` | `/signup` | R-AUTH1 |
+| `verification-banner` | dashboard pending-approval banner | R-AUTH1, R-AUTH2 |
+| `verification-card` (`data-username`), `verification-approve` | admin `/dashboard/admin/verifications` | R-AUTH2 |
+| `forgot-identifier`, `forgot-send`, `reset-code`, `reset-new-password`, `reset-confirm-password`, `reset-submit` | `/forgot-password` | R-AUTH5 |
+| `profile-edit`, `profile-shop-name`, `profile-city`, `profile-save`, `profile-logout` | `/dashboard/profile` | R-AUTH6 |
 
 ## Customer app (`customer_ordereasy_njs`)
 
@@ -36,3 +42,8 @@ Ids are attributes only: no behaviour, style or copy changed (CASES.md §7, cove
 | `orders-filter-<status>` (`orders-filter-all` for All) | My Orders filter chips | B4 |
 | `order-card` (`data-order-id`), `order-card-status` | My Orders card, its status | B1–B4, T1, F7 |
 | `order-status-label`, `order-total`, `order-slot` | order detail | B1–B4, T2 |
+| `customer-login-error` | `/login` error text | C-AUTH3 |
+| `customer-signup-email`, `-phone`, `-password`, `-confirm`, `-submit`, `-error` | `/signup` | C-AUTH1 |
+| `verify-email-otp`, `-submit`, `-error`, `-success` | `/verify-email` | C-AUTH1, C-AUTH2 |
+| `customer-forgot-email`, `-send`, `-error`, `-success`; `customer-reset-otp`, `-password`, `-confirm`, `-submit` | forgot / reset password | C-AUTH4 |
+| `profile-first-name`, `profile-last-name`, `profile-save`; `profile-name`, `profile-logout` | profile edit; profile page | C-AUTH5 |

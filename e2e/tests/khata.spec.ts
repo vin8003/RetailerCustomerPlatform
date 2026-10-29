@@ -87,6 +87,7 @@ test('C5 regression (OE-61): R2 view of C1 shows 1000 with credit_limit 0, no R1
   await expect.poll(() => balanceOnScreen(page)).toBe(1000);
   expect(rupees(await page.getByTestId('customer-credit-limit').textContent())).toBe(0);
   await expect(page.getByTestId('record-payment-open')).toBeVisible();
-  await expect(page.getByText(/5,?000/)).toHaveCount(0);
+  // Scoped to the khata panel (balance, limit, payment) so unrelated page text can't match.
+  await expect(page.getByTestId('khata-panel').getByText(/5,?000/)).toHaveCount(0);
   await expect(page.getByTestId('customer-current-balance')).not.toContainText('500.00');
 });
