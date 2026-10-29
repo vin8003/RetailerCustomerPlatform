@@ -1,0 +1,31 @@
+name: e2e alert
+
+# RCP only: a failed e2e run on push to main or the nightly opens (or comments on) one tracking issue.
+# Kept out of e2e.yml so FE repos calling that reusable workflow need no extra permissions.
+on:
+  workflow_run:
+    workflows: [e2e]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  alert:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' && (github.event.workflow_run.event == 'schedule' || (github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main')) }}
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN_URL: ${{ github.event.workflow_run.html_url }}
+      EVENT: ${{ github.event.workflow_run.event }}
+      SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Open or update the e2e failure issue
+        run: |
+          gh label create e2e-nightly-failure --color B60205 --description "e2e failed on main or nightly" 2>/dev/null || true
+          body="e2e failed on $EVENT ($SHA): $RUN_URL"
+          issue=$(gh issue list --label e2e-nightly-failure --state open --json number --jq '.[0].number')
+          if [ -n "$issue" ]; then gh issue comment "$issue" --body "$body"
+          else gh issue create --title "e2e failing on main/nightly" --label e2e-nightly-failure --body "$body"; fi

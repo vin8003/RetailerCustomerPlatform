@@ -1,9 +1,17 @@
 {
   "_comment": "Single source for the e2e dataset: read by retailers/management/commands/seed_e2e.py and by the specs (e2e/seed.ts).",
   "password": "E2e-Pass-123!",
+  "new_password": "E2e-New-Pass-456!",
   "retailers": {
     "R1": { "username": "e2e_retailer", "shop_name": "E2E Kirana", "phone": "+919100000001" },
     "R2": { "username": "e2e_retailer2", "shop_name": "E2E Second Shop", "phone": "+919100000002" }
+  },
+  "_comment_auth": "Phase 2 auth journeys: a platform admin (is_staff), a retailer awaiting approval, and the accounts the signup journeys create (seed_e2e deletes those each run).",
+  "admin": { "username": "e2e_admin", "shop_name": "E2E Admin Shop", "phone": "+919100000009" },
+  "pending_retailer": { "username": "e2e_pending_retailer", "shop_name": "E2E Pending Shop", "phone": "+919100000003" },
+  "signup": {
+    "retailer": { "username": "e2e_new_retailer", "email": "e2e_new_retailer@e2e.invalid", "phone": "+919100000004" },
+    "customer": { "email": "e2e_new_cust@e2e.invalid", "phone": "+919000000004" }
   },
   "customers": {
     "C1": { "username": "e2e_khata_cust", "first_name": "E2E Khata Cust", "phone": "+919000000001" },

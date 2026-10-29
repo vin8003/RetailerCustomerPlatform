@@ -1,8 +1,8 @@
 name: e2e
 
 # Playwright journeys (OE-367/368/369) against a throwaway local stack:
-# Postgres service + Django runserver + both Next.js apps in `next dev`.
-# (Not `next build`: both apps' production builds hard-wire the live API host and ignore NEXT_PUBLIC_API_URL.)
+# Postgres service + Django runserver + both Next.js apps as production static builds
+# (API/media base from NEXT_PUBLIC_API_BASE_URL; "Bundle guard" fails the run if a build still names a live host).
 # Nothing here points at a live OrderEasy host; guard.spec.ts (G3) checks this file.
 # Full suite on push to main and nightly; PRs run only the areas they touch (see "Pick test areas").
 on:
@@ -68,6 +68,7 @@ jobs:
       E2E_RETAILER_URL: http://127.0.0.1:4273
       E2E_CUSTOMER_URL: http://127.0.0.1:4276
       NEXT_PUBLIC_API_URL: http://127.0.0.1:8100/api/
+      NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:8100
       NEXT_PUBLIC_RETAILER_PORTAL_URL: http://127.0.0.1:4273
       # Dummy, non-secret Firebase config so the SDK initialises offline; Playwright aborts all Google traffic.
       NEXT_PUBLIC_FIREBASE_API_KEY: AIzaSyE2E-dummy-key-not-real-000000000
@@ -156,17 +157,28 @@ jobs:
         working-directory: rcp
         run: nohup python manage.py runserver 127.0.0.1:8100 --noreload > ../api.log 2>&1 &
 
-      - name: Install and start retailer app on :4273 (next dev)
+      - name: Build retailer app
         working-directory: retailer
-        run: |
-          npm ci
-          nohup npx next dev -p 4273 -H 127.0.0.1 > ../retailer.log 2>&1 &
+        run: npm ci && npm run build
 
-      - name: Install and start customer app on :4276 (next dev)
+      - name: Build customer app
         working-directory: customer
+        run: npm ci && npm run build
+
+      # Built bundles must not mention a live OrderEasy host at all. Exceptions are exact whole host tokens in
+      # rcp/e2e/bundle-guard-allow.txt (product copy only; keep it short and reviewed).
+      - name: Bundle guard (no live host in the builds)
         run: |
-          npm ci
-          nohup npx next dev -p 4276 -H 127.0.0.1 > ../customer.log 2>&1 &
+          test -f retailer/out/index.html && test -f customer/out/index.html
+          allow=rcp/e2e/bundle-guard-allow.txt
+          hits=$(grep -rEoh '[(]?([A-Za-z0-9-]+[.])*ordereasy[.]win(@gmail[.]com|[)])?' retailer/out customer/out | sort -u | grep -vxF -f <(grep -v '^\s*\(#\|$\)' "$allow") || true)
+          if [ -n "$hits" ]; then echo "$hits"; echo "::error::a build mentions a live OrderEasy host"; exit 1; fi
+
+      - name: Serve the builds on :4273 and :4276
+        run: |
+          npm install -g serve@14.2.6
+          nohup serve retailer/out -l tcp://127.0.0.1:4273 > retailer.log 2>&1 &
+          nohup serve customer/out -l tcp://127.0.0.1:4276 > customer.log 2>&1 &
 
       - name: Install Playwright
         working-directory: rcp/e2e
@@ -204,6 +216,7 @@ jobs:
                 e2e/tests/khata.spec.ts) tags="$tags khata" ;;
                 e2e/tests/order.spec.ts|e2e/tests/time.spec.ts|orders/*) tags="$tags orders" ;;
                 offers/*|cart/*) tags="$tags offers" ;; # fixme.spec.ts spans every area: full suite
+                e2e/tests/auth-*.spec.ts|authentication/*) tags="$tags auth" ;;
                 e2e/tests/guard.spec.ts|e2e/tests/seed.spec.ts|*.md|docs/*) ;;
                 *) tags=""; break ;; # full suite
               esac
@@ -233,3 +246,4 @@ jobs:
             rcp/e2e/playwright-report/
             rcp/e2e/test-results/
           retention-days: 14
+

@@ -126,3 +126,21 @@ export async function createOffer(api: APIRequestContext, token: string, offer: 
 export async function customerCart(api: APIRequestContext, token: string, retailerId: number) {
   return getJson(api, `cart/?retailer_id=${retailerId}`, token);
 }
+
+/** Latest unverified OTP the backend stored for a user (no SMS/email leaves the e2e stack). */
+export function latestOtp(kind: 'phone' | 'email', username: string): string {
+  const model = kind === 'phone' ? 'OTPVerification' : 'EmailOTPVerification';
+  const out = djangoShell(
+    `from authentication.models import ${model}\n` +
+      `print('OTP=' + ${model}.objects.filter(user__username=${JSON.stringify(username)}, is_verified=False).latest('created_at').otp_code)\n`,
+  );
+  const match = out.match(/OTP=(\d{6})/);
+  expect(match, `no ${kind} OTP stored for ${username}:\n${out}`).toBeTruthy();
+  return match![1];
+}
+
+/** POST a login and return the status, so specs can assert both success and refusal. */
+export async function loginStatus(api: APIRequestContext, path: string, username: string, password: string) {
+  const response = await api.post(path, { data: { username, password } });
+  return response.status();
+}
