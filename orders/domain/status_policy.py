@@ -3,7 +3,7 @@
 ALLOWED_STATUS_TRANSITIONS = {
     'pending': ['confirmed', 'cancelled', 'waiting_for_customer_approval'],
     'waiting_for_customer_approval': ['confirmed', 'cancelled', 'pending'],
-    'confirmed': ['processing', 'cancelled'],
+    'confirmed': ['processing', 'packed', 'cancelled'],  # packed: retailer UI offers it (OE-373)
     'processing': ['packed', 'cancelled'],
     'packed': ['out_for_delivery', 'delivered'],
     'out_for_delivery': ['delivered', 'cancelled'],

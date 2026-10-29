@@ -1,7 +1,8 @@
 /**
  * F1–F9 from CASES.md §4 (+ F9 from review). Each asserts the CORRECT value.
- * F2, F3, F4, F6, F8 are fixed on main and run as normal regression tests.
- * F1, F5, F7, F9 are still open: test.fixme with a bug annotation linking the Jira ticket.
+ * F2–F6, F8, F9 are fixed on main and run as normal regression tests.
+ * F1 is intended behaviour (OE-370, per Vineet 29 Oct): kept as a regression guard for the per-unit flat offer.
+ * F7 is still open: test.fixme with a bug annotation linking the Jira ticket.
  * E2E_RUN_FIXME=1 runs the fixme ones anyway (to confirm a bug is still there, or is gone).
  */
 import { test, expect, urls } from '../fixtures';
@@ -15,15 +16,15 @@ const JIRA = 'https://vin8003.atlassian.net/browse/';
 const known = (ticket: string, bug: string) => ({ annotation: { type: 'bug', description: `${JIRA}${ticket} ${bug}` } });
 const fixme = process.env.E2E_RUN_FIXME ? test : test.fixme;
 
-fixme('F1 flat offer is taken once per line, not per unit @F1 @customer @offers',
-  known('OE-370', 'O1 flat ₹20 on the P5 line is applied per unit: P5×3 gives ₹240.00, expected ₹280.00'),
+// OE-370 is not a bug: a flat product offer is taken off every unit (P5 ₹100 × 3, ₹20 off each = ₹240).
+test('F1 flat offer is applied per unit @F1 @customer @offers',
   async ({ api, seed, retailerToken }) => {
     await createOffer(api, await retailerToken(), { name: 'O1 ₹20 off ghee', offer_type: 'flat_amount', value_type: 'amount', value: '20.00' }, seed.products.P5);
     const token = await customerToken(api, C2_PHONE);
     await addToCart(api, token, seed.products.P5, 3);
     const cart = await customerCart(api, token, seed.retailers.R1);
     expect(cart.subtotal).toBe(300);
-    expect(cart.discounted_total).toBe(280);
+    expect(cart.discounted_total).toBe(240);
   });
 
 test('F2 percentage cap applies to the price, not just the label @F2 @customer @offers',
@@ -62,8 +63,7 @@ test('F4 only the applied non-stackable offer counts toward savings @F4 @custome
     expect(cart.discounted_total).toBe(cart.subtotal - cart.total_savings);
   });
 
-fixme('F5 duplicate product name is a 4xx with a message, not a 500 @F5 @retailer @products',
-  known('OE-371', `Creating a second "${PRODUCT.P1.name}" at R1 returns 500`),
+test('F5 duplicate product name is a 4xx with a message, not a 500 (OE-371) @F5 @retailer @products',
   async ({ api, retailerToken }) => {
     const r1 = await retailerToken();
     const response = await api.post('products/create/', {
@@ -72,7 +72,7 @@ fixme('F5 duplicate product name is a 4xx with a message, not a 500 @F5 @retaile
     });
     expect(response.status()).toBeGreaterThanOrEqual(400);
     expect(response.status()).toBeLessThan(500);
-    expect(JSON.stringify(await response.json())).toMatch(/already|exists|duplicate/i);
+    expect(JSON.stringify(await response.json())).toContain('A product with this name already exists.');
     const list = await api.get(`products/?search=${encodeURIComponent(PRODUCT.P1.name)}`, authed(r1));
     expect(JSON.stringify(await list.json()).split(JSON.stringify(PRODUCT.P1.name)).length - 1).toBe(1);
   });
@@ -153,8 +153,7 @@ test('F8 offer and coupon discounts each show once in the cart @F8 @customer @of
     await expect(page.getByText('-₹50.00', { exact: true })).toHaveCount(1); // total savings = 20 + 30, once
   });
 
-fixme('F9 Packed straight from Confirmed (offered by the UI) is accepted, not a 400 @F9 @retailer @orders',
-  known('OE-373', 'The retailer UI offers Confirmed → Packed but the API rejects it with 400; B3 goes via Processing'),
+test('F9 Packed straight from Confirmed (offered by the UI) is accepted, not a 400 (OE-373) @F9 @retailer @orders',
   async ({ page, api, seed }) => {
     const token = await customerToken(api, C2_PHONE);
     await addToCart(api, token, seed.products.P4, 1);
