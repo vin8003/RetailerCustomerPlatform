@@ -25,7 +25,7 @@ async function profileSwitch(page: Page, label: string) {
 }
 
 test.describe('Settings - store', { tag: ['@settings', '@retailer'] }, () => {
-  test('S1 closing tomorrow in operating hours removes tomorrow\'s slots for customers', async ({ page, api, seed }) => {
+  test('ST1 closing tomorrow in operating hours removes tomorrow\'s slots for customers', async ({ page, api, seed }) => {
     const ct = await customerToken(api, C2_MOBILE);
     const date = tomorrowIst().toISOString().slice(0, 10);
     expect(await slotDates(api, ct, seed.retailers.R1)).toContain(date);
@@ -46,7 +46,7 @@ test.describe('Settings - store', { tag: ['@settings', '@retailer'] }, () => {
     await expect(page.locator('div.bg-card.rounded-lg', { hasText: day }).getByText('Closed')).toBeVisible();
   });
 
-  test('S2 slot capacity set to 1 in the UI fills the slot after one order', async ({ page, api, seed }) => {
+  test('ST2 slot capacity set to 1 in the UI fills the slot after one order', async ({ page, api, seed }) => {
     await retailerLogin(page);
     await page.goto(`${urls.retailer}/dashboard/operating-hours`);
     const capacity = page.locator('#slotCapacity');
@@ -59,10 +59,11 @@ test.describe('Settings - store', { tag: ['@settings', '@retailer'] }, () => {
     await placeOrder(api, ct, seed.retailers.R1, [[seed.products.P4, 1]], { addressId: seed.c2_address });
     const slots = await getJson(api, `retailers/${seed.retailers.R1}/fulfillment-slots/?delivery_mode=delivery`, ct);
     const slot = slots.slots.find((s: { slot_start_local: string }) => s.slot_start_local === sl1().start);
-    expect(slot?.is_available ?? false).toBe(false);
+    expect(slot, 'slot SL1 is listed').toBeDefined();
+    expect(slot.is_available).toBe(false);
   });
 
-  test('S3 turning delivery off in the profile refuses delivery orders', async ({ page, api, seed }) => {
+  test('ST3 turning delivery off in the profile refuses delivery orders', async ({ page, api, seed }) => {
     await retailerLogin(page);
     await profileSwitch(page, 'Offers Delivery');
     const ct = await customerToken(api, C2_MOBILE);
@@ -71,7 +72,7 @@ test.describe('Settings - store', { tag: ['@settings', '@retailer'] }, () => {
     expect(await r.text()).toContain('This retailer does not offer delivery.');
   });
 
-  test('S4 turning COD off in the profile refuses cash orders', async ({ page, api, seed }) => {
+  test('ST4 turning COD off in the profile refuses cash orders', async ({ page, api, seed }) => {
     await retailerLogin(page);
     await profileSwitch(page, 'Accept Cash (COD)');
     const ct = await customerToken(api, C2_MOBILE);
@@ -80,7 +81,7 @@ test.describe('Settings - store', { tag: ['@settings', '@retailer'] }, () => {
     expect(await r.text()).toContain('This retailer does not accept Cash on Delivery.');
   });
 
-  test('S5 a minimum order amount refuses smaller orders', async ({ api, seed, retailerToken }) => {
+  test('ST5 a minimum order amount refuses smaller orders', async ({ api, seed, retailerToken }) => {
     const rt = await retailerToken();
     expect((await api.patch('retailers/profile/update/', { ...authed(rt), data: { minimum_order_amount: '500' } })).status()).toBe(200);
     const ct = await customerToken(api, C2_MOBILE);
@@ -91,7 +92,7 @@ test.describe('Settings - store', { tag: ['@settings', '@retailer'] }, () => {
 });
 
 test.describe('Settings - staff, roles, notifications', { tag: ['@settings', '@retailer'] }, () => {
-  test('S6 a staff member with orders.read can read orders but not change them or the store', async ({ api, seed, retailerToken }) => {
+  test('ST6 a staff member with orders.read can read orders but not change them or the store', async ({ api, seed, retailerToken }) => {
     const rt = await retailerToken();
     const org = (await getJson(api, 'retailers/profile/', rt)).organization_id;
     const role = await api.post(`retailers/org/${org}/roles/`, { ...authed(rt), data: { name: 'E2E Packer', slug: 'e2e-packer', permissions: ['orders.read'] } });
@@ -115,7 +116,7 @@ test.describe('Settings - staff, roles, notifications', { tag: ['@settings', '@r
     expect(JSON.stringify(members)).toContain('e2es_packer');
   });
 
-  test('S7 notification preferences: owner can disable a type, unknown types and staff are refused', async ({ api, retailerToken }) => {
+  test('ST7 notification preferences: owner can disable a type, unknown types and staff are refused', async ({ api, retailerToken }) => {
     const rt = await retailerToken();
     const org = (await getJson(api, 'retailers/profile/', rt)).organization_id;
     const path = `retailers/org/${org}/notifications/config/`;
