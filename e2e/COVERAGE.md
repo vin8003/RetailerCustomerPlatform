@@ -2,6 +2,7 @@
 
 One row per feature. *Covered* = at least one spec asserts the outcome (a `test.fixme` counts: the case exists and waits on a product fix).
 Update the row in the PR that adds or removes a spec. Phases: 2 auth & account · 3 POS camera, delivery fee, bundles · 4 catalog, offers, inventory · 5 everything else.
+Phase 3–5 rows are owned by their phase slice (separate PRs); each slice updates its rows' coverage.
 
 ## Totals
 
@@ -31,32 +32,32 @@ Update the row in the PR that adds or removes a spec. Phases: 2 auth & account �
 | Auth | Resend email OTP / phone OTP verify | auth/resend-email-otp/, auth/customer/verify-otp/, …/resend-otp/ | none | 2 |
 | Auth | Change password, logout, token refresh | auth/change-password/, auth/logout/, auth/token/refresh/ | none | 2 |
 | Auth | Google login (customer) | auth/customer/google-login/ | none (needs Firebase stub) | 2 |
-| POS | POS bills: UPI, khata, split, cash, unknown barcode | /dashboard/pos · products/erp/pos-checkout/ | pos.spec.ts › A1–A6 | 3 |
-| POS | POS customer lookup / verify | products/erp/verify-pos-customer/, …/search-pos-customers/ | pos.spec.ts › A2, A3, A5 (partial) | 3 |
-| POS | Mobile POS camera barcode scan (fake camera) | /dashboard/pos (mobile) | none | 3 |
-| Delivery | Distance-based delivery fee at checkout | retailer/geo-estimate/ · cart/summary/ | none | 3 |
-| Catalog | Bundles / product groups in cart and POS | products/product-groups/ | none | 3 |
-| Catalog | Product create / edit / delete | products/create/, <id>/update/, <id>/delete/ | none | 4 |
-| Catalog | Bulk upload sessions and images | products/upload/…, upload/session/… | none | 4 |
-| Catalog | Categories and brands | products/categories/…, products/brands/… | none | 4 |
-| Catalog | Customer storefront sections and search | products/retailer/<id>/…, retailer/search/ | order.spec.ts › B1 (browse + add only) | 4 |
-| Offers | Percentage cap, stackable and non-stackable offers | offers · cart/ | fixme.spec.ts › F2, F3, F4 (test.fixme) | 4 |
-| Offers | Offer + coupon discount shown once | cart/apply-coupon/ | fixme.spec.ts › F8 (test.fixme) | 4 |
-| Offers | Coupon apply/remove, available coupons | cart/apply-coupon/, remove-coupon/, offers/available-coupons/<id>/ | none | 4 |
-| Inventory | Stock write-off and inventory ledger | products/<id>/write-off/, erp/inventory-ledger/ | none | 4 |
-| Orders | Order lifecycle pending → delivered (both apps) | orders/place/, <id>/status/ | order.spec.ts › B1–B4 | 5 |
-| Orders | IST midnight dates and next-day slots | orders/ · slot picker | time.spec.ts › T1, T2; fixme.spec.ts › F6 | 5 |
-| Orders | Packed straight from Confirmed | orders/<id>/status/ | fixme.spec.ts › F9 (test.fixme) | 5 |
-| Orders | Cancel, modify/confirm modification | orders/<id>/cancel/, modify/, confirm_modification/ | none | 5 |
-| Orders | Online payment submit/verify | orders/<id>/submit_payment/, verify_payment/ | none | 5 |
-| Orders | Order chat, notes, feedback, ratings | orders/<id>/chat/…, notes/, feedback/, rate-customer/ | none | 5 |
-| Returns | Return request | orders/<id>/return/, returns/ | none | 5 |
-| Khata | Record khata payment, limits, R1/R2 isolation | customer/retailer/payment/record/, ledger/<id>/ | khata.spec.ts › C1–C5 | 5 |
-| Khata | Credit limit update, blacklist toggle | customer/retailer/credit-limit/update/<id>/, blacklist/toggle/ | none | 5 |
-| Loyalty | Loyalty points and redeem OTP | customer/loyalty/…, retailer/loyalty/redeem/ | none | 5 |
-| Customer | Addresses and wishlist | customer/addresses/…, wishlist/… | none | 5 |
-| Customer | Notifications, referrals | customer/notifications/…, referral/… | none | 5 |
-| Reports | Dashboard summary, daily sales, stats, demand insights | products/erp/dashboard/summary/, daily-sales-summary/, stats/ | none | 5 |
-| Settings | Operating hours, reward config, org settings | retailer/operating-hours/, reward-config/, org/ | none | 5 |
-| Partner API | Partner API v1 keys and endpoints | api/v1/partner/ | none | 5 |
-| Platform | Seed idempotent; live-host guard | seed_e2e · fixtures.ts | seed.spec.ts › S1; guard.spec.ts › G1–G3 | 5 |
+| POS | POS bills: UPI, khata, split, cash, unknown barcode | /dashboard/pos · products/erp/pos-checkout/ | pos.spec.ts › A1–A6 | 3 (phase-3 slice) |
+| POS | POS customer lookup / verify | products/erp/verify-pos-customer/, …/search-pos-customers/ | pos.spec.ts › A2, A3, A5 (partial) | 3 (phase-3 slice) |
+| POS | Mobile POS camera barcode scan (fake camera) | /dashboard/pos (mobile) | none | 3 (phase-3 slice) |
+| Delivery | Distance-based delivery fee at checkout | retailer/geo-estimate/ · cart/summary/ | none | 3 (phase-3 slice) |
+| Catalog | Bundles / product groups in cart and POS | products/product-groups/ | none | 3 (phase-3 slice) |
+| Catalog | Product create / edit / delete | products/create/, <id>/update/, <id>/delete/ | none | 4 (phase-4 slice) |
+| Catalog | Bulk upload sessions and images | products/upload/…, upload/session/… | none | 4 (phase-4 slice) |
+| Catalog | Categories and brands | products/categories/…, products/brands/… | none | 4 (phase-4 slice) |
+| Catalog | Customer storefront sections and search | products/retailer/<id>/…, retailer/search/ | order.spec.ts › B1 (browse + add only) | 4 (phase-4 slice) |
+| Offers | Percentage cap, stackable and non-stackable offers | offers · cart/ | fixme.spec.ts › F2, F3, F4 (test.fixme) | 4 (phase-4 slice) |
+| Offers | Offer + coupon discount shown once | cart/apply-coupon/ | fixme.spec.ts › F8 (test.fixme) | 4 (phase-4 slice) |
+| Offers | Coupon apply/remove, available coupons | cart/apply-coupon/, remove-coupon/, offers/available-coupons/<id>/ | none | 4 (phase-4 slice) |
+| Inventory | Stock write-off and inventory ledger | products/<id>/write-off/, erp/inventory-ledger/ | none | 4 (phase-4 slice) |
+| Orders | Order lifecycle pending → delivered (both apps) | orders/place/, <id>/status/ | order.spec.ts › B1–B4 | 5 (phase-5 slice) |
+| Orders | IST midnight dates and next-day slots | orders/ · slot picker | time.spec.ts › T1, T2; fixme.spec.ts › F6 | 5 (phase-5 slice) |
+| Orders | Packed straight from Confirmed | orders/<id>/status/ | fixme.spec.ts › F9 (test.fixme) | 5 (phase-5 slice) |
+| Orders | Cancel, modify/confirm modification | orders/<id>/cancel/, modify/, confirm_modification/ | none | 5 (phase-5 slice) |
+| Orders | Online payment submit/verify | orders/<id>/submit_payment/, verify_payment/ | none | 5 (phase-5 slice) |
+| Orders | Order chat, notes, feedback, ratings | orders/<id>/chat/…, notes/, feedback/, rate-customer/ | none | 5 (phase-5 slice) |
+| Returns | Return request | orders/<id>/return/, returns/ | none | 5 (phase-5 slice) |
+| Khata | Record khata payment, limits, R1/R2 isolation | customer/retailer/payment/record/, ledger/<id>/ | khata.spec.ts › C1–C5 | 5 (phase-5 slice) |
+| Khata | Credit limit update, blacklist toggle | customer/retailer/credit-limit/update/<id>/, blacklist/toggle/ | none | 5 (phase-5 slice) |
+| Loyalty | Loyalty points and redeem OTP | customer/loyalty/…, retailer/loyalty/redeem/ | none | 5 (phase-5 slice) |
+| Customer | Addresses and wishlist | customer/addresses/…, wishlist/… | none | 5 (phase-5 slice) |
+| Customer | Notifications, referrals | customer/notifications/…, referral/… | none | 5 (phase-5 slice) |
+| Reports | Dashboard summary, daily sales, stats, demand insights | products/erp/dashboard/summary/, daily-sales-summary/, stats/ | none | 5 (phase-5 slice) |
+| Settings | Operating hours, reward config, org settings | retailer/operating-hours/, reward-config/, org/ | none | 5 (phase-5 slice) |
+| Partner API | Partner API v1 keys and endpoints | api/v1/partner/ | none | 5 (phase-5 slice) |
+| Platform | Seed idempotent; live-host guard | seed_e2e · fixtures.ts | seed.spec.ts › S1; guard.spec.ts › G1–G3 | 5 (phase-5 slice) |
