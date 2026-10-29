@@ -64,7 +64,7 @@ test.describe('Reports', { tag: ['@reports', '@retailer'] }, () => {
   });
 
   fixme('R4 an order that is still pending is not counted as a sale',
-    known('NEW', 'daily-sales-summary counts a pending online COD order (total 495, cash 295) while orders/stats says 465'),
+    known('OE-382', 'daily-sales-summary counts a pending online COD order (total 495, cash 295) while orders/stats says 465'),
     async ({ api, seed, retailerToken }) => {
       const rt = await retailerToken();
       const ct = await seedDay(api, seed, rt);
