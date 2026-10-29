@@ -2,7 +2,7 @@
  * Slice: catalog and products. Retailer-side changes are checked where the customer sees them.
  */
 import { test, expect, urls } from '../fixtures';
-import { authed, customerToken, getJson, retailerLogin } from '../helpers';
+import { addToCart, authed, customerToken, getJson, placeCodOrder, retailerLogin } from '../helpers';
 import { C2_MOBILE as C2_PHONE, PRODUCT } from '../seed';
 import { createProduct, customerAtShop, customerProducts, patch, post, retailerProducts, rows } from '../slice-helpers';
 
@@ -77,6 +77,31 @@ test.describe('@slice-catalog', () => {
     const add = await api.post('cart/add/', { ...authed(c2), data: { product_id: seed.products.P4, quantity: 1 } });
     expect(add.status()).toBe(400);
     expect(await add.json()).toEqual({ product_id: ['Product not found or not available'] });
+  });
+
+  test('deleting a product that has an order keeps the order and its line intact @slice-catalog @retailer @customer', async ({ api, seed, retailerToken }) => {
+    const r1 = await retailerToken();
+    const c2 = await customerToken(api, C2_PHONE);
+    await addToCart(api, c2, seed.products.P3, 2);
+    const order = await placeCodOrder(api, c2, seed.retailers.R1, seed.c2_address);
+    const response = await api.delete(`products/${seed.products.P3}/delete/`, authed(r1));
+    expect(response.status(), await response.text()).toBe(200);
+    expect(await response.json()).toEqual({ message: 'Product deleted successfully' });
+    // Delete is soft: the order still reads back with the same line and totals.
+    const after = await getJson(api, `orders/${order.id}/`, r1);
+    expect(after.subtotal).toBe('330.00');
+    expect(after.items).toHaveLength(1);
+    expect(after.items[0]).toMatchObject({ product: seed.products.P3, product_name: 'Sunflower Oil 1L', total_price: 330 });
+    expect(await customerProducts(api, c2, seed.retailers.R1, 'search=Sunflower')).toHaveLength(0);
+  });
+
+  test('product image upload rejects a file that is not an image @slice-catalog @retailer', async ({ api, retailerToken }) => {
+    const response = await api.post('products/create/', {
+      headers: { Authorization: `Bearer ${await retailerToken()}` },
+      multipart: { name: 'E2EC Bad Image', price: '10', quantity: '1', unit: 'piece', image: { name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('not an image') } },
+    });
+    expect(response.status()).toBe(400);
+    expect(await response.json()).toEqual({ image: ['Upload a valid image. The file you uploaded was either not an image or a corrupted image.'] });
   });
 
   test('category rename and delete @slice-catalog @retailer @customer', async ({ api, seed, retailerToken }) => {
