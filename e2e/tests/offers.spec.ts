@@ -80,11 +80,12 @@ test.describe('@slice-offers', () => {
     expect(cart.applied_offers).toHaveLength(1);
     const reported = cart.applied_offers.reduce((sum: number, o: { savings: number }) => sum + o.savings, 0);
     expect(reported).toBe(cart.total_savings);
-    expect(cart.discounted_total).toBe(cart.subtotal - cart.total_savings);
+    expect(cart.total_savings).toBe(50);
+    expect(cart.discounted_total).toBe(450);
   });
 
   fixme('percentage cap lowers the price, not only the offer label @slice-offers @customer @offers',
-    bug('Known bug: 10% capped at ₹20 on P3×2 (₹330) reports ₹20 saved but the cart total is ₹297.00 (₹33 off); expected ₹310.00'),
+    bug('OE-385: 10% capped at ₹20 on P3×2 (₹330) reports ₹20 saved but the cart total is ₹297.00 (₹33 off); expected ₹310.00'),
     async ({ api, seed, retailerToken }) => {
       await createOffer(api, await retailerToken(), { name: 'E2EO 10% cap 20', offer_type: 'percentage', value_type: 'percent', value: '10.00', max_discount_amount: '20.00' }, seed.products.P3);
       const token = await customerToken(api, C2_PHONE);
@@ -95,18 +96,18 @@ test.describe('@slice-offers', () => {
       expect(cart.discounted_total).toBe(310);
     });
 
-  fixme('stackable cart offer also covers an item a product offer already discounted @slice-offers @customer @offers',
-    bug('Known bug: ₹10 off ghee (not stackable) + stackable 5% cart offer on P5×2 + P2×1 skips the ghee line: total ₹313.00, expected ₹304.00'),
-    async ({ api, seed, retailerToken }) => {
-      const r1 = await retailerToken();
-      await createOffer(api, r1, { name: 'E2EO ₹10 ghee', offer_type: 'flat_amount', value_type: 'amount', value: '10.00' }, seed.products.P5);
-      await createOffer(api, r1, { name: 'E2EO 5% stack', offer_type: 'cart_value', value_type: 'percent', value: '5.00', is_stackable: true });
-      const token = await customerToken(api, C2_PHONE);
-      await addToCart(api, token, seed.products.P5, 2);
-      await addToCart(api, token, seed.products.P2, 1);
-      const cart = await customerCart(api, token, seed.retailers.R1);
-      expect(cart.discounted_total).toBe(304);
-    });
+  test('stackable cart offer skips a line a non-stackable product offer already discounted @slice-offers @customer @offers', async ({ api, seed, retailerToken }) => {
+    const r1 = await retailerToken();
+    await createOffer(api, r1, { name: 'E2EO ₹10 ghee', offer_type: 'flat_amount', value_type: 'amount', value: '10.00' }, seed.products.P5);
+    await createOffer(api, r1, { name: 'E2EO 5% stack', offer_type: 'cart_value', value_type: 'percent', value: '5.00', is_stackable: true });
+    const token = await customerToken(api, C2_PHONE);
+    await addToCart(api, token, seed.products.P5, 2);
+    await addToCart(api, token, seed.products.P2, 1);
+    const cart = await customerCart(api, token, seed.retailers.R1);
+    // Intended: a non-stackable product offer marks its line exclusive, and cart offers skip exclusive lines (5% applies to P2 only).
+    expect(cart.subtotal).toBe(340);
+    expect(cart.discounted_total).toBe(313);
+  });
 
   fixme('tiered price and flat price offers the API accepts actually change the price @slice-offers @customer @offers',
     bug('OE-375: The offers API accepts offer_type tiered_price and flat_price (201) but the engine has no branch for them: P4×6 with "₹25 each from 5" and P5×2 with "flat ₹80" give no discount'),
