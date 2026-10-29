@@ -15,10 +15,17 @@ const slotDates = async (api: Parameters<typeof getJson>[0], ct: string, retaile
   new Set((await getJson(api, `retailers/${retailerId}/fulfillment-slots/?delivery_mode=delivery`, ct)).slots
     .map((s: { slot_start_local: string }) => s.slot_start_local.slice(0, 10)));
 
+/**
+ * The row of a labelled switch: the outermost element around `label` that holds exactly one switch.
+ * The switches have no accessible name, so this goes by the visible label and the DOM, not by styling classes.
+ */
+const switchRow = (page: Page, label: string) =>
+  page.getByText(label, { exact: true }).locator("xpath=ancestor::div[count(.//*[@role='switch'])=1][last()]");
+
 async function profileSwitch(page: Page, label: string) {
   await page.goto(`${urls.retailer}/dashboard/profile`);
   await page.getByRole('button', { name: 'Edit Profile' }).click();
-  await page.locator('div.justify-between', { hasText: label }).last().getByRole('switch').click();
+  await switchRow(page, label).getByRole('switch').click();
   const saved = page.waitForResponse((r) => r.url().includes('profile/update') && r.request().method() !== 'GET');
   await page.getByRole('button', { name: 'Save Changes' }).click();
   expect((await saved).status()).toBe(200);
@@ -33,7 +40,7 @@ test.describe('Settings - store', { tag: ['@settings', '@retailer'] }, () => {
 
     await retailerLogin(page);
     await page.goto(`${urls.retailer}/dashboard/operating-hours`);
-    const row = page.locator('div.bg-card.rounded-lg', { hasText: day });
+    const row = switchRow(page, day);
     await row.getByRole('switch').click();
     await expect(row.getByText('Closed')).toBeVisible();
     const saved = page.waitForResponse((r) => r.url().includes('operating-hours') && r.request().method() === 'POST');
@@ -43,7 +50,7 @@ test.describe('Settings - store', { tag: ['@settings', '@retailer'] }, () => {
 
     expect(await slotDates(api, ct, seed.retailers.R1)).not.toContain(date);
     await page.reload();
-    await expect(page.locator('div.bg-card.rounded-lg', { hasText: day }).getByText('Closed')).toBeVisible();
+    await expect(switchRow(page, day).getByText('Closed')).toBeVisible();
   });
 
   test('ST2 slot capacity set to 1 in the UI fills the slot after one order', async ({ page, api, seed }) => {
