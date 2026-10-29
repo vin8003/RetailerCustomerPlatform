@@ -174,8 +174,9 @@ jobs:
 
       - name: Serve the builds on :4273 and :4276
         run: |
-          nohup npx --yes serve@14 retailer/out -l tcp://127.0.0.1:4273 > retailer.log 2>&1 &
-          nohup npx --yes serve@14 customer/out -l tcp://127.0.0.1:4276 > customer.log 2>&1 &
+          npm install -g serve@14
+          nohup serve retailer/out -l tcp://127.0.0.1:4273 > retailer.log 2>&1 &
+          nohup serve customer/out -l tcp://127.0.0.1:4276 > customer.log 2>&1 &
 
       - name: Install Playwright
         working-directory: rcp/e2e
