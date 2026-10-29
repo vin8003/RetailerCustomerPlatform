@@ -71,11 +71,12 @@ test.describe('@slice-catalog', () => {
     const r1 = await retailerToken();
     const c2 = await customerToken(api, C2_PHONE);
     const response = await api.delete(`products/${seed.products.P4}/delete/`, authed(r1));
-    expect(response.status(), await response.text()).toBeLessThan(300);
+    expect(response.status(), await response.text()).toBe(200);
     expect(await customerProducts(api, c2, seed.retailers.R1, 'search=Biscuit')).toHaveLength(0);
     expect(names(await customerProducts(api, c2, seed.retailers.R1, ''))).not.toContain('Biscuit pack');
     const add = await api.post('cart/add/', { ...authed(c2), data: { product_id: seed.products.P4, quantity: 1 } });
-    expect(add.status()).toBeGreaterThanOrEqual(400);
+    expect(add.status()).toBe(400);
+    expect(await add.json()).toEqual({ product_id: ['Product not found or not available'] });
   });
 
   test('category rename and delete @slice-catalog @retailer @customer', async ({ api, seed, retailerToken }) => {
@@ -93,7 +94,7 @@ test.describe('@slice-catalog', () => {
     expect((await refused.json()).error).toMatch(/assigned to existing products/);
     await patch(api, `products/${seed.products.P2}/update/`, r1, { category: null });
     const removed = await api.delete(`products/categories/${category.id}/delete/`, authed(r1));
-    expect(removed.status(), await removed.text()).toBeLessThan(300);
+    expect(removed.status(), await removed.text()).toBe(200);
     const after = rows(await getJson(api, `products/retailer/${seed.retailers.R1}/categories/`, c2));
     expect(after.find((c) => c.id === category.id)).toBeUndefined();
   });
@@ -122,7 +123,8 @@ test.describe('@slice-catalog', () => {
 
     const [product] = await retailerProducts(api, await retailerToken(), 'search=Jaggery');
     expect(product).toMatchObject({ name: 'E2EC Jaggery 1kg', price: '85.00', quantity: 12 });
-    expect(product.image_url ?? product.image).toBeTruthy();
+    // The uploaded PNG is stored re-encoded as JPEG, so the saved URL ends in .jpg.
+    expect(String(product.image_url ?? product.image)).toMatch(/\/media\/uploads\/product\/.+\.jpg$/);
 
     const customer = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
     await customerAtShop(customer, C2_PHONE, seed.retailers.R1);
