@@ -74,7 +74,7 @@ test.describe('Phase 2 - retailer auth & account', { tag: ['@retailer', '@auth']
     expect(await loginStatus(api, 'auth/retailer/login/', `+91${C1_MOBILE}`, PASSWORD)).toBeGreaterThanOrEqual(400);
   });
 
-  // BUG (report for Jira): on /forgot-password step 2 the Code input stays empty; typed digits never stick, so the reset cannot be submitted.
+  // BUG OE-374 (https://vin8003.atlassian.net/browse/OE-374): on /forgot-password step 2 the Code input stays empty; typed digits never stick, so the reset cannot be submitted.
   test.fixme('R-AUTH5 password reset with the OTP: old password stops working, new one logs in', async ({ page, api }) => {
     await page.goto(`${urls.retailer}/forgot-password`);
     await page.getByTestId('forgot-identifier').fill(R2.username);
