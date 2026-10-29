@@ -31,6 +31,7 @@ from .models import (
     ProductUploadSession, UploadSessionItem, ProductBatch,
 )
 from products.inventory_service import apply_stock_decrease, apply_stock_increase, log_inventory_change
+from products.search import barcode_scan_queryset
 from products.search_cache import bump_search_cache, get_cached_search, search_cache_key, set_cached_search
 from products.tax_service import GST_RATES, clean_hsn_code
 from .serializers import (
@@ -702,7 +703,7 @@ def search_products(request):
                 return Response(cached['payload'], status=status.HTTP_200_OK)
 
         if search:
-            products = smart_product_search(products, search)
+            products = barcode_scan_queryset(products, search) or smart_product_search(products, search)
 
         # Apply category filter if provided
         if category:
@@ -1718,7 +1719,7 @@ def search_products_public(request, retailer_id):
                 return Response(cached['payload'], status=status.HTTP_200_OK)
 
         if search:
-            products = smart_product_search(products, search)
+            products = barcode_scan_queryset(products, search) or smart_product_search(products, search)
 
         # Apply category filter if provided
         if category:

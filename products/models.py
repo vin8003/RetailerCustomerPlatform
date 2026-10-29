@@ -400,6 +400,7 @@ class Product(models.Model):
             models.Index(fields=['created_at']),
             models.Index(fields=['is_featured']),
             models.Index(fields=['is_seasonal']),
+            models.Index(fields=['retailer', 'barcode'], name='product_retailer_barcode_idx'),
         ]
         unique_together = ['retailer', 'name']
     
