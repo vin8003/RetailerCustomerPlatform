@@ -214,8 +214,19 @@ jobs:
               case "$path" in
                 e2e/tests/pos.spec.ts|e2e/pos.ts) tags="$tags pos" ;;
                 e2e/tests/khata.spec.ts) tags="$tags khata" ;;
+                e2e/tests/khata-ledger.spec.ts) tags="$tags khata" ;;
+                e2e/tests/orders-edge.spec.ts) tags="$tags orders" ;;
+                e2e/tests/reports.spec.ts) tags="$tags reports" ;;
+                e2e/tests/settings.spec.ts) tags="$tags settings" ;;
                 e2e/tests/order.spec.ts|e2e/tests/time.spec.ts|orders/*) tags="$tags orders" ;;
                 offers/*|cart/*) tags="$tags offers" ;; # fixme.spec.ts spans every area: full suite
+                e2e/tests/catalog.spec.ts) tags="$tags slice-catalog" ;;
+                e2e/tests/offers.spec.ts) tags="$tags slice-offers" ;;
+                e2e/tests/inventory.spec.ts) tags="$tags slice-inventory" ;;
+                e2e/slice-helpers.ts) tags="$tags slice-catalog slice-offers slice-inventory" ;;
+                e2e/tests/scan.spec.ts|e2e/tests/scan-unknown.spec.ts) tags="$tags slice-scan" ;;
+                e2e/tests/delivery-fee.spec.ts) tags="$tags slice-fee" ;;
+                e2e/tests/bundles.spec.ts) tags="$tags slice-bundles" ;;
                 e2e/tests/auth-*.spec.ts|authentication/*) tags="$tags auth" ;;
                 e2e/tests/guard.spec.ts|e2e/tests/seed.spec.ts|*.md|docs/*) ;;
                 *) tags=""; break ;; # full suite

@@ -55,6 +55,8 @@ DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sun
 SLOT_OPENING = time(10, 0)
 SLOT_CLOSING = time(12, 0)
 SLOT_CAPACITY = 10
+# Staff users made by settings.spec.ts; reset_org_settings deletes them.
+STAFF_PREFIX = 'e2es_'
 
 
 def assert_local_database():
@@ -86,6 +88,7 @@ class Command(BaseCommand):
             CustomerProfile.objects.get_or_create(user=customers[key])
 
         shops = list(retailers.values())
+        self.reset_org_settings(shops)
         Order.objects.filter(retailer__in=shops).delete()
         Order.objects.filter(customer__in=customers.values()).delete()
         Cart.objects.filter(customer__in=customers.values()).delete()
@@ -94,6 +97,7 @@ class Command(BaseCommand):
         Offer.objects.filter(retailer__in=shops).delete()
         Product.objects.filter(retailer__in=shops).delete()
         CustomerAddress.objects.filter(customer__in=customers.values()).delete()
+        self.reset_catalog_inventory(shops)
 
         products = {}
         for key, name, barcode, price in PRODUCTS:
@@ -174,6 +178,14 @@ class Command(BaseCommand):
         OTPVerification.objects.filter(user__in=e2e_users).delete()
         EmailOTPVerification.objects.filter(user__in=e2e_users).delete()
 
+    def reset_catalog_inventory(self, shops):
+        """slice-catalog/offers/inventory: drop categories, suppliers and purchase bills tests made at the seed shops."""
+        from products.models import ProductCategory, PurchaseInvoice
+        from retailers.models import Supplier
+        PurchaseInvoice.objects.filter(retailer__in=shops).delete()
+        Supplier.objects.filter(retailer__in=shops).delete()
+        ProductCategory.objects.filter(retailer__in=shops).delete()
+
     def upsert_user(self, username, first_name, phone, user_type, password):
         user, _created = User.objects.update_or_create(
             username=username,
@@ -232,3 +244,22 @@ class Command(BaseCommand):
                 defaults={'is_open': True, 'opening_time': SLOT_OPENING, 'closing_time': SLOT_CLOSING},
             )
         return shop
+
+    def reset_org_settings(self, shops):
+        """Settings specs (e2e/tests/settings.spec.ts) add staff, roles and notification prefs; drop them."""
+        from retailers.models import OrgNotificationConfig, OrgRole, OrgStaffMembership
+
+        for shop in shops:
+            org = shop.organization
+            if org is None:
+                continue
+            staff = OrgStaffMembership.objects.filter(
+                organization=org, user__username__startswith=STAFF_PREFIX,
+            ).exclude(user=shop.user)
+            staff_user_ids = list(staff.values_list('user_id', flat=True))
+            staff.delete()
+            User.objects.filter(id__in=staff_user_ids).delete()
+            OrgRole.objects.filter(organization=org, is_system=False).delete()
+            OrgNotificationConfig.objects.filter(organization=org).update(
+                default_channel='push', disabled_types=[], channel_overrides={},
+            )
