@@ -298,4 +298,29 @@ test.describe('Orders edge - pickup, payment modes, slots', { tag: ['@orders', '
       .map((n: { message: string }) => n.message);
     await expect.poll(messages).toEqual(expect.arrayContaining(['Your order has been confirmed', 'Your order has been cancelled']));
   });
+
+  fixme('E16 cancelling through PATCH status/ records who cancelled and the reason, like /cancel/ @retailer',
+    known('OE-383', "PATCH orders/{id}/status/ {status:'cancelled', reason} leaves cancelled_by null and drops the reason"),
+    async ({ api, seed, retailerToken }) => {
+      const ct = await customerToken(api, C2_MOBILE);
+      const order = await placeOrder(api, ct, seed.retailers.R1, [[seed.products.P4, 1]], { addressId: seed.c2_address });
+      const rt = await retailerToken();
+      const r = await api.patch(`orders/${order.id}/status/`, { ...authed(rt), data: { status: 'cancelled', reason: 'E2E out of stock' } });
+      expect(r.status(), await r.text()).toBe(200);
+      const body = await getJson(api, `orders/${order.id}/`, rt);
+      expect(body).toMatchObject({ status: 'cancelled', cancelled_by: 'retailer', cancellation_reason: 'E2E out of stock' });
+    });
+
+  fixme('E17 order notifications carry the order id and number @customer',
+    known('OE-384', 'customer/notifications/ entries for an order have order_id and order_number null'),
+    async ({ api, seed, retailerToken }) => {
+      const ct = await customerToken(api, C2_MOBILE);
+      const order = await placeOrder(api, ct, seed.retailers.R1, [[seed.products.P4, 1]], { addressId: seed.c2_address });
+      const rt = await retailerToken();
+      expect((await api.post(`orders/${order.id}/cancel/`, { ...authed(rt), data: { reason: 'E2E out of stock' } })).status()).toBe(200);
+      const mine = async () => (await getJson(api, 'customer/notifications/', ct)).results
+        .filter((n: { title: string }) => n.title.includes(order.order_number))
+        .map((n: { order_id: number | null; order_number: string | null }) => [n.order_id, n.order_number]);
+      await expect.poll(mine).toEqual([[order.id, order.order_number]]);
+    });
 });
