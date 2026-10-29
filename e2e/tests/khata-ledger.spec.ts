@@ -76,7 +76,7 @@ test.describe('Khata ledger', { tag: ['@khata'] }, () => {
   });
 
   fixme('K6 a shop with no credit limit (0 = unlimited) never shows negative remaining credit @customer',
-    known('NEW', 'customer/credit/all and the profile show "Remaining credit ₹-1000.00" for a limit-0 (no lock) khata'),
+    known('OE-380', 'customer/credit/all and the profile show "Remaining credit ₹-1000.00" for a limit-0 (no lock) khata'),
     async ({ api, seed }) => {
       const ct = await customerToken(api, C1_MOBILE);
       const r2 = (await getJson(api, 'customer/credit/all/', ct)).find((k: { retailer_id: number }) => k.retailer_id === seed.retailers.R2);
@@ -85,7 +85,7 @@ test.describe('Khata ledger', { tag: ['@khata'] }, () => {
     });
 
   fixme('K7 staff without khata permission get 403 (not 500) when recording a payment @retailer',
-    known('NEW', 'staff POST customer/retailer/payment/record/ returns 500 "No RetailerProfile matches"'),
+    known('OE-381', 'staff POST customer/retailer/payment/record/ returns 500 "No RetailerProfile matches"'),
     async ({ api, seed, retailerToken }) => {
       const rt = await retailerToken();
       const org = (await getJson(api, 'retailers/profile/', rt)).organization_id;
