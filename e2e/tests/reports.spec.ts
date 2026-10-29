@@ -25,6 +25,17 @@ async function seedDay(api: APIRequestContext, seed: SeedIds, rt: string) {
   return ct;
 }
 
+/** Today's date in IST, the server's "today" for the summary and stats (settings_e2e TIME_ZONE). */
+const istDay = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
+/**
+ * The server cannot be clock-pinned. Read the IST date once before seeding; if the run crossed IST
+ * midnight before the report was read, the seeded day is no longer "today", so skip rather than fail.
+ */
+function skipIfDayChanged(seededOn: string) {
+  test.skip(istDay() !== seededOn, `run crossed IST midnight: seeded on ${seededOn}, report read on ${istDay()}`);
+}
+
 const EXPECTED = {
   total_sales: 465, order_count: 4, cash_sales: 265, digital_sales: 140,
   credit_sales: 60, pos_sales: 365, online_sales: 100,
@@ -33,15 +44,19 @@ const EXPECTED = {
 test.describe('Reports', { tag: ['@reports', '@retailer'] }, () => {
   test('R1 daily sales summary splits a seeded day by payment mode and channel', async ({ api, seed, retailerToken }) => {
     const rt = await retailerToken();
+    const day = istDay();
     await seedDay(api, seed, rt);
     const summary = await getJson(api, 'products/erp/daily-sales-summary/', rt);
+    skipIfDayChanged(day);
     expect(summary).toMatchObject({ ...EXPECTED, shop_name: SEED.retailers.R1.shop_name, cash_refunds: 0, upi_refunds: 0 });
   });
 
   test('R2 dashboard stats agree with the summary and count the cancelled order separately', async ({ api, seed, retailerToken }) => {
     const rt = await retailerToken();
+    const day = istDay();
     await seedDay(api, seed, rt);
     const stats = await getJson(api, 'orders/stats/', rt);
+    skipIfDayChanged(day);
     expect(stats).toMatchObject({
       total_orders: 5, delivered_orders: 4, cancelled_orders: 1, pending_orders: 0,
       total_revenue: '465.00', today_revenue: '465.00', average_order_value: '116.25',
@@ -51,9 +66,11 @@ test.describe('Reports', { tag: ['@reports', '@retailer'] }, () => {
 
   test('R3 the reports page shows the seeded totals', async ({ page, api, seed, retailerToken }) => {
     const rt = await retailerToken();
+    const day = istDay();
     await seedDay(api, seed, rt);
     await retailerLogin(page);
     await page.goto(`${urls.retailer}/dashboard/reports`);
+    skipIfDayChanged(day);
     await expect(page.getByRole('heading', { name: '₹465' })).toBeVisible();
     await expect(page.getByText('4 Orders Processed')).toBeVisible();
     const value = (label: string) => page.locator(`xpath=//p[normalize-space()='${label}']/following::p[1]`);
@@ -67,9 +84,11 @@ test.describe('Reports', { tag: ['@reports', '@retailer'] }, () => {
     known('OE-382', 'daily-sales-summary counts a pending online COD order (total 495, cash 295) while orders/stats says 465'),
     async ({ api, seed, retailerToken }) => {
       const rt = await retailerToken();
+      const day = istDay();
       const ct = await seedDay(api, seed, rt);
       await placeOrder(api, ct, seed.retailers.R1, [[seed.products.P4, 1]], { addressId: seed.c2_address });
       const summary = await getJson(api, 'products/erp/daily-sales-summary/', rt);
+      skipIfDayChanged(day);
       expect(summary).toMatchObject(EXPECTED);
     });
 });
