@@ -25,23 +25,24 @@ test.use({
 });
 
 /**
- * Tap Scan once with the code in view and wait for the cart bar to show `want`.
- * Tap again only while the bar still shows what it showed before the tap (the frame
- * was not decoded); once it moves, never tap again, so the count cannot overshoot.
+ * One camera scan, ending with the cart bar at `want`. Never adds twice.
+ * Opening the scanner may auto-read the first code (OE-386 makes that a race), so first let the
+ * scanner settle: at 10 fps it has decoded the code well within 3 s. If it auto-read, we are done.
+ * Otherwise the bar must still show what it showed before, and one tap adds the code. A second tap
+ * happens only when the app says "No barcode in view" (that tap added nothing).
  */
-async function scanOnce(page: Page, bar: Locator, want: RegExp) {
+async function scanOnce(page: Page, bar: Locator, before: RegExp | null, want: RegExp) {
+  const autoRead = await expect(bar).toHaveText(want, { timeout: 3000 }).then(() => true, () => false);
+  if (autoRead) return;
+  if (before) await expect(bar).toHaveText(before);
+  else await expect(bar).toHaveCount(0);
   const scan = page.getByRole('button', { name: 'Scan', exact: true });
-  const before = (await bar.count()) ? await bar.textContent() : null;
-  for (let tap = 0; tap < 5; tap++) {
-    await scan.click();
-    try {
-      await expect(bar).toHaveText(want, { timeout: 4000 });
-      return;
-    } catch {
-      const now = (await bar.count()) ? await bar.textContent() : null;
-      if (now !== before) break; // it changed, but not to `want`: fail below, don't tap again
-    }
-  }
+  const nothing = page.getByText('No barcode in view', { exact: false });
+  await scan.click();
+  const added = async () => want.test((await bar.count()) ? ((await bar.textContent()) ?? '') : '');
+  // Wait for the tap's outcome: the bar reaches `want`, or the app says nothing was in view.
+  await expect.poll(async () => (await added()) || (await nothing.isVisible())).toBe(true);
+  if (!(await added())) await scan.click();
   await expect(bar).toHaveText(want);
 }
 
@@ -56,11 +57,11 @@ test.describe('Slice scan - mobile POS camera scan', { tag: ['@slice-scan', '@re
     // Tap Scan with the code in view, like a counter scanner's trigger: each tap adds one.
     // (The first code is meant to be read without a tap; that is SC2, fixme.)
     const bar = page.getByRole('button', { name: /^\d+ items? ₹/ });
-    await scanOnce(page, bar, /1 item\s*₹100/);
+    await scanOnce(page, bar, null, /1 item\s*₹100/);
     await page.getByRole('button', { name: 'Close scanner' }).click();
     await expect(bar).toHaveText(/1 item\s*₹100/);
     await page.getByRole('button', { name: 'Scan barcode with camera' }).click();
-    await scanOnce(page, bar, /1 item\s*₹200/);
+    await scanOnce(page, bar, /1 item\s*₹100/, /1 item\s*₹200/);
     await page.getByRole('button', { name: 'Close scanner' }).click();
     // Same product twice: one line, quantity 2.
     await expect(bar).toHaveText(/1 item\s*₹200/);
