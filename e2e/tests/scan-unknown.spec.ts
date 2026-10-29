@@ -8,7 +8,7 @@ import { test, expect } from '../fixtures';
 import { retailerLogin } from '../helpers';
 import { SFB, SFB_PRODUCT, SFB_RETAILER, writeBarcodeY4m } from '../sfb';
 
-const CLIP = writeBarcodeY4m(SFB.unknown_barcode, join(__dirname, '..', 'test-results', 'fake-camera', 'sfb-unknown.y4m'));
+const CLIP = writeBarcodeY4m(SFB.unknown_barcode, join(__dirname, '..', '.fake-camera', 'sfb-unknown.y4m'));
 
 test.use({
   ...devices['Pixel 7'],

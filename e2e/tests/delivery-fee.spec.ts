@@ -32,46 +32,62 @@ async function openCheckout(page: Page, api: Parameters<typeof addToCart>[0], id
   return token;
 }
 
-test.describe('Slice fee - distance delivery fee at checkout', { tag: ['@slice-fee', '@customer'] }, () => {
-  for (const [key, total] of [
-    ['NEAR', '₹120.00'], ['MID', '₹140.00'], ['FAR', '₹160.00'],
-    // Band edges: 2 km and 5 km are the last km of their band; 6 km is one started km past 5; 8 km is the radius.
-    ['AT2', '₹120.00'], ['AT5', '₹140.00'], ['AT6', '₹150.00'], ['AT8', '₹170.00'],
-  ] as const) {
-    test(`DF ${key}: ${SFB_ADDRESS[key].km} km pays ₹${SFB_ADDRESS[key].fee} delivery`, async ({ page, api, seed }) => {
+/** The server's quote for a saved SFB address (the same call checkout makes). */
+async function quote(api: Parameters<typeof getJson>[0], token: string, ids: SfbIds, address: AddressKey, orderTotal: string) {
+  return getJson(api, `retailers/${ids.retailer}/delivery-quote/?address_id=${ids.addresses[address]}&order_total=${orderTotal}`, token);
+}
+
+test.describe('Slice fee - delivery-quote bands and radius (API)', { tag: ['@slice-fee', '@customer'] }, () => {
+  // Band edges: 2 km and 5 km are the last km of their band; 6 km is one started km past 5; 8 km is the radius.
+  for (const key of ['NEAR', 'AT2', 'MID', 'AT5', 'AT6', 'FAR', 'AT8'] as const) {
+    test(`DQ ${key}: ${SFB_ADDRESS[key].km} km is quoted ₹${SFB_ADDRESS[key].fee}`, async ({ api, seed }) => {
       const ids = sfbIds(seed);
-      await openCheckout(page, api, ids, 1, key);
-      await expect(page.getByTestId('checkout-delivery-fee')).toHaveText(`₹${SFB_ADDRESS[key].fee}`);
-      await expect(page.getByTestId('checkout-total')).toHaveText(total);
-      await expect(page.getByTestId('checkout-place-order')).toBeEnabled();
+      const token = await customerToken(api, SFB_CUSTOMER_MOBILE);
+      expect(await quote(api, token, ids, key, '100.00')).toMatchObject({
+        deliverable: true, distance_km: SFB_ADDRESS[key].km, delivery_fee: SFB_ADDRESS[key].fee, free_delivery_applied: false,
+      });
     });
   }
 
-  for (const key of ['OUT', 'PAST8'] as const) {
-    test(`DF ${key}: ${SFB_ADDRESS[key].km} km is outside the 8 km radius and cannot be ordered`, async ({ page, api, seed }) => {
+  for (const key of ['PAST8', 'OUT'] as const) {
+    test(`DQ ${key}: ${SFB_ADDRESS[key].km} km is outside the 8 km radius`, async ({ api, seed }) => {
       const ids = sfbIds(seed);
-      await openCheckout(page, api, ids, 1, key);
-      // delivery_pricing.quote_delivery's reason, shown as is.
-      await expect(page.getByTestId('checkout-delivery-unavailable'))
-        .toHaveText(`This address is ${SFB_ADDRESS[key].km} km away; the shop delivers within 8 km.`);
-      await expect(page.getByTestId('checkout-delivery-fee')).toHaveCount(0);
-      await expect(page.getByTestId('checkout-place-order')).toBeDisabled();
-      await expect(page.getByTestId('checkout-place-order')).toHaveText('Outside delivery area');
+      const token = await customerToken(api, SFB_CUSTOMER_MOBILE);
+      expect(await quote(api, token, ids, key, '100.00')).toMatchObject({
+        deliverable: false, distance_km: SFB_ADDRESS[key].km,
+        reason: `This address is ${SFB_ADDRESS[key].km} km away; the shop delivers within 8 km.`,
+      });
     });
   }
 
-  test('DF FREE: ₹500 cart at 3.5 km delivers free', async ({ page, api, seed }) => {
+  test('DQ FREE: ₹500 at 3.5 km is free, ₹499.99 still pays ₹40', async ({ api, seed }) => {
     const ids = sfbIds(seed);
-    await openCheckout(page, api, ids, 5, 'MID');
-    await expect(page.getByTestId('checkout-total')).toHaveText('₹500.00');
-    await expect(page.getByTestId('checkout-delivery-fee')).toHaveCount(0);
+    const token = await customerToken(api, SFB_CUSTOMER_MOBILE);
+    expect(await quote(api, token, ids, 'MID', '500.00'))
+      .toMatchObject({ deliverable: true, delivery_fee: '0.00', fee_before_free_delivery: '40.00', free_delivery_applied: true });
+    expect(await quote(api, token, ids, 'MID', '499.99'))
+      .toMatchObject({ deliverable: true, delivery_fee: '40.00', free_delivery_applied: false });
+  });
+});
+
+test.describe('Slice fee - distance delivery fee at checkout', { tag: ['@slice-fee', '@customer'] }, () => {
+  test(`DF NEAR: ${SFB_ADDRESS.NEAR.km} km shows ₹${SFB_ADDRESS.NEAR.fee} delivery and can be ordered`, async ({ page, api, seed }) => {
+    const ids = sfbIds(seed);
+    await openCheckout(page, api, ids, 1, 'NEAR');
+    await expect(page.getByTestId('checkout-delivery-fee')).toHaveText(`₹${SFB_ADDRESS.NEAR.fee}`);
+    await expect(page.getByTestId('checkout-total')).toHaveText('₹120.00');
+    await expect(page.getByTestId('checkout-place-order')).toBeEnabled();
   });
 
-  test('DF NOT FREE: ₹499.99 cart at 3.5 km still pays ₹40', async ({ page, api, seed }) => {
+  test(`DF OUT: ${SFB_ADDRESS.OUT.km} km is outside the 8 km radius and cannot be ordered`, async ({ page, api, seed }) => {
     const ids = sfbIds(seed);
-    await openCheckout(page, api, ids, 1, 'MID', 'GHEE');
-    await expect(page.getByTestId('checkout-delivery-fee')).toHaveText('₹40.00');
-    await expect(page.getByTestId('checkout-total')).toHaveText('₹539.99');
+    await openCheckout(page, api, ids, 1, 'OUT');
+    // delivery_pricing.quote_delivery's reason, shown as is.
+    await expect(page.getByTestId('checkout-delivery-unavailable'))
+      .toHaveText(`This address is ${SFB_ADDRESS.OUT.km} km away; the shop delivers within 8 km.`);
+    await expect(page.getByTestId('checkout-delivery-fee')).toHaveCount(0);
+    await expect(page.getByTestId('checkout-place-order')).toBeDisabled();
+    await expect(page.getByTestId('checkout-place-order')).toHaveText('Outside delivery area');
   });
 
   test('DF ORDER: placed order at 6.5 km saves the ₹60 fee and ₹160 total', async ({ page, api, seed }) => {
