@@ -76,8 +76,10 @@ test.describe('Khata ledger', { tag: ['@khata'] }, () => {
   });
 
   // OE-380 closed as working as designed (KAN-70, customers/views.py:728): remaining_credit = limit - balance, so a
-  // limit-0 (no lock) khata shows a negative remaining credit. Regression guard for today's display.
-  test('K6 a limit-0 (no lock) khata shows its outstanding and a negative remaining credit @customer', async ({ page, api, seed }) => {
+  // limit-0 (no lock) khata shows a negative remaining credit. Pins current behaviour, not a decided rule: if the
+  // display is changed on purpose, update this test.
+  test('K6 current behaviour: a limit-0 (no lock) khata shows its outstanding and a negative remaining credit @customer', async ({ page, api, seed }) => {
+    test.info().annotations.push({ type: 'current-behaviour', description: 'limit-0 khata with 1000 outstanding shows Remaining credit ₹-1000.00 (OE-380 closed as designed, KAN-70)' });
     const ct = await customerToken(api, C1_MOBILE);
     const r2 = (await getJson(api, 'customer/credit/all/', ct)).find((k: { retailer_id: number }) => k.retailer_id === seed.retailers.R2);
     expect(r2).toMatchObject({ credit_limit: 0, current_balance: 1000, remaining_credit: -1000 });
