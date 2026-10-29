@@ -61,13 +61,17 @@ test.describe('Phase 2 - customer auth & account', { tag: ['@customer', '@auth']
   test('C-AUTH4 email password reset with the OTP: old password fails, new one logs in', async ({ page, api }) => {
     await page.goto(`${urls.customer}/forgot-password`);
     await page.getByTestId('customer-forgot-email').fill(`${C1.username}@e2e.invalid`);
+    const sent = page.waitForResponse((r) => r.url().includes('password/email/forgot/') && r.ok());
     await page.getByTestId('customer-forgot-send').click();
+    await sent;
     await expect(page.getByTestId('customer-reset-otp')).toBeVisible();
 
     await page.getByTestId('customer-reset-otp').fill(latestOtp('email', C1.username));
     await page.getByTestId('customer-reset-password').fill(NEW_PASSWORD);
     await page.getByTestId('customer-reset-confirm').fill(NEW_PASSWORD);
+    const reset = page.waitForResponse((r) => r.url().includes('password/email/reset/'));
     await page.getByTestId('customer-reset-submit').click();
+    expect((await reset).ok()).toBe(true);
     await expect(page.getByTestId('customer-forgot-success')).toBeVisible();
 
     expect(await loginStatus(api, 'auth/customer/login/', `+91${C1_MOBILE}`, PASSWORD)).toBeGreaterThanOrEqual(400);
