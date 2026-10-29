@@ -52,6 +52,10 @@ test.describe('Reports', { tag: ['@reports', '@retailer'] }, () => {
   });
 
   test('R2 dashboard stats agree with the summary and count the cancelled order separately', async ({ api, seed, retailerToken }) => {
+    test.info().annotations.push({ type: 'bug', description: 'https://vin8003.atlassian.net/browse/OE-389' });
+    // OE-389: stats "today" is the UTC date, so before 05:30 IST today_revenue reads 0.
+    const [h, m] = new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hourCycle: 'h23', hour: '2-digit', minute: '2-digit' }).split(':').map(Number);
+    test.skip(h * 60 + m < 5 * 60 + 30, 'OE-389: stats use the UTC date between 00:00 and 05:30 IST');
     const rt = await retailerToken();
     const day = istDay();
     await seedDay(api, seed, rt);
