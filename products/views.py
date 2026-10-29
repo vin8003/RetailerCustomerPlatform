@@ -12,12 +12,15 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 import logging
 import json
+import hashlib
 from common.client_input import decimal_value, id_value, money_value
 from common.error_utils import format_exception
 import pandas as pd
 import os
 from django.conf import settings
 from datetime import datetime
+from collections import Counter
+from django.core.cache import cache
 
 from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -628,11 +631,25 @@ def search_products(request):
 
         # Apply search
         search = request.query_params.get('search')
+        category = request.query_params.get('category')
+        limit = _search_limit(request)
+        can_see_cost = include_purchase_margin(request.user)
+        include_group_variants = (
+            request.query_params.get('include_group_variants') == 'true'
+        )
+
+        cache_key = None
+        if search:
+            query_hash = hashlib.md5(search.lower().strip().encode('utf-8')).hexdigest()[:16]
+            cache_key = f"r_search_{retailer.id}_{query_hash}_{category}_{limit}_{can_see_cost}_{include_group_variants}"
+            cached_res = cache.get(cache_key)
+            if cached_res is not None:
+                return Response(cached_res, status=status.HTTP_200_OK)
+
         if search:
             products = smart_product_search(products, search)
 
         # Apply category filter if provided
-        category = request.query_params.get('category')
         if category:
             if category.isdigit():
                 category_ids = get_all_category_ids(category)
@@ -648,24 +665,7 @@ def search_products(request):
                 else:
                     products = products.none()
                 
-        # Calculate facets before limiting
-        facets = {
-            'categories': list(products.values('category__id', 'category__name')
-                                    .annotate(count=Count('id'))
-                                    .filter(category__isnull=False)
-                                    .order_by('-count')[:10]),
-            'brands': list(products.values('brand__id', 'brand__name')
-                                .annotate(count=Count('id'))
-                                .filter(brand__isnull=False)
-                                .order_by('-count')[:10])
-        }
-
-        # Log Telemetry asynchronously
-        if search:
-            log_search_telemetry(search, products.count(), retailer=retailer, user=request.user)
-
         # Limit results for search
-        limit = _search_limit(request)
         products = products.select_related(
             'parent_bulk_product', 'brand', 'category'
         ).prefetch_related(
@@ -676,11 +676,25 @@ def search_products(request):
         )
         products = list(products[:limit])
         Product.cache_saleable_quantities(products)
-        can_see_cost = include_purchase_margin(request.user)
 
-        include_group_variants = (
-            request.query_params.get('include_group_variants') == 'true'
-        )
+        # Calculate facets from results without extra full-table queries
+        cat_counts = Counter()
+        brand_counts = Counter()
+        for p in products:
+            if p.category_id and p.category:
+                cat_counts[(p.category.id, p.category.name)] += 1
+            if p.brand_id and p.brand:
+                brand_counts[(p.brand.id, p.brand.name)] += 1
+
+        facets = {
+            'categories': [{'category__id': cid, 'category__name': cname, 'count': cnt} for (cid, cname), cnt in cat_counts.most_common(10)],
+            'brands': [{'brand__id': bid, 'brand__name': bname, 'count': cnt} for (bid, bname), cnt in brand_counts.most_common(10)]
+        }
+
+        # Log Telemetry asynchronously
+        if search:
+            log_search_telemetry(search, len(products), retailer=retailer, user=request.user)
+
         serializer = ProductSearchSerializer(
             products,
             many=True,
@@ -695,10 +709,13 @@ def search_products(request):
                 'hide_purchase_price': not can_see_cost,
             },
         )
-        return Response({
+        response_payload = {
             'results': serializer.data,
             'facets': facets
-        }, status=status.HTTP_200_OK)
+        }
+        if cache_key:
+            cache.set(cache_key, response_payload, timeout=60)
+        return Response(response_payload, status=status.HTTP_200_OK)
 
     except (Http404, APIException):
         raise
@@ -1630,11 +1647,21 @@ def search_products_public(request, retailer_id):
 
         # Apply search
         search = request.query_params.get('search')
+        category = request.query_params.get('category')
+        limit = _search_limit(request)
+
+        cache_key = None
+        if search:
+            query_hash = hashlib.md5(search.lower().strip().encode('utf-8')).hexdigest()[:16]
+            cache_key = f"pub_search_{retailer.id}_{query_hash}_{category}_{limit}"
+            cached_res = cache.get(cache_key)
+            if cached_res is not None:
+                return Response(cached_res, status=status.HTTP_200_OK)
+
         if search:
             products = smart_product_search(products, search)
 
         # Apply category filter if provided
-        category = request.query_params.get('category')
         if category:
             if category.isdigit():
                 category_ids = get_all_category_ids(category)
@@ -1642,31 +1669,35 @@ def search_products_public(request, retailer_id):
             else:
                 products = products.filter(category__name__icontains=category)
 
-        # Calculate facets before limiting
+        # Limit results for search
+        products = list(products.select_related('brand', 'category')[:limit])
+
+        # Calculate facets from results without extra full-table queries
+        cat_counts = Counter()
+        brand_counts = Counter()
+        for p in products:
+            if p.category_id and p.category:
+                cat_counts[(p.category.id, p.category.name)] += 1
+            if p.brand_id and p.brand:
+                brand_counts[(p.brand.id, p.brand.name)] += 1
+
         facets = {
-            'categories': list(products.values('category__id', 'category__name')
-                                    .annotate(count=Count('id'))
-                                    .filter(category__isnull=False)
-                                    .order_by('-count')[:10]),
-            'brands': list(products.values('brand__id', 'brand__name')
-                                .annotate(count=Count('id'))
-                                .filter(brand__isnull=False)
-                                .order_by('-count')[:10])
+            'categories': [{'category__id': cid, 'category__name': cname, 'count': cnt} for (cid, cname), cnt in cat_counts.most_common(10)],
+            'brands': [{'brand__id': bid, 'brand__name': bname, 'count': cnt} for (bid, bname), cnt in brand_counts.most_common(10)]
         }
 
         # Log Telemetry asynchronously
         if search:
-            log_search_telemetry(search, products.count(), retailer=retailer, user=request.user if request.user.is_authenticated else None)
-
-        # Limit results for search
-        limit = _search_limit(request)
-        products = products.select_related('brand', 'category')[:limit]
+            log_search_telemetry(search, len(products), retailer=retailer, user=request.user if request.user.is_authenticated else None)
 
         serializer = ProductSearchSerializer(products, many=True)
-        return Response({
+        response_payload = {
             'results': serializer.data,
             'facets': facets
-        }, status=status.HTTP_200_OK)
+        }
+        if cache_key:
+            cache.set(cache_key, response_payload, timeout=60)
+        return Response(response_payload, status=status.HTTP_200_OK)
 
     except (Http404, APIException):
         raise
