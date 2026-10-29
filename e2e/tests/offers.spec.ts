@@ -5,7 +5,7 @@
 import { test, expect, urls } from '../fixtures';
 import { addToCart, authed, createOffer, customerCart, customerToken, getJson, retailerLogin } from '../helpers';
 import { C2_MOBILE as C2_PHONE } from '../seed';
-import { applyCoupon, bug, customerAtShop } from '../slice-helpers';
+import { applyCoupon, bug, customerAtShop, patch } from '../slice-helpers';
 
 const fixme = process.env.E2E_RUN_FIXME ? test : test.fixme;
 const istDate = (n: number) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date(Date.now() + n * 24 * 3600 * 1000));
@@ -70,17 +70,42 @@ test.describe('@slice-offers', () => {
     expect(cart.discounted_total).toBe(500);
   });
 
-  test('two non-stackable cart offers: only one applies and savings match the price @slice-offers @customer @offers', async ({ api, seed, retailerToken }) => {
+  test('two non-stackable cart offers: only the higher-priority one applies @slice-offers @customer @offers', async ({ api, seed, retailerToken }) => {
     const r1 = await retailerToken();
-    await createOffer(api, r1, { name: 'E2EO 10% cart', offer_type: 'cart_value', value_type: 'percent', value: '10.00' });
-    await createOffer(api, r1, { name: 'E2EO ₹50 cart', offer_type: 'cart_value', value_type: 'amount', value: '50.00' });
+    await createOffer(api, r1, { name: 'E2EO 10% cart', offer_type: 'cart_value', value_type: 'percent', value: '10.00', priority: 1 });
+    await createOffer(api, r1, { name: 'E2EO ₹80 cart', offer_type: 'cart_value', value_type: 'amount', value: '80.00', priority: 5 });
     const token = await customerToken(api, C2_PHONE);
-    await addToCart(api, token, seed.products.P1, 2); // 500
+    await addToCart(api, token, seed.products.P1, 2); // 500: 10% = ₹50, flat = ₹80
     const cart = await customerCart(api, token, seed.retailers.R1);
-    expect(cart.applied_offers).toHaveLength(1);
-    const reported = cart.applied_offers.reduce((sum: number, o: { savings: number }) => sum + o.savings, 0);
-    expect(reported).toBe(cart.total_savings);
-    expect(cart.total_savings).toBe(50);
+    expect(cart.applied_offers.map((o: { name: string }) => o.name)).toEqual(['E2EO ₹80 cart']);
+    expect(cart.total_savings).toBe(80);
+    expect(cart.discounted_total).toBe(420);
+  });
+
+  fixme('two non-stackable cart offers at equal priority: the bigger saving wins @slice-offers @customer @offers',
+    bug('https://vin8003.atlassian.net/browse/OE-388: equal priority, 10% (₹50) vs ₹80 on a ₹500 cart applies the 10% offer (total ₹450); expected ₹80 off, total ₹420'),
+    async ({ api, seed, retailerToken }) => {
+      const r1 = await retailerToken();
+      await createOffer(api, r1, { name: 'E2EO 10% cart', offer_type: 'cart_value', value_type: 'percent', value: '10.00' });
+      await createOffer(api, r1, { name: 'E2EO ₹80 cart', offer_type: 'cart_value', value_type: 'amount', value: '80.00' });
+      const token = await customerToken(api, C2_PHONE);
+      await addToCart(api, token, seed.products.P1, 2);
+      const cart = await customerCart(api, token, seed.retailers.R1);
+      expect(cart.applied_offers.map((o: { name: string }) => o.name)).toEqual(['E2EO ₹80 cart']);
+      expect(cart.discounted_total).toBe(420);
+    });
+
+  test('cart value offer: ₹0.01 below the minimum is not applied, exactly at it is @slice-offers @customer @offers', async ({ api, seed, retailerToken }) => {
+    const r1 = await retailerToken();
+    const offer = await createOffer(api, r1, { name: 'E2EO edge', offer_type: 'cart_value', value_type: 'amount', value: '50.00', min_order_value: '500.01' });
+    const token = await customerToken(api, C2_PHONE);
+    await addToCart(api, token, seed.products.P1, 2); // exactly 500.00
+    let cart = await customerCart(api, token, seed.retailers.R1);
+    expect(cart.applied_offers).toHaveLength(0);
+    expect(cart.discounted_total).toBe(500);
+    await patch(api, `offers/${offer.id}/`, r1, { min_order_value: '500.00' });
+    cart = await customerCart(api, token, seed.retailers.R1);
+    expect(cart.applied_offers.map((o: { name: string }) => o.name)).toEqual(['E2EO edge']);
     expect(cart.discounted_total).toBe(450);
   });
 
