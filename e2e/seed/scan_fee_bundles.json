@@ -1,6 +1,6 @@
 {
   "_comment": "Slice scan/fee/bundles (@slice-scan, @slice-fee, @slice-bundles). Own shop, customer and products (prefix SFB / sfb_) so no other slice's data is touched. Loaded by retailers/management/commands/seed_e2e_sfb.py and e2e/sfb.ts.",
-  "retailer": { "username": "e2e_sfb_retailer", "shop_name": "SFB Mart (e2e)", "phone": "+919100000041" },
+  "retailer": { "username": "e2e_sfb_retailer", "shop_name": "SFB Mart (e2e)", "phone": "+919100000041", "latitude": "28.59390000", "longitude": "77.22900000" },
   "customer": { "username": "e2e_sfb_cust", "first_name": "SFB Fee Cust", "phone": "+919000000041" },
   "delivery": {
     "tiers": [{ "up_to_km": "2.00", "fee": "20.00" }, { "up_to_km": "5.00", "fee": "40.00" }],
@@ -12,11 +12,20 @@
     "NEAR": { "line1": "SFB 1 km Lane", "lat_offset": "0.00900000", "km": "1.00", "fee": "20.00" },
     "MID":  { "line1": "SFB 3.5 km Road", "lat_offset": "0.03150000", "km": "3.50", "fee": "40.00" },
     "FAR":  { "line1": "SFB 6.5 km Marg", "lat_offset": "0.05850000", "km": "6.50", "fee": "60.00" },
-    "OUT":  { "line1": "SFB 10 km Nagar", "lat_offset": "0.09000000", "km": "10.01", "fee": null }
+    "OUT":  { "line1": "SFB 10 km Nagar", "lat_offset": "0.09000000", "km": "10.01", "fee": null },
+    "AT2":  { "line1": "SFB 2 km Edge", "lat_offset": "0.01798643", "km": "2.00", "fee": "20.00" },
+    "AT5":  { "line1": "SFB 5 km Edge", "lat_offset": "0.04496608", "km": "5.00", "fee": "40.00" },
+    "AT6":  { "line1": "SFB 6 km Edge", "lat_offset": "0.05395930", "km": "6.00", "fee": "50.00" },
+    "AT8":  { "line1": "SFB 8 km Edge", "lat_offset": "0.07194573", "km": "8.00", "fee": "70.00" },
+    "PAST8": { "line1": "SFB 8.01 km Edge", "lat_offset": "0.07203566", "km": "8.01", "fee": null }
   },
+  "unknown_barcode": "8901234000052",
   "products": {
     "RICE": { "name": "SFB Rice 1kg", "barcode": "8901234000014", "price": "100.00", "stock": "50" },
     "SOAP": { "name": "SFB Soap Bar", "barcode": "8901234000021", "price": "30.00", "stock": "60" },
-    "SOAP3": { "name": "SFB Soap Bundle x3", "barcode": "8901234000038", "price": "80.00", "bundle_of": "SOAP", "units": "3" }
+    "SOAP3": { "name": "SFB Soap Bundle x3", "barcode": "8901234000038", "price": "80.00", "bundle_of": "SOAP", "units": "3" },
+    "GHEE": { "name": "SFB Ghee 1L", "barcode": "8901234000045", "price": "499.99", "stock": "10" },
+    "TEA": { "name": "SFB Tea 250g", "barcode": "8901234000069", "price": "50.00", "stock": "5" },
+    "TEA3": { "name": "SFB Tea Bundle x3", "barcode": "8901234000076", "price": "140.00", "bundle_of": "TEA", "units": "3" }
   }
 }

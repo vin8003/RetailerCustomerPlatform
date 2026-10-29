@@ -76,7 +76,8 @@ export function writeBarcodeY4m(code: string, path: string, frames = 10): string
   const width = 640, height = 480, module = 4;
   const bits = ean13Modules(code);
   const left = Math.floor((width - bits.length * module) / 2);
-  // Bars run the full frame height: on a tall phone the scan box sits below the middle of the picture.
+  // Bars run the full frame height: on a tall phone the scan box sits below the middle of the picture
+  // (https://vin8003.atlassian.net/browse/OE-387).
   const top = 0, bottom = height;
   const y = Buffer.alloc(width * height, 235);
   for (let row = top; row < bottom; row++) {

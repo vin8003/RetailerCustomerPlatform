@@ -24,17 +24,19 @@ SFB_DATA = json.loads((Path(settings.BASE_DIR) / 'e2e' / 'seed' / 'scan_fee_bund
 
 def seed_sfb(cmd, password):
     """Reset the SFB shop to the same state. ``cmd`` is the seed_e2e Command (upsert helpers)."""
-    from retailers.management.commands.seed_e2e import SHOP_LATITUDE, SHOP_LONGITUDE
-
     r, c, delivery = SFB_DATA['retailer'], SFB_DATA['customer'], SFB_DATA['delivery']
     shop = cmd.upsert_shop(cmd.upsert_user(r['username'], r['shop_name'], r['phone'], 'retailer', password),
                            r['shop_name'], r['phone'])
+    # Own pin, apart from the core shop. Addresses sit due north (same longitude), so the
+    # distance depends only on the latitude offset and the fee distances stay exact.
+    shop_lat, shop_lng = Decimal(r['latitude']), Decimal(r['longitude'])
+    shop.latitude, shop.longitude = shop_lat, shop_lng
     shop.delivery_fee_mode = 'distance'
     shop.delivery_fee_tiers = delivery['tiers']
     shop.delivery_fee_per_km = Decimal(delivery['per_km'])
     shop.delivery_radius = Decimal(delivery['radius_km'])
     shop.free_delivery_threshold = Decimal(delivery['free_delivery_threshold'])
-    shop.save(update_fields=['delivery_fee_mode', 'delivery_fee_tiers', 'delivery_fee_per_km',
+    shop.save(update_fields=['latitude', 'longitude', 'delivery_fee_mode', 'delivery_fee_tiers', 'delivery_fee_per_km',
                              'delivery_radius', 'free_delivery_threshold'])
 
     customer = cmd.upsert_user(c['username'], c['first_name'], c['phone'], 'customer', password)
@@ -53,7 +55,7 @@ def seed_sfb(cmd, password):
         addresses[key] = CustomerAddress.objects.create(
             customer=customer, title=f'SFB {key}', address_type='other', address_line1=a['line1'],
             city='New Delhi', state='Delhi', pincode='110001',
-            latitude=SHOP_LATITUDE + Decimal(a['lat_offset']), longitude=SHOP_LONGITUDE,
+            latitude=shop_lat + Decimal(a['lat_offset']), longitude=shop_lng,
             is_default=(i == 0),
         ).id
 
