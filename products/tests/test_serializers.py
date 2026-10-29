@@ -178,6 +178,13 @@ class TestProductCreateUpdateSerializers:
         assert not serializer.is_valid()
         assert "non_field_errors" in serializer.errors
 
+    def test_create_rejects_duplicate_name_for_same_retailer(self, product):
+        # OE-371: used to reach the DB unique_together and 500.
+        data = {"name": product.name, "price": "10.00", "quantity": 5}
+        serializer = ProductCreateSerializer(data=data, context={"retailer": product.retailer})
+        assert not serializer.is_valid()
+        assert serializer.errors["name"] == ["A product with this name already exists."]
+
     def test_update_validation(self, product):
         data = {"minimum_order_quantity": 60} # product.quantity is 50
         serializer = ProductUpdateSerializer(product, data=data, partial=True)

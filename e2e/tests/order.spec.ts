@@ -88,7 +88,7 @@ test('B1–B4 customer order walks pending → confirmed → packed → out for 
   });
 
   await test.step('B3 retailer packs', async () => {
-    // Goes via Processing: the direct Confirmed → Packed the UI offers is a known 400 (fixme F9).
+    // Goes via Processing here; the direct Confirmed → Packed step is covered by F9.
     await retailer.getByTestId('order-status-next-processing').click();
     await expect(retailer.getByTestId('order-status')).toHaveText('PROCESSING');
     await expectCustomerLabel(customer, orderId, 'processing', 'Being prepared');

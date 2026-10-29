@@ -1160,6 +1160,13 @@ class ProductCreateSerializer(ProductTaxValidationMixin, serializers.ModelSerial
                 raise serializers.ValidationError("A product with this barcode already exists.")
         return value
 
+    def validate_name(self, value):
+        # Product has unique_together (retailer, name); without this check the insert 500s (OE-371).
+        retailer = self.context.get('retailer')
+        if retailer and Product.objects.filter(retailer=retailer, name=value).exists():
+            raise serializers.ValidationError("A product with this name already exists.")
+        return value
+
     def validate_conversion_factor(self, value):
         if value is not None and value <= 0:
             raise serializers.ValidationError(
