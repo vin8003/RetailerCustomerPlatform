@@ -148,7 +148,10 @@ class Command(BaseCommand):
             verification_status='pending', is_verified=False, is_active=False, rejection_reason=None,
         )
 
+        from retailers.management.commands.seed_e2e_sfb import seed_sfb  # slice: scan/fee/bundles
+
         return {
+            'sfb': seed_sfb(self, password),
             'admin_shop': admin_shop.id,
             'pending_shop': pending_shop.id,
             'retailers': {key: shop.id for key, shop in retailers.items()},

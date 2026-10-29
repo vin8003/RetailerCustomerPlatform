@@ -40,6 +40,7 @@ Ids are attributes only: no behaviour, style or copy changed (CASES.md §7, cove
 | `cart-checkout` | cart page CTA | B1, T2 |
 | `slot-picker-open`, `slot-summary`, `slot-day-<YYYY-MM-DD>`, `slot-option` (`data-slot-start` = local ISO), `slot-confirm` | fulfillment slot picker | B1, T2 |
 | `checkout-address-<addressId>`, `checkout-pay-cod`, `checkout-total`, `checkout-place-order` | checkout | B1 |
+| `checkout-delivery-fee`, `checkout-delivery-unavailable` | checkout delivery fee amount / outside-radius warning | slice-fee DF* |
 | `orders-filter-<status>` (`orders-filter-all` for All) | My Orders filter chips | B4 |
 | `order-card` (`data-order-id`), `order-card-status` | My Orders card, its status | B1–B4, T1, F7 |
 | `order-status-label`, `order-total`, `order-slot` | order detail | B1–B4, T2 |
