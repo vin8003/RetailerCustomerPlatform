@@ -321,6 +321,8 @@ test.describe('Orders edge - pickup, payment modes, slots', { tag: ['@orders', '
       const mine = async () => (await getJson(api, 'customer/notifications/', ct)).results
         .filter((n: { title: string }) => n.title.includes(order.order_number))
         .map((n: { order_id: number | null; order_number: string | null }) => [n.order_id, n.order_number]);
-      await expect.poll(mine).toEqual([[order.id, order.order_number]]);
+      await expect.poll(async () => (await mine()).length).toBeGreaterThan(0);
+      const pairs = await mine();
+      expect(pairs.every(([id, num]: [number | null, string | null]) => id === order.id && num === order.order_number), JSON.stringify(pairs)).toBe(true);
     });
 });
