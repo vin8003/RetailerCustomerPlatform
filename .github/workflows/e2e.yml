@@ -92,13 +92,10 @@ jobs:
 
       # Paired PRs: on an RCP pull_request, use the FE branch with the same name as the RCP head branch
       # if it exists, else main. workflow_call inputs (FE-repo PRs) always win.
-      - name: Pick FE refs (same-named branch, else FE_STACK_REF, else main)
+      - name: Pick FE refs (same-named branch, else main)
         id: fe
         env:
           HEAD_BRANCH: ${{ github.head_ref }}
-          # TODO(remove after retailer #155 + customer #101 merge): the slice stack sits on #209,
-          # whose FE half is not on main yet, so PR runs build FE from e2e/phase2-auth.
-          FE_STACK_REF: e2e/phase2-auth
           RETAILER_INPUT: ${{ inputs.retailer_ref }}
           CUSTOMER_INPUT: ${{ inputs.customer_ref }}
         run: |
@@ -107,12 +104,6 @@ jobs:
             if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ -n "$HEAD_BRANCH" ] \
                && git ls-remote --exit-code --heads "https://github.com/vin8003/$1.git" "$HEAD_BRANCH" > /dev/null; then
               echo "$HEAD_BRANCH"; return
-            fi
-            if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
-              if git ls-remote --exit-code --heads "https://github.com/vin8003/$1.git" "$FE_STACK_REF" > /dev/null; then
-                echo "$FE_STACK_REF"; return
-              fi
-              echo "::notice::$1 has no $FE_STACK_REF branch; building FE main" >&2
             fi
             echo main
           }
@@ -228,7 +219,7 @@ jobs:
                 e2e/tests/reports.spec.ts) tags="$tags reports" ;;
                 e2e/tests/settings.spec.ts) tags="$tags settings" ;;
                 e2e/tests/order.spec.ts|e2e/tests/time.spec.ts|orders/*) tags="$tags orders" ;;
-                e2e/tests/fixme.spec.ts|offers/*|cart/*) tags="$tags offers" ;;
+                offers/*|cart/*) tags="$tags offers" ;; # fixme.spec.ts spans every area: full suite
                 e2e/tests/catalog.spec.ts) tags="$tags slice-catalog" ;;
                 e2e/tests/offers.spec.ts) tags="$tags slice-offers" ;;
                 e2e/tests/inventory.spec.ts) tags="$tags slice-inventory" ;;
