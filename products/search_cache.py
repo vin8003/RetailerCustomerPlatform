@@ -41,13 +41,23 @@ def _version(retailer_id):
 
 
 def search_cache_key(scope, retailer_id, search, **parts):
-    """``scope`` separates the retailer and public endpoints; ``parts`` is every input that changes the payload."""
+    """
+    ``scope`` separates the retailer and public endpoints; ``parts`` is every input that changes the
+    payload. Returns None when the cache cannot be reached, which callers treat as "do not cache".
+    """
     query_hash = hashlib.sha1(' '.join(search.lower().split()).encode('utf-8')).hexdigest()[:16]
     tail = '_'.join(f'{name}={parts[name]}' for name in sorted(parts))
-    return f'{scope}_{retailer_id}_{_version(retailer_id)}_{query_hash}_{tail}'
+    try:
+        version = _version(retailer_id)
+    except Exception:
+        logger.warning('Search cache unavailable; serving uncached', exc_info=True)
+        return None
+    return f'{scope}_{retailer_id}_{version}_{query_hash}_{tail}'
 
 
 def get_cached_search(key):
+    if key is None:
+        return None
     try:
         return _store().get(key)
     except Exception:
@@ -56,6 +66,8 @@ def get_cached_search(key):
 
 
 def set_cached_search(key, value):
+    if key is None:
+        return
     try:
         _store().set(key, value, SEARCH_CACHE_TTL)
     except Exception:
