@@ -165,14 +165,13 @@ jobs:
         working-directory: customer
         run: npm ci && npm run build
 
-      # Built bundles must not mention a live OrderEasy host at all. Exceptions are exact strings in
+      # Built bundles must not mention a live OrderEasy host at all. Exceptions are exact whole host tokens in
       # rcp/e2e/bundle-guard-allow.txt (product copy only; keep it short and reviewed).
       - name: Bundle guard (no live host in the builds)
         run: |
           test -f retailer/out/index.html && test -f customer/out/index.html
           allow=rcp/e2e/bundle-guard-allow.txt
-          hits=$(grep -rEoh '.{0,40}ordereasy[.]win.{0,20}' retailer/out customer/out | sort -u \
-                 | { if grep -qv '^\s*\(#\|$\)' "$allow"; then grep -vF -f <(grep -v '^\s*\(#\|$\)' "$allow"); else cat; fi; } || true)
+          hits=$(grep -rEoh '[(]?([A-Za-z0-9-]+[.])*ordereasy[.]win(@gmail[.]com|[)])?' retailer/out customer/out | sort -u | grep -vxF -f <(grep -v '^\s*\(#\|$\)' "$allow") || true)
           if [ -n "$hits" ]; then echo "$hits"; echo "::error::a build mentions a live OrderEasy host"; exit 1; fi
 
       - name: Serve the builds on :4273 and :4276
