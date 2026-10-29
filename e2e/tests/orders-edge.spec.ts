@@ -283,6 +283,7 @@ test.describe('Orders edge - pickup, payment modes, slots', { tag: ['@orders', '
       addressId: seed.c2_address, slotStart: `${sl1().start}`,
     });
     expect(second.status()).toBe(400);
+    expect(await second.json()).toEqual({ fulfillment_slot_start: ['Fulfillment slot is fully booked'] });
   });
 
   // Known minor bug OE-384: customer notifications carry null order_id/order_number (order number only in the title).
