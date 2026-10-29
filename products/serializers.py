@@ -10,6 +10,7 @@ from .models import (
     PurchaseInvoice, PurchaseItem, SupplierLedger, ProductInventoryLog
 )
 from products.inventory_adjust import UNPARSEABLE_EXPIRY, parse_expiry_date
+from products.search_cache import bump_search_cache
 from products.channel_price import (
     CHANNEL_APP,
     apply_channel_price_representation,
@@ -1355,6 +1356,7 @@ class ProductUpdateSerializer(ProductTaxValidationMixin, serializers.ModelSerial
                 
                 if batch_id:
                     ProductBatch.objects.filter(id=batch_id, product=instance).update(**batch_fields)
+                    bump_search_cache(instance.retailer_id)
                 else:
                     ProductBatch.objects.create(product=instance, retailer=instance.retailer, **batch_fields)
             

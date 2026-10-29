@@ -18,6 +18,7 @@ import pandas as pd
 import os
 from django.conf import settings
 from datetime import datetime
+from collections import Counter
 
 from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -30,6 +31,8 @@ from .models import (
     ProductUploadSession, UploadSessionItem, ProductBatch,
 )
 from products.inventory_service import apply_stock_decrease, apply_stock_increase, log_inventory_change
+from products.search import barcode_scan_queryset
+from products.search_cache import bump_search_cache, get_cached_search, search_cache_key, set_cached_search
 from products.tax_service import GST_RATES, clean_hsn_code
 from .serializers import (
     ProductListSerializer, ProductDetailSerializer, ProductCreateSerializer,
@@ -299,6 +302,59 @@ def smart_product_search(queryset, search_query):
         Q(product_group__icontains=query) |
         barcode_q
     ).order_by('-in_stock', '-discount_percentage', 'name')
+
+
+SEARCH_SCAN_CAP = 1000
+FACET_LIMIT = 10
+
+
+def _facet_counts(products):
+    """Top categories and brands over every product in the queryset (two grouped queries)."""
+    return {
+        'categories': list(products.values('category__id', 'category__name')
+                                   .annotate(count=Count('id'))
+                                   .filter(category__isnull=False)
+                                   .order_by('-count')[:FACET_LIMIT]),
+        'brands': list(products.values('brand__id', 'brand__name')
+                               .annotate(count=Count('id'))
+                               .filter(brand__isnull=False)
+                               .order_by('-count')[:FACET_LIMIT]),
+    }
+
+
+def _scan_search_matches(ranked, limit):
+    """
+    One pass over a ranked search queryset: the ids of the first ``limit`` hits, how many products
+    matched, and the facet counts, all from the same rows. The scan stops at SEARCH_SCAN_CAP, so a
+    very broad query reports the cap as its match count and facets over its best-ranked matches.
+    """
+    rows = list(
+        ranked.values_list('id', 'category_id', 'category__name', 'brand_id', 'brand__name')[:SEARCH_SCAN_CAP]
+    )
+    category_counts = Counter((row[1], row[2]) for row in rows if row[1])
+    brand_counts = Counter((row[3], row[4]) for row in rows if row[3])
+    facets = {
+        'categories': [
+            {'category__id': pk, 'category__name': name, 'count': count}
+            for (pk, name), count in category_counts.most_common(FACET_LIMIT)
+        ],
+        'brands': [
+            {'brand__id': pk, 'brand__name': name, 'count': count}
+            for (pk, name), count in brand_counts.most_common(FACET_LIMIT)
+        ],
+    }
+    return [row[0] for row in rows[:limit]], len(rows), facets
+
+
+def _products_in_order(ids, select_related=(), prefetch_related=()):
+    """Load the products for ``ids`` and return them in that order (the relevance order)."""
+    if not ids:
+        return []
+    queryset = Product.objects.filter(id__in=ids).select_related(*select_related)
+    if prefetch_related:
+        queryset = queryset.prefetch_related(*prefetch_related)
+    by_id = {product.id: product for product in queryset}
+    return [by_id[pk] for pk in ids if pk in by_id]
 
 
 SEARCH_LIMIT_DEFAULT = 50
@@ -628,11 +684,28 @@ def search_products(request):
 
         # Apply search
         search = request.query_params.get('search')
+        category = request.query_params.get('category')
+        limit = _search_limit(request)
+        can_see_cost = include_purchase_margin(request.user)
+        include_group_variants = (
+            request.query_params.get('include_group_variants') == 'true'
+        )
+
+        cache_key = None
         if search:
-            products = smart_product_search(products, search)
+            cache_key = search_cache_key(
+                'retailer', retailer.id, search,
+                category=category, limit=limit, cost=can_see_cost, variants=include_group_variants,
+            )
+            cached = get_cached_search(cache_key)
+            if cached is not None:
+                log_search_telemetry(search, cached['total'], retailer=retailer, user=request.user)
+                return Response(cached['payload'], status=status.HTTP_200_OK)
+
+        if search:
+            products = barcode_scan_queryset(products, search) or smart_product_search(products, search)
 
         # Apply category filter if provided
-        category = request.query_params.get('category')
         if category:
             if category.isdigit():
                 category_ids = get_all_category_ids(category)
@@ -647,40 +720,37 @@ def search_products(request):
                     products = products.filter(category_id__in=list(all_ids))
                 else:
                     products = products.none()
-                
-        # Calculate facets before limiting
-        facets = {
-            'categories': list(products.values('category__id', 'category__name')
-                                    .annotate(count=Count('id'))
-                                    .filter(category__isnull=False)
-                                    .order_by('-count')[:10]),
-            'brands': list(products.values('brand__id', 'brand__name')
-                                .annotate(count=Count('id'))
-                                .filter(brand__isnull=False)
-                                .order_by('-count')[:10])
-        }
 
-        # Log Telemetry asynchronously
         if search:
-            log_search_telemetry(search, products.count(), retailer=retailer, user=request.user)
-
-        # Limit results for search
-        limit = _search_limit(request)
-        products = products.select_related(
-            'parent_bulk_product', 'brand', 'category'
-        ).prefetch_related(
-            Prefetch(
-                'fractional_children',
-                queryset=Product.objects.filter(is_active=True).order_by('id'),
+            ids, total, facets = _scan_search_matches(products, limit)
+            products = _products_in_order(
+                ids,
+                select_related=('parent_bulk_product', 'brand', 'category'),
+                prefetch_related=(
+                    Prefetch(
+                        'fractional_children',
+                        queryset=Product.objects.filter(is_active=True).order_by('id'),
+                    ),
+                ),
             )
-        )
-        products = list(products[:limit])
+        else:
+            facets = _facet_counts(products)
+            total = None
+            products = list(
+                products.select_related(
+                    'parent_bulk_product', 'brand', 'category'
+                ).prefetch_related(
+                    Prefetch(
+                        'fractional_children',
+                        queryset=Product.objects.filter(is_active=True).order_by('id'),
+                    )
+                )[:limit]
+            )
         Product.cache_saleable_quantities(products)
-        can_see_cost = include_purchase_margin(request.user)
 
-        include_group_variants = (
-            request.query_params.get('include_group_variants') == 'true'
-        )
+        if search:
+            log_search_telemetry(search, total, retailer=retailer, user=request.user)
+
         serializer = ProductSearchSerializer(
             products,
             many=True,
@@ -695,10 +765,13 @@ def search_products(request):
                 'hide_purchase_price': not can_see_cost,
             },
         )
-        return Response({
+        response_payload = {
             'results': serializer.data,
             'facets': facets
-        }, status=status.HTTP_200_OK)
+        }
+        if cache_key:
+            set_cached_search(cache_key, {'payload': response_payload, 'total': total})
+        return Response(response_payload, status=status.HTTP_200_OK)
 
     except (Http404, APIException):
         raise
@@ -1444,6 +1517,7 @@ def bulk_update_products(request):
                 ProductBatch.objects.bulk_create(batches_to_create)
             if batches_to_update:
                 ProductBatch.objects.bulk_update(batches_to_update, ['price', 'original_price', 'quantity', 'barcode', 'is_active'])
+                bump_search_cache(retailer.id)
             
             if logs_to_create:
                 ProductInventoryLog.objects.bulk_create(logs_to_create)
@@ -1630,11 +1704,24 @@ def search_products_public(request, retailer_id):
 
         # Apply search
         search = request.query_params.get('search')
+        category = request.query_params.get('category')
+        limit = _search_limit(request)
+
+        cache_key = None
         if search:
-            products = smart_product_search(products, search)
+            cache_key = search_cache_key('public', retailer.id, search, category=category, limit=limit)
+            cached = get_cached_search(cache_key)
+            if cached is not None:
+                log_search_telemetry(
+                    search, cached['total'], retailer=retailer,
+                    user=request.user if request.user.is_authenticated else None,
+                )
+                return Response(cached['payload'], status=status.HTTP_200_OK)
+
+        if search:
+            products = barcode_scan_queryset(products, search) or smart_product_search(products, search)
 
         # Apply category filter if provided
-        category = request.query_params.get('category')
         if category:
             if category.isdigit():
                 category_ids = get_all_category_ids(category)
@@ -1642,31 +1729,25 @@ def search_products_public(request, retailer_id):
             else:
                 products = products.filter(category__name__icontains=category)
 
-        # Calculate facets before limiting
-        facets = {
-            'categories': list(products.values('category__id', 'category__name')
-                                    .annotate(count=Count('id'))
-                                    .filter(category__isnull=False)
-                                    .order_by('-count')[:10]),
-            'brands': list(products.values('brand__id', 'brand__name')
-                                .annotate(count=Count('id'))
-                                .filter(brand__isnull=False)
-                                .order_by('-count')[:10])
-        }
-
-        # Log Telemetry asynchronously
         if search:
-            log_search_telemetry(search, products.count(), retailer=retailer, user=request.user if request.user.is_authenticated else None)
-
-        # Limit results for search
-        limit = _search_limit(request)
-        products = products.select_related('brand', 'category')[:limit]
+            ids, total, facets = _scan_search_matches(products, limit)
+            products = _products_in_order(ids, select_related=('brand', 'category'))
+            log_search_telemetry(
+                search, total, retailer=retailer,
+                user=request.user if request.user.is_authenticated else None,
+            )
+        else:
+            facets = _facet_counts(products)
+            products = list(products.select_related('brand', 'category')[:limit])
 
         serializer = ProductSearchSerializer(products, many=True)
-        return Response({
+        response_payload = {
             'results': serializer.data,
             'facets': facets
-        }, status=status.HTTP_200_OK)
+        }
+        if cache_key:
+            set_cached_search(cache_key, {'payload': response_payload, 'total': total})
+        return Response(response_payload, status=status.HTTP_200_OK)
 
     except (Http404, APIException):
         raise
@@ -2544,6 +2625,7 @@ def update_product_category(request, category_id):
                     )
                     # Migrate the retailer's products immediately to the new owned category
                     Product.objects.filter(retailer=retailer, category=category).update(category=new_category)
+                    bump_search_cache(retailer.id)
                     category = new_category
                 else:
                     return Response({'error': 'You do not have permission to update this category'}, status=status.HTTP_403_FORBIDDEN)
@@ -2890,6 +2972,7 @@ def check_bulk_upload(request):
 
             if products_to_update:
                 Product.objects.bulk_update(products_to_update, ['price', 'original_price', 'quantity'])
+                bump_search_cache(retailer.id)
 
             if inventory_logs:
                 ProductInventoryLog.objects.bulk_create(inventory_logs)
@@ -3171,6 +3254,7 @@ def complete_bulk_upload(request):
 
             if products_to_update:
                 Product.objects.bulk_update(products_to_update, ['price', 'original_price', 'quantity', 'barcode', 'category', 'brand'])
+                bump_search_cache(retailer.id)
 
             if inventory_logs:
                 ProductInventoryLog.objects.bulk_create(inventory_logs)

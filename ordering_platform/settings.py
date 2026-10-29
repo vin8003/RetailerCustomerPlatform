@@ -4,6 +4,7 @@ Django settings for ordering_platform project.
 """
 
 import os
+import tempfile
 from pathlib import Path
 from datetime import timedelta
 
@@ -306,7 +307,17 @@ CACHES = {
         'OPTIONS': {
             'MAX_ENTRIES': 1000,
         }
-    }
+    },
+    # Product search results. File-based so every gunicorn worker on the VM sees the same entries
+    # and the same invalidation; the default in-memory cache is per process.
+    'search': {
+        'BACKEND': 'django.core.cache.backends.filebased.FileBasedCache',
+        'LOCATION': os.getenv('SEARCH_CACHE_DIR', os.path.join(tempfile.gettempdir(), 'oe_search_cache')),
+        'TIMEOUT': 30,
+        'OPTIONS': {
+            'MAX_ENTRIES': 5000,
+        }
+    },
 }
 
 # Email configuration (for notifications)
@@ -425,7 +436,10 @@ if 'test' in sys.argv or 'pytest' in sys.modules:
     CACHES = {
         'default': {
             'BACKEND': 'django.core.cache.backends.dummy.DummyCache',
-        }
+        },
+        'search': {
+            'BACKEND': 'django.core.cache.backends.dummy.DummyCache',
+        },
     }
     
     REST_FRAMEWORK = {

@@ -1,7 +1,8 @@
 """Product search matching, including multi-batch barcodes (KAN-72)."""
 import logging
+import re
 
-from django.db import DatabaseError, transaction
+from django.db import DatabaseError, connection, transaction
 from django.db.models import (
     Q, Value, Case, When, TextField, IntegerField,
 )
@@ -140,3 +141,38 @@ def smart_product_search(queryset, search_query):
         Q(product_group__icontains=query) |
         product_barcode_match_q(query)
     ).distinct().order_by('-is_barcode_exact', '-in_stock', '-discount_percentage', 'name')
+
+
+_SCAN_CODE = re.compile(r'^\d{6,50}$')
+
+
+def barcode_scan_queryset(queryset, search_query):
+    """
+    The shop's products whose primary, extra or batch barcode is exactly ``search_query``, or None
+    when the text is not a scanned code or nothing carries it.
+
+    A scan is an equality lookup on indexed columns, so it skips the full-text and trigram ranking
+    that has to look at every product of the shop. Text that is not a whole numeric code, and a code
+    nobody has, fall through to the smart search, which also matches partial codes.
+    """
+    code = (search_query or '').strip()
+    if not _SCAN_CODE.match(code):
+        return None
+    # One equality lookup per column, each on its own index. A single OR across the product and its
+    # batches makes PostgreSQL walk the shop in created_at order instead of using any of them.
+    base = queryset.order_by()
+    lookups = [Q(barcode=code), Q(batches__barcode=code)]
+    if connection.vendor == 'postgresql':
+        # jsonb containment, served by the GIN indexes from migration 0038.
+        lookups += [Q(additional_barcodes__contains=[code]), Q(batches__additional_barcodes__contains=[code])]
+    ids = set()
+    for lookup in lookups:
+        ids.update(base.filter(lookup).values_list('pk', flat=True))
+    if not ids:
+        return None
+    return queryset.filter(pk__in=ids)
+
+
+def search_products_queryset(queryset, search_query):
+    """A scanned code takes the exact-barcode path; everything else is the smart search."""
+    return barcode_scan_queryset(queryset, search_query) or smart_product_search(queryset, search_query)
