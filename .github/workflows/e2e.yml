@@ -215,7 +215,7 @@ jobs:
                 e2e/tests/pos.spec.ts|e2e/pos.ts) tags="$tags pos" ;;
                 e2e/tests/khata.spec.ts) tags="$tags khata" ;;
                 e2e/tests/order.spec.ts|e2e/tests/time.spec.ts|orders/*) tags="$tags orders" ;;
-                e2e/tests/fixme.spec.ts|offers/*|cart/*) tags="$tags offers" ;;
+                offers/*|cart/*) tags="$tags offers" ;; # fixme.spec.ts spans every area: full suite
                 e2e/tests/auth-*.spec.ts|authentication/*) tags="$tags auth" ;;
                 e2e/tests/guard.spec.ts|e2e/tests/seed.spec.ts|*.md|docs/*) ;;
                 *) tags=""; break ;; # full suite

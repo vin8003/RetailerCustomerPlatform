@@ -1,8 +1,7 @@
 /**
  * F1–F9 from CASES.md §4 (+ F9 from review). Each asserts the CORRECT value.
- * F2–F6, F8, F9 are fixed on main and run as normal regression tests.
+ * F2–F9 are fixed and run as normal regression tests (F7: customer FE, OE-372).
  * F1 is intended behaviour (OE-370, per Vineet 29 Oct): kept as a regression guard for the per-unit flat offer.
- * F7 is still open: test.fixme with a bug annotation linking the Jira ticket.
  * E2E_RUN_FIXME=1 runs the fixme ones anyway (to confirm a bug is still there, or is gone).
  */
 import { test, expect, urls } from '../fixtures';
@@ -119,8 +118,7 @@ function istDate(iso: string) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date(iso));
 }
 
-fixme('F7 WAITING_FOR_CUSTOMER_APPROVAL has a human label in My Orders @F7 @customer @orders',
-  known('OE-372', 'My Orders shows the raw "waiting for customer approval" enum'),
+test('F7 WAITING_FOR_CUSTOMER_APPROVAL has a human label in My Orders (OE-372) @F7 @customer @orders',
   async ({ page, api, seed }) => {
     const token = await customerToken(api, C2_PHONE);
     await addToCart(api, token, seed.products.P4, 1);
