@@ -109,7 +109,7 @@ test.describe('@slice-offers', () => {
     });
 
   fixme('tiered price and flat price offers the API accepts actually change the price @slice-offers @customer @offers',
-    bug('The offers API accepts offer_type tiered_price and flat_price (201) but the engine has no branch for them: P4×6 with "₹25 each from 5" and P5×2 with "flat ₹80" give no discount'),
+    bug('OE-375: The offers API accepts offer_type tiered_price and flat_price (201) but the engine has no branch for them: P4×6 with "₹25 each from 5" and P5×2 with "flat ₹80" give no discount'),
     async ({ api, seed, retailerToken }) => {
       const r1 = await retailerToken();
       await createOffer(api, r1, { name: 'E2EO tier 25', offer_type: 'tiered_price', value_type: 'amount', value: '25.00', tiered_min_quantity: '5' }, seed.products.P4);
@@ -196,7 +196,7 @@ test.describe('@slice-offers', () => {
   });
 
   fixme('retailer can save an offer with no end date from the UI @slice-offers @retailer @offers',
-    bug('Offers > Create New Offer with End Date left blank: Create Offer gets 400 {"end_date":["Datetime has wrong format..."]} and an alert; the form sends end_date "" instead of null, so open-ended offers cannot be made in the UI'),
+    bug('OE-376: Offers > Create New Offer with End Date left blank: Create Offer gets 400 {"end_date":["Datetime has wrong format..."]} and an alert; the form sends end_date "" instead of null, so open-ended offers cannot be made in the UI'),
     async ({ page, api, retailerToken }) => {
       await retailerLogin(page);
       await page.goto(`${urls.retailer}/dashboard/offers/new`);
