@@ -396,7 +396,6 @@ class Product(models.Model):
             models.Index(fields=['category', 'is_active']),
             models.Index(fields=['brand', 'is_active']),
             models.Index(fields=['name']),
-            GinIndex(fields=['name'], opclasses=['gin_trgm_ops'], name='prod_name_trgm_gin_idx'),
             models.Index(fields=['price']),
             models.Index(fields=['created_at']),
             models.Index(fields=['is_featured']),
