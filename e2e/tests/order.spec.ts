@@ -27,6 +27,8 @@ async function placeOrder(page: Page, p3: number, p4: number, addressId: number)
   await page.waitForURL('**/checkout**');
 
   await page.getByTestId('slot-picker-open').click();
+  // Before 10:00 IST the picker opens on today's slots; pick SL1's day explicitly.
+  await page.getByTestId(`slot-day-${sl1().start.slice(0, 10)}`).click();
   await page.locator(`[data-testid="slot-option"][data-slot-start="${sl1().start}"]`).click();
   await page.getByTestId('slot-confirm').click();
   await expect(page.getByTestId('slot-summary')).toContainText('10:00');
