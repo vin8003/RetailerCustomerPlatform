@@ -82,7 +82,19 @@ test.describe('@slice-offers', () => {
     expect(cart.discounted_total).toBe(420);
   });
 
-  // Equal-priority non-stackable cart offers: tie-break undecided (OE-388); test to be added once product picks the rule.
+  fixme('two equal-priority non-stackable cart offers: exactly one applies, by a documented rule @slice-offers @customer @offers',
+    bug('https://vin8003.atlassian.net/browse/OE-388 tie-break between equal-priority non-stackable cart offers is undecided; fill in the expected offer once product picks the rule'),
+    async ({ api, seed, retailerToken }) => {
+      const r1 = await retailerToken();
+      await createOffer(api, r1, { name: 'E2EO tie 10%', offer_type: 'cart_value', value_type: 'percent', value: '10.00', priority: 3 });
+      await createOffer(api, r1, { name: 'E2EO tie ₹80', offer_type: 'cart_value', value_type: 'amount', value: '80.00', priority: 3 });
+      const token = await customerToken(api, C2_PHONE);
+      await addToCart(api, token, seed.products.P1, 2); // 500: 10% = ₹50, flat = ₹80
+      const cart = await customerCart(api, token, seed.retailers.R1);
+      expect(cart.applied_offers).toHaveLength(1);
+      expect(cart.applied_offers[0].name).toBe('TBD by OE-388');
+  });
+
 
   test('cart value offer: ₹0.01 below the minimum is not applied, exactly at it is @slice-offers @customer @offers', async ({ api, seed, retailerToken }) => {
     const r1 = await retailerToken();
