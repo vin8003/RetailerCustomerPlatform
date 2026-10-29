@@ -45,6 +45,7 @@ test.describe('Orders edge - cancel', { tag: ['@orders', '@orders-edge'] }, () =
     expect((await api.post(`orders/${order.id}/cancel/`, { ...authed(ct), data: {} })).status()).toBe(400);
   });
 
+  // Known API bug OE-383: PATCH orders/{id}/status/ {status:'cancelled'} drops cancelled_by and reason; UI uses /cancel/.
   test('E2 retailer cancels a confirmed order from the UI: By Retailer, customer sees it, stock restored @retailer', async ({ page, api, seed, retailerToken }) => {
     const ct = await customerToken(api, C2_MOBILE);
     const order = await placeOrder(api, ct, seed.retailers.R1, [[seed.products.P4, 3]], { addressId: seed.c2_address });
@@ -78,7 +79,7 @@ test.describe('Orders edge - cancel', { tag: ['@orders', '@orders-edge'] }, () =
   });
 
   fixme('E4 retailer can cancel an order waiting for customer approval (UI offers CANCEL ORDER) @retailer',
-    known('NEW', 'CANCEL ORDER is shown on a waiting_for_customer_approval order, but POST /cancel/ returns 400 "Order cannot be cancelled"'),
+    known('OE-377', 'CANCEL ORDER is shown on a waiting_for_customer_approval order, but POST /cancel/ returns 400 "Order cannot be cancelled"'),
     async ({ page, api, seed, retailerToken }) => {
       const ct = await customerToken(api, C2_MOBILE);
       const order = await placeOrder(api, ct, seed.retailers.R1, [[seed.products.P3, 2]], { addressId: seed.c2_address });
@@ -149,7 +150,7 @@ test.describe('Orders edge - item edit and customer approval', { tag: ['@orders'
   });
 
   fixme('E7 a rejected edit records who cancelled (customer) @customer @retailer',
-    known('NEW', 'confirm_modification action=reject cancels the order with cancelled_by=null, so neither app shows "By Customer"'),
+    known('OE-378', 'confirm_modification action=reject cancels the order with cancelled_by=null, so neither app shows "By Customer"'),
     async ({ page, api, seed, retailerToken }) => {
       const rt = await retailerToken();
       const { order, ct } = await placeAndEdit(api, seed, rt);
@@ -245,7 +246,7 @@ test.describe('Orders edge - pickup, payment modes, slots', { tag: ['@orders', '
   });
 
   fixme('E12 retailer cannot verify a UPI payment before the customer submits a transaction ID @retailer',
-    known('NEW', 'a new UPI order starts as payment_status=pending_verification with no reference; the retailer UI shows Verify and verify_payment returns 200'),
+    known('OE-379', 'a new UPI order starts as payment_status=pending_verification with no reference; the retailer UI shows Verify and verify_payment returns 200'),
     async ({ api, seed, retailerToken }) => {
       const ct = await customerToken(api, C2_MOBILE);
       const order = await placeOrder(api, ct, seed.retailers.R1, [[seed.products.P4, 1]], { addressId: seed.c2_address, pay: 'upi' });
@@ -284,6 +285,7 @@ test.describe('Orders edge - pickup, payment modes, slots', { tag: ['@orders', '
     expect(second.status()).toBe(400);
   });
 
+  // Known minor bug OE-384: customer notifications carry null order_id/order_number (order number only in the title).
   test('E15 customer gets confirmed and cancelled notifications for the order @customer', async ({ api, seed, retailerToken }) => {
     const ct = await customerToken(api, C2_MOBILE);
     const order = await placeOrder(api, ct, seed.retailers.R1, [[seed.products.P4, 1]], { addressId: seed.c2_address });
