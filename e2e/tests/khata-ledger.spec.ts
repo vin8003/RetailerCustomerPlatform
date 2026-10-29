@@ -75,14 +75,18 @@ test.describe('Khata ledger', { tag: ['@khata'] }, () => {
     await expect(kirana).toContainText('Remaining credit₹4440.00');
   });
 
-  fixme('K6 a shop with no credit limit (0 = unlimited) never shows negative remaining credit @customer',
-    known('OE-380', 'customer/credit/all and the profile show "Remaining credit ₹-1000.00" for a limit-0 (no lock) khata'),
-    async ({ api, seed }) => {
-      const ct = await customerToken(api, C1_MOBILE);
-      const r2 = (await getJson(api, 'customer/credit/all/', ct)).find((k: { retailer_id: number }) => k.retailer_id === seed.retailers.R2);
-      expect(r2.current_balance).toBe(1000);
-      expect(r2.remaining_credit).toBeGreaterThanOrEqual(0);
-    });
+  // OE-380 closed as working as designed (KAN-70, customers/views.py:728): remaining_credit = limit - balance, so a
+  // limit-0 (no lock) khata shows a negative remaining credit. Regression guard for today's display.
+  test('K6 a limit-0 (no lock) khata shows its outstanding and a negative remaining credit @customer', async ({ page, api, seed }) => {
+    const ct = await customerToken(api, C1_MOBILE);
+    const r2 = (await getJson(api, 'customer/credit/all/', ct)).find((k: { retailer_id: number }) => k.retailer_id === seed.retailers.R2);
+    expect(r2).toMatchObject({ credit_limit: 0, current_balance: 1000, remaining_credit: -1000 });
+    await customerLogin(page, C1_MOBILE);
+    await page.goto(`${urls.customer}/profile`);
+    await expect(page.getByText('Credit / Khata')).toBeVisible();
+    const shop = page.locator('div', { hasText: SEED.retailers.R2.shop_name }).filter({ hasText: 'Remaining credit' }).last();
+    await expect(shop).toHaveText(`${SEED.retailers.R2.shop_name}Outstanding₹1000.00Credit limit₹0.00Remaining credit₹-1000.00`);
+  });
 
   fixme('K7 staff without khata permission get 403 (not 500) when recording a payment @retailer',
     known('OE-381', 'staff POST customer/retailer/payment/record/ returns 500 "No RetailerProfile matches"'),
