@@ -96,8 +96,8 @@ jobs:
         id: fe
         env:
           HEAD_BRANCH: ${{ github.head_ref }}
-          # The slice stack sits on #209, whose FE half (retailer #155, customer #101) is not on main yet.
-          # Once those merge the branch is gone and this falls through to main; drop it then.
+          # TODO(remove after retailer #155 + customer #101 merge): the slice stack sits on #209,
+          # whose FE half is not on main yet, so PR runs build FE from e2e/phase2-auth.
           FE_STACK_REF: e2e/phase2-auth
           RETAILER_INPUT: ${{ inputs.retailer_ref }}
           CUSTOMER_INPUT: ${{ inputs.customer_ref }}
@@ -108,8 +108,11 @@ jobs:
                && git ls-remote --exit-code --heads "https://github.com/vin8003/$1.git" "$HEAD_BRANCH" > /dev/null; then
               echo "$HEAD_BRANCH"; return
             fi
-            if git ls-remote --exit-code --heads "https://github.com/vin8003/$1.git" "$FE_STACK_REF" > /dev/null; then
-              echo "$FE_STACK_REF"; return
+            if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+              if git ls-remote --exit-code --heads "https://github.com/vin8003/$1.git" "$FE_STACK_REF" > /dev/null; then
+                echo "$FE_STACK_REF"; return
+              fi
+              echo "::notice::$1 has no $FE_STACK_REF branch; building FE main" >&2
             fi
             echo main
           }
