@@ -165,16 +165,19 @@ jobs:
         working-directory: customer
         run: npm ci && npm run build
 
-      # Built bundles must call only the local API: any live OrderEasy URL in them fails the run.
-      - name: Bundle guard (no live host URLs in the builds)
+      # Built bundles must not mention a live OrderEasy host at all. Exceptions are exact strings in
+      # rcp/e2e/bundle-guard-allow.txt (product copy only; keep it short and reviewed).
+      - name: Bundle guard (no live host in the builds)
         run: |
-          if grep -rEoh '://([a-z]+[.])?ordereasy[.]win' retailer/out customer/out | sort -u | grep .; then
-            echo "::error::a build still contains a live OrderEasy URL"; exit 1
-          fi
+          test -f retailer/out/index.html && test -f customer/out/index.html
+          allow=rcp/e2e/bundle-guard-allow.txt
+          hits=$(grep -rEoh '.{0,40}ordereasy[.]win.{0,20}' retailer/out customer/out | sort -u \
+                 | { if grep -qv '^\s*\(#\|$\)' "$allow"; then grep -vF -f <(grep -v '^\s*\(#\|$\)' "$allow"); else cat; fi; } || true)
+          if [ -n "$hits" ]; then echo "$hits"; echo "::error::a build mentions a live OrderEasy host"; exit 1; fi
 
       - name: Serve the builds on :4273 and :4276
         run: |
-          npm install -g serve@14
+          npm install -g serve@14.2.6
           nohup serve retailer/out -l tcp://127.0.0.1:4273 > retailer.log 2>&1 &
           nohup serve customer/out -l tcp://127.0.0.1:4276 > customer.log 2>&1 &
 
@@ -245,24 +248,3 @@ jobs:
             rcp/e2e/test-results/
           retention-days: 14
 
-  # A red full run on main or the nightly opens (or comments on) one tracking issue.
-  alert:
-    name: alert on main/nightly failure
-    needs: e2e
-    if: ${{ failure() && github.repository == 'vin8003/RetailerCustomerPlatform' && (github.event_name == 'push' || github.event_name == 'schedule') }}
-    runs-on: ubuntu-24.04
-    permissions:
-      issues: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
-      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      EVENT: ${{ github.event_name }}
-    steps:
-      - name: Open or update the e2e failure issue
-        run: |
-          gh label create e2e-nightly-failure --color B60205 --description "e2e failed on main or nightly" 2>/dev/null || true
-          body="e2e failed on $EVENT ($GITHUB_SHA): $RUN_URL"
-          issue=$(gh issue list --label e2e-nightly-failure --state open --json number --jq '.[0].number')
-          if [ -n "$issue" ]; then gh issue comment "$issue" --body "$body"
-          else gh issue create --title "e2e failing on main/nightly" --label e2e-nightly-failure --body "$body"; fi

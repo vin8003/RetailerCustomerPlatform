@@ -9,6 +9,7 @@ Ids are attributes only: no behaviour, style or copy changed (CASES.md §7, cove
 | id | where | used by |
 |---|---|---|
 | `login-username`, `login-password`, `login-submit` | `/login` | all retailer journeys |
+| `login-error` | `/login` failure toast (sonner `testId`) | R-AUTH3, R-AUTH4 |
 | `pos-search` | POS barcode/search input | A1–A6 |
 | `pos-unknown-barcode` | Quick add modal heading for an unknown barcode | A4 |
 | `pos-cart-line` (`data-barcode`), `pos-cart-line-qty` | POS cart line, its qty | A1–A6 |

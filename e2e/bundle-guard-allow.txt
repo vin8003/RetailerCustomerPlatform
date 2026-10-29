@@ -1,0 +1,5 @@
+# Exact strings allowed by the CI bundle guard (one per line). Product copy only, never a URL the app calls.
+# customer support email in HelpModal:
+ordereasy.win@gmail.com
+# privacy policy text naming the site:
+(customer.ordereasy.win)

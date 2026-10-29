@@ -37,7 +37,11 @@ test.describe('Phase 2 - customer auth & account', { tag: ['@customer', '@auth']
 
     const profile = await getJson(api, 'auth/profile/', await customerToken(api, NEW_MOBILE));
     expect(profile.email).toBe(NEW.email);
-    expect(profile.is_email_verified ?? true).toBe(true);
+    // auth/profile/ does not serialize is_email_verified, so read the flag from the DB.
+    const verified = djangoShell(
+      `from authentication.models import User\nprint('VERIFIED=' + str(User.objects.get(email=${JSON.stringify(NEW.email)}).is_email_verified))\n`,
+    );
+    expect(verified).toContain('VERIFIED=True');
   });
 
   test('C-AUTH2 login with an unverified email is sent to verify-email, no session', async ({ page }) => {

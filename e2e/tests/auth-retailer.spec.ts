@@ -17,13 +17,14 @@ async function fillLogin(page: Page, username: string, password: string) {
 }
 
 async function expectStillLoggedOut(page: Page) {
-  await expect(page.getByText(/invalid|not|denied|credentials|retailer/i).first()).toBeVisible();
+  // Backend answers non_field_errors (no detail), so the app shows its fixed fallback message.
+  await expect(page.getByTestId('login-error')).toHaveText('Invalid username or password');
   await expect(page).toHaveURL(/\/login/);
   expect(await page.evaluate(() => Object.keys(localStorage).filter((k) => /token/i.test(k)))).toEqual([]);
 }
 
 test.describe('Phase 2 - retailer auth & account', { tag: ['@retailer', '@auth'] }, () => {
-  test('R-AUTH1 signup lands on the dashboard with a pending-approval banner and a pending profile', async ({ page, api }) => {
+  test('R-AUTH1 a new signup is pending, can still log in, and sees the pending-approval banner', async ({ page, api }) => {
     await page.goto(`${urls.retailer}/signup`);
     await page.getByTestId('signup-username').fill(NEW.username);
     await page.getByTestId('signup-email').fill(NEW.email);
@@ -31,6 +32,11 @@ test.describe('Phase 2 - retailer auth & account', { tag: ['@retailer', '@auth']
     await page.getByTestId('signup-password').fill(PASSWORD);
     await page.getByTestId('signup-confirm-password').fill(PASSWORD);
     await page.getByTestId('signup-submit').click();
+    await page.waitForURL('**/dashboard**');
+    await expect(page.getByTestId('verification-banner')).toHaveAttribute('data-status', 'pending');
+
+    await page.evaluate(() => localStorage.clear());
+    await fillLogin(page, NEW.username, PASSWORD);
     await page.waitForURL('**/dashboard**');
     await expect(page.getByTestId('verification-banner')).toHaveAttribute('data-status', 'pending');
 
@@ -58,7 +64,8 @@ test.describe('Phase 2 - retailer auth & account', { tag: ['@retailer', '@auth']
 
     await page.evaluate(() => localStorage.clear());
     await retailerLogin(page, PENDING.username);
-    await expect(page.getByTestId('profile-logout').or(page.locator('main'))).toBeVisible();
+    await page.goto(`${urls.retailer}/dashboard/profile`);
+    await expect(page.getByTestId('profile-edit')).toBeVisible();
     await expect(page.getByTestId('verification-banner')).toHaveCount(0);
   });
 
@@ -75,7 +82,9 @@ test.describe('Phase 2 - retailer auth & account', { tag: ['@retailer', '@auth']
   });
 
   // BUG OE-374 (https://vin8003.atlassian.net/browse/OE-374): on /forgot-password step 2 the Code input stays empty; typed digits never stick, so the reset cannot be submitted.
-  test.fixme('R-AUTH5 password reset with the OTP: old password stops working, new one logs in', async ({ page, api }) => {
+  test.fixme('R-AUTH5 password reset with the OTP: old password stops working, new one logs in', {
+    annotation: { type: 'bug', description: 'https://vin8003.atlassian.net/browse/OE-374' },
+  }, async ({ page, api }) => {
     await page.goto(`${urls.retailer}/forgot-password`);
     await page.getByTestId('forgot-identifier').fill(R2.username);
     const sent = page.waitForResponse((r) => r.url().includes('password/forgot/') && r.ok());
@@ -104,6 +113,9 @@ test.describe('Phase 2 - retailer auth & account', { tag: ['@retailer', '@auth']
     const saved = page.waitForResponse((r) => r.url().includes('/retailer/profile/update/'));
     await page.getByTestId('profile-save').click();
     expect((await saved).status()).toBe(200);
+    await page.reload();
+    await expect(page.getByTestId('profile-shop-name')).toHaveValue('E2E Kirana Renamed');
+    await expect(page.getByTestId('profile-city')).toHaveValue('Gurugram');
 
     const profile = await getJson(api, 'retailer/profile/', await retailerToken());
     expect(profile.shop_name).toBe('E2E Kirana Renamed');
