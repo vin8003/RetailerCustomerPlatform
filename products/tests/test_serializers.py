@@ -185,6 +185,26 @@ class TestProductCreateUpdateSerializers:
         assert not serializer.is_valid()
         assert serializer.errors["name"] == ["A product with this name already exists."]
 
+    def test_update_rejects_rename_to_duplicate_name(self, product):
+        other = Product.objects.create(retailer=product.retailer, name="Other", price=10, quantity=5)
+        serializer = ProductUpdateSerializer(other, data={"name": product.name}, partial=True)
+        assert not serializer.is_valid()
+        assert serializer.errors["name"] == ["A product with this name already exists."]
+
+    def test_update_keeping_own_name_passes(self, product):
+        serializer = ProductUpdateSerializer(product, data={"name": product.name}, partial=True)
+        assert serializer.is_valid(), serializer.errors
+
+    def test_update_same_name_at_other_retailer_passes(self, product):
+        from django.contrib.auth import get_user_model
+        from retailers.models import RetailerProfile
+        user = get_user_model().objects.create_user(username="other_retailer", password="x", user_type="retailer")
+        shop = RetailerProfile.objects.create(user=user, shop_name="Other Shop", address_line1="1 St",
+                                              city="C", state="S", pincode="123456")
+        other = Product.objects.create(retailer=shop, name="Elsewhere", price=10, quantity=5)
+        serializer = ProductUpdateSerializer(other, data={"name": product.name}, partial=True)
+        assert serializer.is_valid(), serializer.errors
+
     def test_update_validation(self, product):
         data = {"minimum_order_quantity": 60} # product.quantity is 50
         serializer = ProductUpdateSerializer(product, data=data, partial=True)

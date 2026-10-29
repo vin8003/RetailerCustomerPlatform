@@ -72,7 +72,7 @@ test('F5 duplicate product name is a 4xx with a message, not a 500 (OE-371) @F5 
     });
     expect(response.status()).toBeGreaterThanOrEqual(400);
     expect(response.status()).toBeLessThan(500);
-    expect(JSON.stringify(await response.json())).toMatch(/already|exists|duplicate/i);
+    expect(JSON.stringify(await response.json())).toContain('A product with this name already exists.');
     const list = await api.get(`products/?search=${encodeURIComponent(PRODUCT.P1.name)}`, authed(r1));
     expect(JSON.stringify(await list.json()).split(JSON.stringify(PRODUCT.P1.name)).length - 1).toBe(1);
   });

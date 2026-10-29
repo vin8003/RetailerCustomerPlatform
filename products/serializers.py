@@ -1258,6 +1258,14 @@ class ProductUpdateSerializer(ProductTaxValidationMixin, serializers.ModelSerial
                 raise serializers.ValidationError("A product with this barcode already exists.")
         return value
 
+    def validate_name(self, value):
+        # OE-371: renaming onto another product's name hit unique_together and 500'd.
+        if self.instance and Product.objects.filter(
+            retailer=self.instance.retailer, name=value
+        ).exclude(pk=self.instance.pk).exists():
+            raise serializers.ValidationError("A product with this name already exists.")
+        return value
+
     def validate_conversion_factor(self, value):
         if value is not None and value <= 0:
             raise serializers.ValidationError(
