@@ -10,6 +10,7 @@ from .models import (
     PurchaseInvoice, PurchaseItem, SupplierLedger, ProductInventoryLog
 )
 from products.inventory_adjust import UNPARSEABLE_EXPIRY, parse_expiry_date
+from products.search_cache import bump_search_cache
 from products.channel_price import (
     CHANNEL_APP,
     apply_channel_price_representation,
@@ -1160,6 +1161,13 @@ class ProductCreateSerializer(ProductTaxValidationMixin, serializers.ModelSerial
                 raise serializers.ValidationError("A product with this barcode already exists.")
         return value
 
+    def validate_name(self, value):
+        # Product has unique_together (retailer, name); without this check the insert 500s (OE-371).
+        retailer = self.context.get('retailer')
+        if retailer and Product.objects.filter(retailer=retailer, name=value).exists():
+            raise serializers.ValidationError("A product with this name already exists.")
+        return value
+
     def validate_conversion_factor(self, value):
         if value is not None and value <= 0:
             raise serializers.ValidationError(
@@ -1251,6 +1259,14 @@ class ProductUpdateSerializer(ProductTaxValidationMixin, serializers.ModelSerial
                 raise serializers.ValidationError("A product with this barcode already exists.")
         return value
 
+    def validate_name(self, value):
+        # OE-371: renaming onto another product's name hit unique_together and 500'd.
+        if self.instance and Product.objects.filter(
+            retailer=self.instance.retailer, name=value
+        ).exclude(pk=self.instance.pk).exists():
+            raise serializers.ValidationError("A product with this name already exists.")
+        return value
+
     def validate_conversion_factor(self, value):
         if value is not None and value <= 0:
             raise serializers.ValidationError(
@@ -1340,6 +1356,7 @@ class ProductUpdateSerializer(ProductTaxValidationMixin, serializers.ModelSerial
                 
                 if batch_id:
                     ProductBatch.objects.filter(id=batch_id, product=instance).update(**batch_fields)
+                    bump_search_cache(instance.retailer_id)
                 else:
                     ProductBatch.objects.create(product=instance, retailer=instance.retailer, **batch_fields)
             

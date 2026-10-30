@@ -2,6 +2,7 @@ from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
 from django.core.cache import cache
 from .models import ProductCategory
+from .search_cache import bump_search_cache
 
 @receiver(post_save, sender=ProductCategory)
 @receiver(post_delete, sender=ProductCategory)
@@ -59,3 +60,26 @@ def sync_supplier_ledger_balances(sender, instance, **kwargs):
                 paid_amount=allocated,
                 payment_status=status
             )
+
+
+from .models import Product, ProductBatch
+
+
+@receiver(post_save, sender=Product)
+@receiver(post_delete, sender=Product)
+def bump_search_cache_on_product_change(sender, instance, **kwargs):
+    """Every sale, restock, price edit or delete goes through a Product save, so searches never show stale stock."""
+    bump_search_cache(instance.retailer_id)
+
+
+@receiver(post_save, sender=ProductBatch)
+@receiver(post_delete, sender=ProductBatch)
+def bump_search_cache_on_batch_change(sender, instance, **kwargs):
+    retailer_id = instance.retailer_id
+    if retailer_id is None:
+        retailer_id = (
+            Product.objects.filter(pk=instance.product_id)
+            .values_list('retailer_id', flat=True)
+            .first()
+        )
+    bump_search_cache(retailer_id)

@@ -1,0 +1,31 @@
+{
+  "_comment": "Single source for the e2e dataset: read by retailers/management/commands/seed_e2e.py and by the specs (e2e/seed.ts).",
+  "password": "E2e-Pass-123!",
+  "new_password": "E2e-New-Pass-456!",
+  "retailers": {
+    "R1": { "username": "e2e_retailer", "shop_name": "E2E Kirana", "phone": "+919100000001" },
+    "R2": { "username": "e2e_retailer2", "shop_name": "E2E Second Shop", "phone": "+919100000002" }
+  },
+  "_comment_auth": "Phase 2 auth journeys: a platform admin (is_staff), a retailer awaiting approval, and the accounts the signup journeys create (seed_e2e deletes those each run).",
+  "admin": { "username": "e2e_admin", "shop_name": "E2E Admin Shop", "phone": "+919100000009" },
+  "pending_retailer": { "username": "e2e_pending_retailer", "shop_name": "E2E Pending Shop", "phone": "+919100000003" },
+  "signup": {
+    "retailer": { "username": "e2e_new_retailer", "email": "e2e_new_retailer@e2e.invalid", "phone": "+919100000004" },
+    "customer": { "email": "e2e_new_cust@e2e.invalid", "phone": "+919000000004" }
+  },
+  "customers": {
+    "C1": { "username": "e2e_khata_cust", "first_name": "E2E Khata Cust", "phone": "+919000000001" },
+    "C2": { "username": "e2e_app_cust", "first_name": "E2E App Cust", "phone": "+919000000002" }
+  },
+  "products": {
+    "P1": { "name": "Atta 5kg", "barcode": "8900000000011", "price": "250.00" },
+    "P2": { "name": "Toor Dal 1kg", "barcode": "8900000000028", "price": "140.00" },
+    "P3": { "name": "Sunflower Oil 1L", "barcode": "8900000000035", "price": "165.00" },
+    "P4": { "name": "Biscuit pack", "barcode": "8900000000042", "price": "30.00" },
+    "P5": { "name": "Ghee 500g", "barcode": "8900000000059", "price": "100.00" }
+  },
+  "khata": [
+    { "customer": "C1", "retailer": "R1", "credit_limit": "5000.00", "balance": "500.00" },
+    { "customer": "C1", "retailer": "R2", "credit_limit": "0.00", "balance": "1000.00" }
+  ]
+}
