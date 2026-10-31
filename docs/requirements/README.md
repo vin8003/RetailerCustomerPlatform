@@ -60,3 +60,4 @@ Ticket snapshots (acceptance context, ship notes) stay in [`../tickets/`](../tic
 | [parent-child-visibility.md](parent-child-visibility.md) | KAN-49 |
 | [returned-orders-filter.md](returned-orders-filter.md) | KAN-77 |
 | [supplier-edit-and-deactivate.md](supplier-edit-and-deactivate.md) | KAN-78 |
+| [retailer-verification.md](retailer-verification.md) | Retailer verification flow |
