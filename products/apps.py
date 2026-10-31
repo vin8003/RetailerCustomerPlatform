@@ -7,6 +7,9 @@ class ProductsConfig(AppConfig):
 
     def ready(self):
         import products.signals
+        from products import moderation
+        from products.models import Product
+        moderation.connect(Product)
         from products import views
         from products.search import smart_product_search
         views.smart_product_search = smart_product_search

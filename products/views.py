@@ -1963,7 +1963,8 @@ def get_product_detail_public(request, retailer_id, product_id):
             id=product_id,
             retailer=retailer,
             is_active=True,
-            is_available=True
+            is_available=True,
+            moderation_status='ok',
         )
 
         # Pre-fetch active offers for optimization

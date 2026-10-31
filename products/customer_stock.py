@@ -48,7 +48,8 @@ class ProductManager(models.Manager):
     def get_queryset(self):
         qs = super().get_queryset()
         if getattr(_tls, "hide_oos", False):
-            return qs.filter(customer_in_stock_q())
+            # Customer listings: in stock and not held by moderation.
+            return qs.filter(customer_in_stock_q(), moderation_status='ok')
         return qs
 
 

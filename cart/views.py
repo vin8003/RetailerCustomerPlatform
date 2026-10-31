@@ -393,7 +393,7 @@ def get_cart_summary(request):
             
             for item in cart_items:
                 # Basic availability
-                if not item.product.is_available or not item.product.is_active:
+                if not item.product.customer_visible:
                     unavailable_items.append(item.product.name)
                     continue
                     
@@ -493,7 +493,7 @@ def validate_cart(request):
                 info = item_discounts.get(item.id, {})
                 validation_quantity = info.get('total_display_quantity', item.quantity)
                 
-                if not item.product.is_available or not item.product.is_active:
+                if not item.product.customer_visible:
                     validation_errors.append(f"{item.product.name} is no longer available")
                 else:
                     master_id = item.product.parent_bulk_product_id or item.product.id

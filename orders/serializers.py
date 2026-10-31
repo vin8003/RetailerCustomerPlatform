@@ -675,7 +675,7 @@ class OrderCreateSerializer(serializers.Serializer):
         master_product_demand = {}
         
         for cart_item in cart_items:
-            if not cart_item.product.is_active or not cart_item.product.is_available:
+            if not cart_item.product.customer_visible:
                 raise serializers.ValidationError(
                     f"Product '{cart_item.product.name}' is no longer available. Remove it from your cart."
                 )

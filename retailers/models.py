@@ -1224,3 +1224,71 @@ class VerificationEvent(models.Model):
 
     def __str__(self):
         return f"{self.action} {self.from_status}->{self.to_status} (retailer {self.retailer_id})"
+
+
+class CustomerReport(models.Model):
+    """A customer's report about a shop or one of its products."""
+
+    REASON_CHOICES = [
+        ('misleading', 'Fake or misleading'),
+        ('offensive', 'Offensive content'),
+        ('illegal', 'Illegal or restricted item'),
+        ('wrong_price', 'Wrong price'),
+        ('not_delivered', 'Order never delivered'),
+        ('other', 'Other'),
+    ]
+    STATUS_CHOICES = [
+        ('open', 'Open'),
+        ('actioned', 'Actioned'),
+        ('dismissed', 'Dismissed'),
+    ]
+    retailer = models.ForeignKey(RetailerProfile, on_delete=models.CASCADE, related_name='customer_reports')
+    product = models.ForeignKey(
+        'products.Product', on_delete=models.CASCADE, null=True, blank=True, related_name='customer_reports',
+    )
+    reporter = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='filed_reports',
+    )
+    reason = models.CharField(max_length=20, choices=REASON_CHOICES)
+    text = models.TextField(blank=True, max_length=1000)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='open', db_index=True)
+    resolution = models.CharField(max_length=30, blank=True)
+    handled_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='handled_reports',
+    )
+    handled_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'customer_report'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['status', 'retailer']),
+            models.Index(fields=['product', 'status']),
+        ]
+
+    def __str__(self):
+        target = f"product {self.product_id}" if self.product_id else f"shop {self.retailer_id}"
+        return f"{self.reason} report on {target} ({self.status})"
+
+
+class RetailerStrike(models.Model):
+    """A policy strike. Three in 90 days suspends the shop."""
+
+    retailer = models.ForeignKey(RetailerProfile, on_delete=models.CASCADE, related_name='strikes')
+    reason = models.CharField(max_length=255)
+    product = models.ForeignKey(
+        'products.Product', on_delete=models.SET_NULL, null=True, blank=True, related_name='strikes',
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='issued_strikes',
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'retailer_strike'
+        ordering = ['-created_at']
+        indexes = [models.Index(fields=['retailer', 'created_at'])]
+
+    def __str__(self):
+        return f"Strike on retailer {self.retailer_id}: {self.reason}"
