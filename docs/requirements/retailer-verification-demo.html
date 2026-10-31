@@ -1,0 +1,899 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OrderEasy verification demo</title>
+<style>
+:root{
+  --bg:#fbf8f2; --card:#fff; --ink:#1f2a1f; --mute:#667064; --line:#e4ddcc;
+  --amber:#b57a0a; --amber-bg:#fdf1d6; --leaf:#2e7d4f; --leaf-bg:#e0f2e7; --red:#b3382c; --red-bg:#fbe4e0;
+  --blue:#2c5fa8; --blue-bg:#e1ecfa; --grey-bg:#eee9dd; --phone:#14201a; --accent:#c98a12;
+}
+@media (prefers-color-scheme: dark){
+  :root{--bg:#141a14; --card:#1d251d; --ink:#eef0e6; --mute:#a5ae9f; --line:#324032;
+  --amber:#e8b04a; --amber-bg:#3a2e12; --leaf:#6cc590; --leaf-bg:#17321f; --red:#ff8c7d; --red-bg:#3c1e1a;
+  --blue:#8db6ee; --blue-bg:#1a2b44; --grey-bg:#2a322a; --phone:#0b100c;}
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1180px;margin:0 auto;padding:16px 16px 80px}
+h1{font-size:24px;margin:4px 0 2px} h2{font-size:19px;margin:0 0 4px} h3{font-size:15px;margin:0 0 4px}
+.sub{color:var(--mute);font-size:13px} p{margin:6px 0}
+button,select,input{font:inherit}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0;position:sticky;top:0;background:var(--bg);padding:8px 0;z-index:5;border-bottom:1px solid var(--line)}
+.tabs button{border:1px solid var(--line);background:var(--card);color:var(--ink);padding:7px 14px;border-radius:99px;cursor:pointer}
+.tabs button.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.panel{display:none}.panel.on{display:block}
+.pill{display:inline-block;padding:1px 9px;border-radius:99px;font-size:12px;font-weight:700;border:1px solid transparent;white-space:nowrap}
+.p-amber{background:var(--amber-bg);color:var(--amber);border-color:var(--amber)}
+.p-leaf{background:var(--leaf-bg);color:var(--leaf);border-color:var(--leaf)}
+.p-red{background:var(--red-bg);color:var(--red);border-color:var(--red)}
+.p-blue{background:var(--blue-bg);color:var(--blue);border-color:var(--blue)}
+.p-grey{background:var(--grey-bg);color:var(--mute);border-color:var(--line)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0}
+.bar .grow{flex:1}
+.btn{border:0;background:var(--accent);color:#fff;border-radius:9px;padding:8px 14px;font-weight:700;cursor:pointer}
+.btn.alt{background:var(--grey-bg);color:var(--ink);border:1px solid var(--line)}
+.btn.red{background:var(--red);color:#fff}.btn.green{background:var(--leaf);color:#fff}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.stepper{display:flex;gap:4px;flex-wrap:wrap;margin:6px 0}
+.stepper button{flex:1 1 90px;border:1px solid var(--line);background:var(--card);color:var(--mute);padding:6px 4px;border-radius:8px;font-size:12px;cursor:pointer}
+.stepper button.done{color:var(--leaf);border-color:var(--leaf)}
+.stepper button.now{background:var(--ink);color:var(--bg);border-color:var(--ink);font-weight:700}
+.caption{background:var(--blue-bg);border:1px solid var(--blue);color:var(--ink);border-radius:10px;padding:8px 12px;margin:8px 0;min-height:44px}
+.grid{display:grid;grid-template-columns:270px 1fr 240px;gap:14px;align-items:start}
+@media(max-width:980px){.grid{grid-template-columns:1fr}}
+.colhead{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--mute);margin:0 0 6px;font-weight:700}
+.phone{width:250px;background:var(--phone);border-radius:30px;padding:9px;box-shadow:0 6px 20px rgba(0,0,0,.2);margin:0 auto}
+.screen{background:#fff;color:#1f2a1f;border-radius:22px;min-height:470px;padding:13px 11px;font-size:13px;overflow:hidden}
+.screen .top{font-weight:700;font-size:15px}
+.screen .meta{color:#8a8470;font-size:12px}
+.prog{height:6px;background:#e8e2d2;border-radius:9px;margin:7px 0 9px}.prog b{display:block;height:100%;background:#2e7d4f;border-radius:9px;transition:width .4s}
+.field{display:block;width:100%;border:1px solid #d8d1bd;border-radius:8px;padding:7px 9px;margin:5px 0;color:#222;background:#fffdf8}
+.field small{display:block;color:#8a8470;font-size:11px}
+input.field,select.field{outline:none}input.field:focus{border-color:#c98a12}
+.sbtn{display:block;width:100%;background:#c98a12;color:#fff;border:0;border-radius:9px;text-align:center;padding:9px;font-weight:700;margin-top:9px;cursor:pointer}
+.sbtn.alt{background:#eee9dd;color:#1f2a1f}
+.hint{font-size:12px;margin:2px 0;min-height:16px}.ok{color:#2e7d4f}.bad{color:#b3382c}.mut{color:#667064}
+.upload{border:2px dashed #cbbf9e;border-radius:10px;padding:14px 6px;text-align:center;color:#8a7a4a;margin:7px 0;cursor:pointer}
+.upload.has{border-style:solid;border-color:#2e7d4f;color:#2e7d4f;background:#eef8f1}
+.map{height:100px;border-radius:8px;background:repeating-linear-gradient(45deg,#e9efe3,#e9efe3 10px,#dfe8d6 10px,#dfe8d6 20px);position:relative;margin:6px 0;border:1px solid #cdd6c3;cursor:crosshair;overflow:hidden}
+.map .pin{position:absolute;font-size:22px;transform:translate(-50%,-100%)}
+.tag{font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px}
+.t-done{background:#e0f2e7;color:#2e7d4f}.t-fix{background:#fbe4e0;color:#b3382c}.t-wait{background:#fdf1d6;color:#a06d00}.t-todo{background:#eee9dd;color:#667064}
+.notice{border-radius:10px;padding:9px;margin:8px 0;border:1px solid}
+.n-amber{background:#fdf1d6;border-color:#c98a12}.n-green{background:#e0f2e7;border-color:#2e7d4f}.n-red{background:#fbe4e0;border-color:#b3382c}
+.chk{display:flex;justify-content:space-between;align-items:center;gap:6px;padding:6px 0;border-bottom:1px dashed #e2dccb}.chk:last-child{border:0}
+.desk{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.desk .tb{background:var(--grey-bg);padding:7px 12px;font-size:12px;color:var(--mute)}
+.desk .bd{padding:12px;min-height:300px}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{text-align:left;padding:6px 7px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--mute)}
+.scroll{overflow-x:auto}
+.photo{height:62px;border-radius:8px;background:linear-gradient(135deg,#d8cfb5,#bfb48f);display:grid;place-items:center;color:#5d5233;font-size:11px}
+.photo.dark{background:linear-gradient(135deg,#444,#222);color:#bbb}
+.three{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:8px 0}
+.shop{display:flex;justify-content:space-between;align-items:center;border:1px solid #e4ddcc;border-radius:10px;padding:8px;margin:6px 0;background:#fff}
+.shop.new{animation:pop .5s ease;border-color:#2e7d4f;background:#eef8f1}
+@keyframes pop{from{transform:scale(.9);opacity:0}to{transform:scale(1);opacity:1}}
+.log{max-height:170px;overflow:auto;font-size:13px;margin-top:6px}
+.log div{padding:3px 0;border-bottom:1px dashed var(--line)}
+.log .a{color:var(--leaf)}.log .m{color:var(--amber)}.log .c{color:var(--blue)}
+.statusbar{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0}
+.statusbar .pill{opacity:.35}.statusbar .pill.cur{opacity:1;box-shadow:0 0 0 2px var(--ink)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:820px){.two{grid-template-columns:1fr}}
+.doc{max-width:820px}
+.doc h1{font-size:26px}.doc h2{font-size:21px;margin-top:30px;border-top:2px solid var(--line);padding-top:12px}.doc h3{font-size:17px;margin-top:20px}
+.doc table{margin:10px 0;display:block;overflow-x:auto}.doc code{background:var(--grey-bg);padding:1px 5px;border-radius:5px;font-size:13px}
+.doc li{margin:3px 0}
+.flow{display:flex;flex-wrap:wrap;gap:10px;margin:10px 0}
+.step{flex:1 1 150px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px}
+.step.auto{border-left:5px solid var(--leaf)}.step.manual{border-left:5px solid var(--amber)}.step.cust{border-left:5px solid var(--blue)}
+.step .n{width:24px;height:24px;border-radius:50%;background:var(--ink);color:var(--bg);display:grid;place-items:center;font-weight:700;font-size:12px;margin-bottom:5px}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--mute)}.legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+.big{font-size:28px;font-weight:800}
+.hl{outline:3px solid var(--accent);outline-offset:2px;border-radius:10px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>OrderEasy retailer verification: interactive demo</h1>
+<div class="sub">Click through it. Nothing here talks to a server; it simulates the proposed flow (PR #222).</div>
+
+<div class="tabs" id="tabs">
+  <button data-tab="demo" class="on">1. Shop journey demo</button>
+  <button data-tab="prod">2. Product checks</button>
+  <button data-tab="rep">3. Reports and takedown</button>
+  <button data-tab="over">4. Overview</button>
+  <button data-tab="doc">5. Design doc</button>
+</div>
+
+<!-- ================= TAB 1 ================= -->
+<section class="panel on" id="tab-demo">
+  <div class="bar">
+    <label class="sub">Scenario</label>
+    <select id="scn" class="btn alt" style="font-weight:600">
+      <option value="clean">Clean shop: quick approve</option>
+      <option value="fix">Photo needs a fix</option>
+      <option value="dup">Duplicate GST: reject</option>
+    </select>
+    <button class="btn alt" id="back">◀ Back</button>
+    <button class="btn" id="next">Next ▶</button>
+    <button class="btn alt" id="play">▶ Autoplay</button>
+    <button class="btn alt" id="reset">Reset</button>
+    <span class="grow"></span>
+    <span class="sub">Tip: you can also type in the phone and press its own buttons.</span>
+  </div>
+  <div class="stepper" id="stepper"></div>
+  <div class="statusbar" id="statusbar"></div>
+  <div class="caption" id="caption"></div>
+  <div class="grid">
+    <div><div class="colhead">Retailer (phone)</div><div class="phone"><div class="screen" id="ph"></div></div></div>
+    <div><div class="colhead">Admin console</div><div class="desk"><div class="tb">Admin / Verifications</div><div class="bd" id="adm"></div></div></div>
+    <div><div class="colhead">Customer app</div><div class="phone"><div class="screen" id="cu"></div></div></div>
+  </div>
+  <div class="card" style="margin-top:14px"><h3>What the system did</h3><div class="log" id="log"></div></div>
+</section>
+
+<!-- ================= TAB 2 ================= -->
+<section class="panel" id="tab-prod">
+  <h2>Product checks playground</h2>
+  <p class="sub">Add a product the way a retailer would. The cheap text checks run on save, in the same request. Try "Kingfisher beer", "Paracetamol tablet", "Atta 5kg", a name with a phone number, or pick a catalog item.</p>
+  <div class="two">
+    <div class="card">
+      <h3>Retailer: add product</h3>
+      <div class="bar"><label class="sub" style="width:90px">Source</label>
+        <select id="p-src" class="btn alt"><option value="custom">Custom product</option><option value="master">From master catalog (barcode)</option></select></div>
+      <div id="p-custom">
+        <div class="bar"><label class="sub" style="width:90px">Name</label><input id="p-name" class="btn alt" style="flex:1;text-align:left;font-weight:400" value="Atta 5kg"></div>
+        <div class="bar"><label class="sub" style="width:90px">Category</label>
+          <select id="p-cat" class="btn alt"><option>Grocery</option><option>Snacks</option><option>Personal care</option><option>Stationery</option></select></div>
+        <div class="bar"><label class="sub" style="width:90px">Price Rs</label><input id="p-price" type="number" class="btn alt" style="width:110px;font-weight:400;text-align:left" value="250"></div>
+      </div>
+      <div id="p-master" style="display:none">
+        <div class="bar"><label class="sub" style="width:90px">Barcode</label>
+        <select id="p-bar" class="btn alt"><option value="8901063010016">8901063010016 · Parle-G 800g</option><option value="8901030865278">8901030865278 · Surf Excel 1kg</option></select></div>
+        <p class="sub">Name, image and category come from the curated catalog, so the text checks are skipped.</p>
+      </div>
+      <div class="bar"><button class="btn" id="p-add">Save product</button><span class="sub">Rapid-fire it 6 times to see the rate limit.</span></div>
+      <div id="p-result"></div>
+    </div>
+    <div>
+      <div class="card"><h3>Retailer's product list</h3><div id="p-list"></div></div>
+      <div class="card" style="margin-top:12px"><h3>What customers see</h3><div id="p-cust"></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= TAB 3 ================= -->
+<section class="panel" id="tab-rep">
+  <h2>Reports, strikes and suspension</h2>
+  <p class="sub">A product "Super Herbal Gold" is live. Be the customer, then the admin. Three different customers hide a product; three strikes suspend the shop.</p>
+  <div class="two">
+    <div>
+      <div class="colhead">Customer app</div>
+      <div class="phone"><div class="screen" id="r-cu" style="min-height:420px"></div></div>
+    </div>
+    <div>
+      <div class="colhead">Admin: report inbox</div>
+      <div class="desk"><div class="tb">Admin / Reports</div><div class="bd" id="r-adm"></div></div>
+      <div class="card" style="margin-top:12px"><h3>Retailer notice</h3><div id="r-ret"></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= TAB 4 ================= -->
+<section class="panel" id="tab-over">
+  <h2>The whole journey</h2>
+  <p class="sub">One-time approval, quick automated checks, no per-product approval queue. Sized for one small VM and one database.</p>
+  <div class="legend"><span><i style="background:var(--leaf)"></i>Automatic</span><span><i style="background:var(--amber)"></i>Admin does it</span><span><i style="background:var(--blue)"></i>Customer action</span></div>
+  <div class="flow">
+    <div class="step auto"><div class="n">1</div><h3>Sign up</h3><p class="sub">Shop created hidden (pending). POS works.</p></div>
+    <div class="step auto"><div class="n">2</div><h3>Checklist</h3><p class="sub">Phone OTP, shop, address and pin, proof, owner ID. Checks run as each step saves.</p></div>
+    <div class="step auto"><div class="n">3</div><h3>Auto checks</h3><p class="sub">Format, duplicates, pincode, text screen.</p></div>
+    <div class="step manual"><div class="n">4</div><h3>Admin review</h3><p class="sub">About 10 minutes. Quick approve if all pass.</p></div>
+    <div class="step manual"><div class="n">5</div><h3>Decision</h3><p class="sub">Approve, ask for changes, or reject, with reason.</p></div>
+    <div class="step auto"><div class="n">6</div><h3>Live</h3><p class="sub">Visible to customers. Product text checks on every save.</p></div>
+    <div class="step cust"><div class="n">7</div><h3>Reports</h3><p class="sub">Auto-hide, strikes, suspension, appeal.</p></div>
+  </div>
+  <h2 style="margin-top:22px">Shop status</h2>
+  <div class="statusbar" style="margin:8px 0"><span class="pill p-amber" style="opacity:1">pending</span> → admin approves → <span class="pill p-leaf" style="opacity:1">approved</span> → 3 strikes → <span class="pill p-red" style="opacity:1">suspended</span> → appeal accepted → <span class="pill p-leaf" style="opacity:1">approved</span></div>
+  <div class="statusbar" style="margin:8px 0"><span class="pill p-amber" style="opacity:1">pending</span> → asks for fix → <span class="pill p-blue" style="opacity:1">needs changes</span> → retailer fixes → <span class="pill p-amber" style="opacity:1">pending</span>; fake or fraud → <span class="pill p-red" style="opacity:1">rejected</span> (final)</div>
+  <h2 style="margin-top:22px">Which check runs where</h2>
+  <div class="scroll"><table>
+    <tr><th>Check</th><th>When</th><th>How</th><th>Who</th></tr>
+    <tr><td>Phone OTP</td><td>Step 1</td><td>Existing SMS OTP</td><td><span class="pill p-leaf">Auto</span></td></tr>
+    <tr><td>Shop name</td><td>Step 2</td><td>Placeholder, length, blocklist</td><td><span class="pill p-leaf">Auto</span></td></tr>
+    <tr><td>Address and pin</td><td>Step 3</td><td>Valid pincode, pin set</td><td><span class="pill p-leaf">Auto</span></td></tr>
+    <tr><td>GST / PAN</td><td>Step 4</td><td>Format check, duplicates</td><td><span class="pill p-leaf">Auto</span></td></tr>
+    <tr><td>Photo, ID, name vs proof</td><td>Review</td><td>Looked at on the review page</td><td><span class="pill p-amber">Admin</span></td></tr>
+    <tr><td>Product text</td><td>Each save</td><td>Blocklist, category keywords, price, rate limit</td><td><span class="pill p-leaf">Auto</span></td></tr>
+    <tr><td>Reports</td><td>After live</td><td>Thresholds, then inbox</td><td><span class="pill p-blue">Customers</span> <span class="pill p-amber">Admin</span></td></tr>
+  </table></div>
+  <p class="sub" style="margin-top:14px">Decided: GST optional, owner ID stored privately, alcohol / tobacco / adult / weapons banned, one-time approval, no per-product queue, no image classifier in v1.</p>
+</section>
+
+<!-- ================= TAB 5 ================= -->
+<section class="panel" id="tab-doc"><div class="doc"><h1>Retailer verification: design proposal</h1>
+<ul>
+<li><strong>Status:</strong> proposal for Vineet's review. No code changes in this PR.</li>
+<li><strong>Scope:</strong> backend (<code>RetailerCustomerPlatform</code>), retailer app (<code>retailer_ordereasy_njs</code>), customer app (read side only).</li>
+</ul>
+<h2>1. What exists today</h2>
+<p>Read from <code>main</code> on 2026-10-31.</p>
+<p><strong>Signup.</strong> <code>POST auth/retailer/signup/</code> (<code>authentication/views.py: retailer_signup</code>) creates the user and a <code>RetailerProfile</code> with placeholder data: shop name "<name>'s Shop", empty address, pincode <code>000000</code>, <code>verification_status='pending'</code>, <code>is_verified=False</code>, <code>is_active=False</code>. The signup form asks only for username, email, phone and password. Phone OTP exists (<code>User.is_phone_verified</code>, <code>OTPVerification</code>, an SMS provider via Authkey) and the profile page has a "Verify Now" button, but nothing requires it for approval.</p>
+<p><strong>Approval.</strong> One flag pair: <code>verification_status</code> (<code>pending|approved|rejected</code>) plus <code>is_verified</code>. Platform admins (<code>is_staff</code>, superuser, or an email in <code>ADMIN_EMAILS</code>) call <code>GET admin/verifications/</code> and <code>POST admin/verifications/&lt;id&gt;/action/</code> with <code>approve</code> or <code>reject</code> and a free-text reason. Approve sets <code>is_active=True</code> (first time only). Reject sets <code>is_active=False</code> and stores <code>rejection_reason</code>. There is no history of who decided what or when, and no checklist.</p>
+<p><strong>What gates customers.</strong> <code>RetailerProfile.objects.public()</code> requires <code>is_active</code>, <code>is_verified</code> and <code>approved</code>. Every customer-facing shop, catalog, cart and order lookup goes through it, so an unapproved shop and all its products are invisible to customers. This is a good single choke point to build on.</p>
+<p><strong>Data captured but never checked.</strong> <code>gst_number</code> and <code>pan_number</code> are format-checked by regex only (no checksum, no registry lookup, no uniqueness across shops). <code>upi_id</code> is free text. Address and lat/lng are optional. <code>shop_image</code> is any image. Nothing is stored for identity or business documents.</p>
+<p><strong>Products.</strong> <code>Product</code> (per retailer) has <code>name</code>, <code>description</code>, <code>category</code>, <code>brand</code>, images, <code>is_active</code>, <code>is_available</code>. A retailer can create products freely. They are visible to customers as soon as the shop is public. There is no review, report or takedown model for products or shops. Only <code>ProductReview</code> and <code>RetailerReview</code> (ratings) exist. <code>MasterProduct</code> is a curated catalog keyed by barcode that products can link to.</p>
+<p><strong>Admin UI.</strong> Retailer app page <code>dashboard/admin/verifications</code> (visible when <code>is_admin</code>): tabs per status, search, a card per retailer with contact, address, GST/PAN, an Approve button and a Reject dialog with reason. Retailers see <code>VerificationAlertBanner</code> (Hindi and English) saying pending or rejected with the reason.</p>
+<p><strong>Gaps that matter.</strong>
+1. Approval is a single judgment call with nothing to base it on: address is empty and phone may be unverified.
+2. After approval, the retailer can still edit shop name, image, address and GST without re-review. Confirm with a test before relying on this, I did not run it.
+3. Product content is unmoderated and there is no way for a customer to report anything.
+4. The only enforcement lever is reject, which also hides everything, with no "suspended" state and no audit trail.</p>
+<h2>2. Principles</h2>
+<ul>
+<li>Verify cheap things automatically, spend admin time only on judgment calls.</li>
+<li>Let a retailer start working immediately (add products, use the POS) but control what customers can see.</li>
+<li>Our shops are mostly Hindi-first, small kirana and mithai stores, many without GST. Do not make GST mandatory.</li>
+<li>Everything an admin does is logged.</li>
+</ul>
+<h2>3. Store approval</h2>
+<h3>3.1 Statuses</h3>
+<p>Decided: one-time approval, no limited phase. Keep <code>verification_status</code> and <code>is_verified</code> working as today and add only what is needed.</p>
+<table>
+<thead>
+<tr>
+<th>Status</th>
+<th>Meaning</th>
+<th>Customers see shop?</th>
+<th>Can sell via POS?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pending</code></td>
+<td>Signed up or submitted, waiting for admin (as today)</td>
+<td>No</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>needs_changes</code></td>
+<td>Admin asked for a fix (reason shown)</td>
+<td>No</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>approved</code></td>
+<td>Admin approved once; full access</td>
+<td>Yes</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>suspended</code></td>
+<td>Taken down by admin (reason, appealable)</td>
+<td>No</td>
+<td>Read-only</td>
+</tr>
+<tr>
+<td><code>rejected</code></td>
+<td>Final no (fraud, fake shop)</td>
+<td>No</td>
+<td>No</td>
+</tr>
+</tbody>
+</table>
+<p>The retailer can use the POS and dashboard in every state except <code>rejected</code>. <code>public()</code> keeps working unchanged: suspended and needs_changes are simply not <code>approved</code>.</p>
+<h3>3.2 Checks</h3>
+<table>
+<thead>
+<tr>
+<th>Check</th>
+<th>Automated?</th>
+<th>Rule</th>
+<th>Blocking for submit?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Phone</td>
+<td>Yes</td>
+<td>OTP verified on the signup number (<code>is_phone_verified</code>)</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>Email</td>
+<td>Yes</td>
+<td>Existing email OTP</td>
+<td>No, nice to have</td>
+</tr>
+<tr>
+<td>Shop name</td>
+<td>Yes</td>
+<td>Not a placeholder, 3 to 60 chars, passes the text screen in 4.3, no duplicate name in the same pincode</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>Address</td>
+<td>Partly</td>
+<td>Address line, city, state, 6-digit pincode that exists, and a map pin (lat/lng) set by the retailer on the map. Auto flag if pin is more than 3 km from the pincode centre</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>Shop photo</td>
+<td>Partly</td>
+<td>At least one storefront photo. Auto: image size, not blurry, not a stock/duplicate hash match. Admin eyeballs it</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>Owner identity</td>
+<td>Manual (v1)</td>
+<td>Photo of an ID (Aadhaar masked, PAN, voter ID or driving licence), plus optional selfie holding the shop board. Stored privately, viewable by admins only</td>
+<td>Required for full approval, not for submit</td>
+</tr>
+<tr>
+<td>Business registration</td>
+<td>Partly</td>
+<td>One of: GSTIN, FSSAI (food shops), Shop and Establishment/Udyam number, or a trade licence photo. If GSTIN: validate format + checksum and cross-check name and state with the GST portal API when we have one; until then admin checks manually</td>
+<td>One of these or a shop-board photo</td>
+</tr>
+<tr>
+<td>UPI / bank</td>
+<td>Partly</td>
+<td>UPI ID must match <code>name@psp</code> format. Optional penny-drop (Rs 1) verification later. Name on UPI should match owner or shop</td>
+<td>No (only needed before online payments are enabled)</td>
+</tr>
+<tr>
+<td>Duplicates</td>
+<td>Yes</td>
+<td>Same phone, GSTIN, PAN, UPI ID or ID number on another shop raises a flag for the admin</td>
+<td>Flag, not block</td>
+</tr>
+<tr>
+<td>Fraud signals</td>
+<td>Yes</td>
+<td>Disposable email domain, many signups from one device/IP, banned phone</td>
+<td>Flag</td>
+</tr>
+</tbody>
+</table>
+<p>Auto results are stored per check as <code>pass | flag | fail | manual</code>, so the admin sees only what needs a human.</p>
+<h3>3.3 What can be automated</h3>
+<ul>
+<li>Auto-pass: phone OTP, address completeness, pincode validity, GST/PAN format, duplicate scan, text screen. All are cheap string/DB checks that run in the signup request.</li>
+<li>The admin sees a checks panel and a <strong>Quick approve</strong> button when everything is pass. Budget: 10 shops/week at ~30 min today is 5 hours/week. With the panel the target is under 10 minutes for a clean shop.</li>
+<li>No auto-approval in v1.</li>
+</ul>
+<h3>3.4 Re-verification triggers</h3>
+<p>Moving back to <code>needs_changes</code> (shop hidden until fixed) when the retailer changes: shop name, address or pin, GSTIN/PAN, owner phone. Changing the logo, description, hours, delivery settings does not trigger it. To keep admin work small, only shop name, address/pin and GSTIN/PAN changes re-trigger it, and an approved shop keeps its old values live until the admin approves the change.</p>
+<h2>4. Product handling</h2>
+<h3>4.1 Options</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>A. Approve before live</th>
+<th>B. Live immediately, review after</th>
+<th>C. Tiered (recommended)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Customer safety</td>
+<td>Best</td>
+<td>Weakest</td>
+<td>Good</td>
+</tr>
+<tr>
+<td>Retailer experience</td>
+<td>Slow, painful for 500-item catalogs</td>
+<td>Instant</td>
+<td>Instant for safe items</td>
+</tr>
+<tr>
+<td>Admin load</td>
+<td>Every product, does not scale</td>
+<td>Only reported/flagged</td>
+<td>Only flagged and new-shop items</td>
+</tr>
+<tr>
+<td>Fit for kirana bulk uploads</td>
+<td>Poor</td>
+<td>Good</td>
+<td>Good</td>
+</tr>
+</tbody>
+</table>
+<h3>4.2 Recommendation: tiered, no per-product approval queue</h3>
+<p>Decided direction: no extra friction or load, only quick automated checks and one-time approval.</p>
+<ol>
+<li><strong>Master catalog items are live immediately</strong> (inherit curated name, image, category).</li>
+<li><strong>Custom products from an approved shop go live immediately</strong> after the cheap automated text checks in 4.3. A product that fails is held as <code>pending_review</code> and the retailer sees why. There is no routine admin review of products.</li>
+<li><strong>Banned categories</strong> (decided): alcohol, tobacco, adult, weapons are rejected by the text checks. <strong>Restricted</strong> (medicines, pesticides) are held for admin approval; expect few.</li>
+<li>Safety net after publish is customer reports (section 5), not a queue.</li>
+</ol>
+<p>Add <code>Product.moderation_status</code> with <code>ok | pending_review | hidden | removed</code>, <code>moderation_reason</code>, <code>moderated_at</code>. Customer queries add <code>moderation_status='ok'</code> beside the existing out-of-stock filter (<code>hide_oos_for_customer</code>).</p>
+<h3>4.3 Automated checks (sized for one small VM and one database)</h3>
+<p>All checks run in-process on product create/update, are pure string or single-row checks and add no new service.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Check</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Name and description</td>
+<td>Keyword blocklist (English, Hindi, Hinglish) for banned categories and abuse, phone numbers/URLs in the name, length limits, symbol/caps spam</td>
+</tr>
+<tr>
+<td>Category</td>
+<td>Banned/restricted keywords vs chosen category</td>
+</tr>
+<tr>
+<td>Image</td>
+<td>Existing size limit and resize only. <strong>No image classifier in v1</strong>: it costs money and CPU/latency. Images are covered by reports and the admin "hide / ban image" action. Revisit when volume or abuse justifies an external moderation API</td>
+</tr>
+<tr>
+<td>Price</td>
+<td>Warn if price is 0 or wildly above the master MRP</td>
+</tr>
+<tr>
+<td>Volume</td>
+<td>Rate-limit product writes per shop (e.g. 60/min) to stop scripted floods</td>
+</tr>
+</tbody>
+</table>
+<p>Keep the blocklist in a small DB table or settings file the admin can edit without a deploy. Do not scan the existing catalog in the web process; if a backfill is wanted, run it as a one-off management command at night in small batches.</p>
+<h3>4.4 Admin controls on products</h3>
+<p>Hide, remove, require edit with a reason, bulk hide all products of a shop, and ban an image hash across all shops.</p>
+<h2>5. Customer protection</h2>
+<ul>
+<li><strong>Report button</strong> on shop and on product pages in the customer app: reasons (fake or misleading, offensive, illegal or restricted item, wrong price, never delivered, other), optional text and photo. Logged-in customers only, rate-limited, one open report per customer per target.</li>
+<li><strong>Report model</strong>: <code>Report(target_type shop|product, target_id, reporter, reason, text, status open|actioned|dismissed, handled_by, handled_at)</code>.</li>
+<li><strong>Auto-hide threshold</strong>: a product with 3 reports from different customers is auto-hidden (<code>pending_review</code>) until an admin looks, a shop with 5 reports from different customers in 7 days is flagged to the admin report inbox for review. This is protection against abuse of the report button too, so repeated bogus reporters are down-weighted.</li>
+<li><strong>Admin actions</strong>: dismiss, hide product, remove product, warn shop (message in app), strike, suspend shop, reject shop. Three strikes in 90 days suspends the shop automatically.</li>
+<li><strong>Suspension</strong>: shop disappears from customer lists and search immediately (via <code>public()</code>), open orders can still be completed or cancelled with refund, retailer sees reason and an appeal button that creates a review task.</li>
+<li><strong>Audit</strong>: every status change writes <code>VerificationEvent(shop, actor, from, to, reason, created_at)</code>. Admins never edit status without a reason.</li>
+<li><strong>Retailer-visible notices</strong>: push/WhatsApp and in-app message for every hide, strike and suspension, with the policy line broken and how to fix it.</li>
+</ul>
+<h2>6. UI/UX</h2>
+<h3>6.1 Retailer onboarding (mobile-first, Hindi + English)</h3>
+<p>A 5-step checklist replaces the banner as the first screen after signup. It shows progress ("3 of 5 done") and what is left.</p>
+<ol>
+<li><strong>Phone</strong>: OTP inline.</li>
+<li><strong>Shop</strong>: name, type, storefront photo.</li>
+<li><strong>Address</strong>: address fields plus a map pin to drag. Check shown: pin matches pincode.</li>
+<li><strong>Business proof</strong>: pick one of GST, FSSAI, shop licence or board photo, then upload.</li>
+<li><strong>Owner ID</strong>: ID photo (+ optional selfie). Text: "Only our team sees this. We never share it."</li>
+</ol>
+<p>Each step shows a status chip: Done, Needs fix (with reason), Checking. UPI is a separate optional "Start online payments" card after approval.</p>
+<h3>6.2 Status the retailer sees</h3>
+<p>A persistent status card on the dashboard top: Pending ("Finish 2 steps to go live" while steps are missing, then "We are checking, usually within 24 hours"), Needs changes (reason plus a Fix button that opens the exact step), Live, Suspended (reason plus Appeal). Products list shows a badge per product: Live, Under review (with reason), Hidden.</p>
+<h3>6.3 Admin review screens</h3>
+<ul>
+<li><strong>Queue</strong> (extends the current verifications page): tabs Pending, Flagged, Needs changes, Suspended, with counts and sort by oldest first. Reports tab and Products tab next to it.</li>
+<li><strong>Shop review page</strong>: left, the retailer's data and photos; right, a <strong>checks panel</strong> with each check as a row (Pass, Flag, Manual) and a one-line reason, for example "Phone OTP verified: pass", "GSTIN valid format; name match: manual", "Same UPI on shop #214: flag". Duplicates link to the other shop. Below: product sample (first 20 products with images and automated results) and report history.</li>
+<li><strong>Actions</strong>: Approve (quick approve when all checks pass), Ask for changes (pick a step plus message), Reject, Suspend. A reason is required except for plain approve. History timeline at the bottom.</li>
+<li><strong>Product review</strong>: grid of images, name, category, shop and the check that fired; one-click Approve, Hide, Remove, "Ban image".</li>
+<li><strong>Report inbox</strong>: report text, target preview, reporter history, one-click actions.</li>
+</ul>
+<h2>7. Rollout plan</h2>
+<ol>
+<li><strong>Foundation</strong>: new statuses (<code>needs_changes</code>, <code>suspended</code>), <code>VerificationEvent</code> audit table, per-check results on the profile. Existing approved shops stay <code>approved</code>.</li>
+<li><strong>Onboarding checklist + admin checks panel with Quick approve</strong> in the retailer app.</li>
+<li><strong>Reports, strikes and suspension</strong>, then <code>Product.moderation_status</code> and the customer filter.</li>
+<li><strong>Text checks</strong> for products.</li>
+<li>Image moderation only if needed later.</li>
+</ol>
+<p>Infra notes: Oracle free tier, one VM, one DB. Add indexes only on columns used by the queues (<code>verification_status</code>, <code>moderation_status</code>, report <code>status</code>); paginate admin lists as the current verifications API already does; keep ID and shop photos in the existing media storage with admin-only access; avoid background workers (do checks inline, they are cheap). Existing live shops stay live; no mass re-scan.</p>
+<h2>8. Decisions</h2>
+<p>Decided by Vineet on 2026-10-31:</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Question</th>
+<th>Decision</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>GST required?</td>
+<td>No. One of GST, FSSAI, shop licence or shop-board photo.</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Owner ID photo?</td>
+<td>Yes, stored privately, admin-only.</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Limited-first approval?</td>
+<td>No. One-time full approval.</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Product model</td>
+<td>No extra friction: quick automated checks only, no per-product approval queue.</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Banned categories</td>
+<td>Alcohol, tobacco, adult, weapons. Medicines and pesticides need admin approval.</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Auto-approve clean shops</td>
+<td>Not in v1.</td>
+</tr>
+<tr>
+<td>7</td>
+<td>Review capacity</td>
+<td>About 10 shops a week at 30 min each; the checks panel and Quick approve should cut that.</td>
+</tr>
+<tr>
+<td>8</td>
+<td>Infra</td>
+<td>Thin: one Oracle free-tier VM and one DB, so no image classifier or workers in v1.</td>
+</tr>
+</tbody>
+</table>
+<p>Still open (small, defaults in the doc apply unless changed):</p>
+<ul>
+<li>Image moderation later: external API vs none. Default none.</li>
+<li>Strike policy: 3 strikes in 90 days suspends. Default as written.</li>
+<li>Report auto-hide: 3 distinct reporters hides a product. Default as written.</li>
+<li>Second admin: later.</li>
+</ul></div></section>
+</div>
+
+<script>
+(function(){
+const $=s=>document.querySelector(s);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+/* ---------- tabs ---------- */
+document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('on',x===b));
+  document.querySelectorAll('.panel').forEach(p=>p.classList.toggle('on',p.id==='tab-'+b.dataset.tab));
+  window.scrollTo({top:0});
+  if(b.dataset.tab!=='demo') stopPlay();
+});
+
+/* ---------- shared rules ---------- */
+const BAN=[['alcohol',/\b(whisky|whiskey|vodka|beer|rum|wine|brandy|gin|liquor|kingfisher)\b/i],
+ ['tobacco',/\b(cigarette|cigar|bidi|gutka|gutkha|tobacco|hookah|zarda)\b/i],
+ ['adult',/\b(porn|xxx|adult toy|sex toy)\b/i],
+ ['weapons',/\b(pistol|revolver|gun|bullet|dagger|ammo)\b/i]];
+const RESTRICT=[['medicine',/\b(tablet|capsule|syrup|medicine|paracetamol|antibiotic)\b/i],
+ ['pesticide',/\b(pesticide|insecticide|rat poison|weedicide)\b/i]];
+function nameCheck(n){
+  n=(n||'').trim();
+  if(n.length<3) return {r:'fail',why:'Name is too short (3 to 60 characters).'};
+  if(n.length>60) return {r:'fail',why:'Name is too long (3 to 60 characters).'};
+  if(/'s shop$/i.test(n)) return {r:'fail',why:'This is still the placeholder name.'};
+  for(const [k,re] of BAN) if(re.test(n)) return {r:'ban',why:'Banned category: '+k+'.'};
+  if(/(\+?91)?[\s-]?[6-9]\d{9}/.test(n.replace(/\s/g,'')) || /https?:\/\/|www\./i.test(n)) return {r:'fail',why:'Remove phone numbers or links from the name.'};
+  if(/[!@#$%^&*]{3,}|(.)\1{5,}/.test(n)) return {r:'fail',why:'Looks like spam (symbols or repeated letters).'};
+  return {r:'pass',why:'Looks fine.'};
+}
+const GST=/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
+
+/* ================= TAB 1: journey ================= */
+const STAGES=['Sign up','Phone OTP','Shop','Address','Proof','Owner ID','Admin review','Result'];
+let S;
+function fresh(){
+  return {scn:$('#scn').value,stage:0,status:'none',round:0,fixMode:false,decision:null,
+    d:{name:'Sharma Kirana',phone:'98XXXXXX10',otp:'',otpOk:false,shop:'Sharma Kirana Store',photo:false,
+       addr:'12 Main Market',pincode:'302001',pin:null,proofType:'gst',gst:'',idUp:false,selfie:false},
+    audit:[],log:[]};
+}
+function lg(t,k){S.log.unshift([t,k||'a']);}
+function setStatus(st,why){
+  S.status=st; S.audit.push({st,why:why||'',at:new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})});
+}
+function checks(){
+  const d=S.d,rows=[];
+  rows.push({l:'Phone OTP verified',r:d.otpOk?'pass':'fail',n:d.otpOk?'':'not verified'});
+  const nc=nameCheck(d.shop);
+  rows.push({l:'Shop name is real and clean',r:nc.r==='pass'?'pass':'fail',n:nc.r==='pass'?'':nc.why});
+  const addrOk=/^\d{6}$/.test(d.pincode)&&d.pin&&d.addr.trim().length>3;
+  rows.push({l:'Address, pincode and map pin',r:addrOk?'pass':'fail',n:addrOk?'':'incomplete'});
+  if(d.proofType==='gst'){
+    const f=GST.test((d.gst||'').toUpperCase());
+    rows.push({l:'GST format valid',r:f?'pass':'fail',n:f?'':'invalid format'});
+    rows.push({l:'GST name matches shop',r:'manual',n:'admin checks'});
+  } else rows.push({l:'Business proof ('+({fssai:'FSSAI',lic:'Shop licence',board:'Shop board photo'})[d.proofType]+')',r:'manual',n:'admin checks'});
+  const dup=S.scn==='dup';
+  rows.push({l:'Duplicate phone / GST / PAN / UPI / ID',r:dup?'flag':'pass',n:dup?'Same GST on shop #214 (Gupta Traders)':'none found'});
+  const dark=S.scn==='fix'&&S.round===0;
+  rows.push({l:'Storefront photo looks real',r:'manual',n:dark?'photo is very dark':'admin checks',dark});
+  rows.push({l:'Owner ID matches the name',r:'manual',n:'admin checks'});
+  return rows;
+}
+const pill=r=>({pass:'<span class="pill p-leaf">Pass</span>',fail:'<span class="pill p-red">Fail</span>',flag:'<span class="pill p-red">Flag</span>',manual:'<span class="pill p-amber">You check</span>'})[r];
+
+function renderStepper(){
+  $('#stepper').innerHTML=STAGES.map((s,i)=>`<button class="${i===S.stage?'now':i<S.stage?'done':''}" data-go="${i}">${i+1}. ${s}</button>`).join('');
+  const sts=[['pending','p-amber'],['needs_changes','p-blue'],['approved','p-leaf'],['rejected','p-red']];
+  $('#statusbar').innerHTML='<span class="sub">Shop status:</span> '+(S.status==='none'?'<span class="pill p-grey" style="opacity:1">no account yet</span>':
+    sts.map(([k,c])=>`<span class="pill ${c} ${S.status===k?'cur':''}">${k.replace('_',' ')}</span>`).join(''));
+}
+const CAP=[
+ 'Retailer signs up. The system creates a hidden shop in <b>pending</b>. The retailer can already use the POS, but customers see nothing.',
+ 'Step 1 of the checklist: phone OTP. The demo code is <b>123456</b>. This blocks submission until done.',
+ 'Step 2: shop name and storefront photo. The name is checked instantly for placeholders, banned words and spam. Try "Kingfisher Beer Shop".',
+ 'Step 3: address and map pin. Click the map to drop the pin. The pincode must be 6 digits.',
+ 'Step 4: business proof. GST is optional. Any one proof is enough. A GST number is format-checked as you type.',
+ 'Step 5: owner ID, private and admin-only. Submitting sends the shop to the admin queue with all automatic results attached.',
+ 'Admin review: the checks panel does the reading. Anything marked "You check" is a human look. Clean shops get Quick approve.',
+ 'Result: the customer app only lists <b>approved</b> shops (the existing public() filter).'];
+
+function renderPhone(){
+  const d=S.d,st=S.stage,p=$('#ph');
+  const prog=Math.min(100,Math.max(0,(st-1)/5*100));
+  let h='';
+  if(st===0){
+    h=`<div class="top">Create your shop account</div><div class="meta">OrderEasy for retailers</div>
+    <input class="field" data-b="name" value="${esc(d.name)}" placeholder="Your name"><input class="field" data-b="phone" value="${esc(d.phone)}" placeholder="Phone">
+    <input class="field" value="sharma@example.com" placeholder="Email"><input class="field" type="password" value="password" placeholder="Password">
+    <button class="sbtn" data-act="signup">Create account</button>
+    <div class="hint mut" style="margin-top:8px">After this the shop exists as <b>pending</b> and is hidden from customers.</div>`;
+  } else if(st>=1&&st<=5 || (st===2&&S.fixMode)){
+    const head={1:['Verify your phone','Step 1 of 5'],2:['Your shop','Step 2 of 5'],3:['Address and map','Step 3 of 5'],4:['Business proof','Step 4 of 5'],5:['Owner ID','Step 5 of 5']}[st];
+    h=`<div class="top">${head[0]}</div><div class="meta">${head[1]}</div><div class="prog"><b style="width:${st*20}%"></b></div>`;
+    if(S.fixMode) h+=`<div class="notice n-red"><b>Please fix:</b> the shop photo is too dark. Upload a clear photo of the shop front.</div>`;
+    if(st===1) h+=`<div class="field"><small>Mobile number</small>${esc(d.phone)}</div>
+      <input class="field" data-b="otp" maxlength="6" inputmode="numeric" placeholder="6-digit code" value="${esc(d.otp)}">
+      <div class="hint mut" id="h-otp">Demo code: 123456</div>
+      <button class="sbtn" data-act="otp">Verify</button>`;
+    if(st===2) h+=`<input class="field" data-b="shop" value="${esc(d.shop)}" placeholder="Shop name"><div class="hint" id="h-shop"></div>
+      <select class="field"><option>Kirana / grocery</option><option>Sweets</option><option>Clothes</option></select>
+      <div class="upload ${d.photo?'has':''}" data-act="photo">${d.photo?'✓ storefront.jpg added':'📷 Tap to add a photo of your shop front'}</div>
+      <button class="sbtn" data-act="shop">${S.fixMode?'Replace photo and resubmit':'Save and continue'}</button>`;
+    if(st===3) h+=`<input class="field" data-b="addr" value="${esc(d.addr)}" placeholder="Address">
+      <input class="field" data-b="pincode" value="${esc(d.pincode)}" maxlength="6" placeholder="Pincode">
+      <div class="map" data-act="map">${d.pin?`<span class="pin" style="left:${d.pin[0]}%;top:${d.pin[1]}%">📍</span>`:'<div class="hint mut" style="padding:8px">Tap the map to place the pin</div>'}</div>
+      <div class="hint" id="h-addr"></div>
+      <button class="sbtn" data-act="addr">Save and continue</button>`;
+    if(st===4) h+=`<div style="font-size:12px">Choose any one:</div>
+      ${[['gst','GST number'],['fssai','FSSAI licence'],['lic','Shop licence'],['board','Shop board photo']].map(([k,l])=>`<label class="field" style="display:flex;gap:8px"><input type="radio" name="pt" data-act="ptype" data-v="${k}" ${d.proofType===k?'checked':''}> ${l}</label>`).join('')}
+      ${d.proofType==='gst'?`<input class="field" data-b="gst" value="${esc(d.gst)}" placeholder="08AAAAA0000A1Z5" maxlength="15" style="text-transform:uppercase"><div class="hint" id="h-gst"></div>`:`<div class="upload ${d.proofUp?'has':''}" data-act="proofup">${d.proofUp?'✓ proof added':'Tap to upload'}</div>`}
+      <button class="sbtn" data-act="proof">Save and continue</button>`;
+    if(st===5) h+=`<div class="upload ${d.idUp?'has':''}" data-act="idup">${d.idUp?'✓ id-front.jpg added':'🪪 Tap to upload your ID<br><small>Aadhaar (mask the number), PAN, voter ID or licence</small>'}</div>
+      <div class="upload ${d.selfie?'has':''}" data-act="selfie">${d.selfie?'✓ selfie added':'🙂 Selfie at your shop (optional)'}</div>
+      <div class="hint ok">🔒 Only our team can see this.</div>
+      <button class="sbtn" data-act="submit">Submit for checking</button>`;
+  } else {
+    // 6 review, 7 result
+    const rows=[['Phone','done'],['Shop','done'],['Address','done'],['Proof','done'],['Owner ID','done']];
+    h=`<div class="top">Dashboard</div>`;
+    if(S.status==='approved') h+=`<div class="notice n-green"><b>Your shop is live ✓</b><br>Customers near you can now order.</div>
+      <div class="chk"><span>Atta 5kg</span><span class="tag t-done">Live</span></div><div class="chk"><span>Custom item</span><span class="tag t-wait">Under review</span></div>`;
+    else if(S.status==='needs_changes') h+=`<div class="notice n-red"><b>Please fix 1 thing</b><br>"${esc(S.decision||'')}"</div>
+      <div class="chk"><span>Shop photo</span><span class="tag t-fix">Needs fix</span></div><button class="sbtn" data-act="fix">Fix now</button>`;
+    else if(S.status==='rejected') h+=`<div class="notice n-red"><b>Verification rejected</b><br>${esc(S.decision||'')}</div><div class="hint mut">The POS is closed for rejected shops.</div>`;
+    else h+=`<div class="notice n-amber"><b>Being checked</b><br>We usually reply within 24 hours. You can add products and bill customers meanwhile.</div>`+
+      rows.map(r=>`<div class="chk"><span>${r[0]}</span><span class="tag t-wait">Checking</span></div>`).join('');
+  }
+  p.innerHTML=h;
+  liveHints();
+}
+function liveHints(){
+  const d=S.d;
+  const set=(id,t,c)=>{const e=$('#'+id);if(e){e.className='hint '+c;e.textContent=t;}};
+  if($('#h-shop')){const r=nameCheck(d.shop);set('h-shop',(r.r==='pass'?'✓ ':'✗ ')+r.why,r.r==='pass'?'ok':'bad');}
+  if($('#h-gst')){const g=(d.gst||'').toUpperCase();set('h-gst',!g?'Optional format: 22AAAAA0000A1Z5':GST.test(g)?'✓ Format is valid':'✗ Not a valid GST format',!g?'mut':GST.test(g)?'ok':'bad');}
+  if($('#h-addr')){const ok=/^\d{6}$/.test(d.pincode);set('h-addr',ok?(d.pin?'✓ Pin set and pincode valid':'Pincode ok, place the pin'):'✗ Pincode must be 6 digits',ok&&d.pin?'ok':ok?'mut':'bad');}
+}
+
+function renderAdmin(){
+  const a=$('#adm'),st=S.stage;
+  const queue=[['Gupta Mithai','Kota','1 d','2 manual','p-amber'],['Verma Stores','Jaipur','5 h','All pass','p-leaf']];
+  let h='<div class="statusbar"><span class="pill p-amber" style="opacity:1">Pending</span><span class="pill p-grey" style="opacity:1">Needs changes</span><span class="pill p-grey" style="opacity:1">Suspended</span></div>';
+  h+='<div class="scroll"><table><tr><th>Shop</th><th>City</th><th>Waiting</th><th>Checks</th></tr>';
+  queue.forEach(q=>h+=`<tr><td>${q[0]}</td><td>${q[1]}</td><td>${q[2]}</td><td><span class="pill ${q[4]}">${q[3]}</span></td></tr>`);
+  const submitted=st>=6&&S.status==='pending';
+  if(st>=6&&S.status==='pending'){
+    const ck=checks(),fl=ck.some(c=>c.r==='flag'||c.r==='fail');
+    h+=`<tr class="hl"><td><b>${esc(S.d.shop)}</b></td><td>Jaipur</td><td>just now</td><td><span class="pill ${fl?'p-red':'p-leaf'}">${fl?'flagged':'All pass'}</span></td></tr></table></div>`;
+    const dark=S.scn==='fix'&&S.round===0;
+    h+=`<div style="margin-top:10px" class="card"><h3>Review: ${esc(S.d.shop)}</h3>
+      <div class="three"><div class="photo ${dark?'dark':''}">Shop front</div><div class="photo">Owner ID (private)</div><div class="photo">Map pin</div></div>
+      <table>${ck.map(c=>`<tr><td>${c.l}</td><td>${pill(c.r)}</td><td class="sub">${esc(c.n||'')}</td></tr>`).join('')}</table>
+      <div class="bar" style="margin-top:10px">
+        <button class="btn green" data-act="approve">${fl?'Approve anyway':'Quick approve'}</button>
+        <button class="btn alt" data-act="changes">Ask for changes</button>
+        <button class="btn red" data-act="reject">Reject</button></div>
+      <div class="sub">A reason is required except for approve. Each decision is logged.</div></div>`;
+  } else {
+    h+=`</table></div>`;
+    if(st<6) h+=`<p class="sub" style="margin-top:12px">Nothing submitted yet. The new shop appears here when the retailer presses "Submit for checking".</p>`;
+    else h+=`<p class="sub" style="margin-top:12px">${S.status==='approved'?'Approved. The shop is now removed from the queue.':S.status==='needs_changes'?'Sent back to the retailer with your message.':'Rejected.'}</p>`;
+  }
+  if(S.audit.length) h+=`<h3 style="margin-top:12px">Audit log</h3><table>${S.audit.slice().reverse().map(x=>`<tr><td>${x.at}</td><td>${x.st.replace('_',' ')}</td><td class="sub">${esc(x.why)}</td></tr>`).join('')}</table>`;
+  a.innerHTML=h;
+}
+function renderCust(){
+  const seeded=[['Verma Stores','1.2 km'],['Gupta Kirana','2.8 km'],['Jain Sweets','3.5 km']];
+  let h='<div class="top">Shops near you</div><div class="meta">Jaipur 302001</div>';
+  if(S.status==='approved') h+=`<div class="shop new"><div><b>${esc(S.d.shop)}</b><div class="meta">New · 0.6 km</div></div><span class="tag t-done">Open</span></div>`;
+  seeded.forEach(s=>h+=`<div class="shop"><div><b>${s[0]}</b><div class="meta">${s[1]}</div></div><span class="tag t-done">Open</span></div>`);
+  h+=`<div class="hint mut" style="margin-top:10px">${S.status==='approved'?'The new shop is now listed.':'Your new shop is not listed. Only approved shops show up.'}</div>`;
+  $('#cu').innerHTML=h;
+}
+function renderLog(){ $('#log').innerHTML=S.log.map(l=>`<div class="${l[1]}">${l[0]}</div>`).join('')||'<div class="sub">Nothing yet.</div>'; }
+function renderAll(){
+  renderStepper(); $('#caption').innerHTML=CAP[S.stage]; renderPhone(); renderAdmin(); renderCust(); renderLog();
+  $('#back').disabled=S.stage===0;
+}
+
+/* actions */
+const act={
+  signup(){ S.d.name=S.d.name||'Retailer'; setStatus('pending','Signed up'); lg('Shop created: pending, hidden, POS allowed.'); lg('Customers cannot see it: public() needs approved.','c'); S.stage=1; },
+  otp(){ if(S.d.otp==='123456'){S.d.otpOk=true;lg('Phone OTP verified. Check: pass.');S.stage=2;} else {const e=$('#h-otp');e.className='hint bad';e.textContent='✗ Wrong code. Demo code: 123456';return 'stay';} },
+  photo(){ S.d.photo=!S.d.photo; return 'rerender'; },
+  shop(){ const r=nameCheck(S.d.shop); if(r.r!=='pass'||!S.d.photo){liveHints(); if(!S.d.photo){const e=$('#h-shop');e.className='hint bad';e.textContent='✗ Add a storefront photo first.';} return 'stay';}
+    if(S.fixMode){S.fixMode=false;S.round=1;lg('Photo replaced. Shop re-submitted to the queue.');S.stage=6;setStatus('pending','Retailer fixed the photo');}
+    else {lg('Shop name check: pass. Photo stored.');S.stage=3;} },
+  map(el,ev){ const r=el.getBoundingClientRect(); S.d.pin=[Math.round((ev.clientX-r.left)/r.width*100),Math.round((ev.clientY-r.top)/r.height*100)]; return 'rerender'; },
+  addr(){ if(!/^\d{6}$/.test(S.d.pincode)||!S.d.pin||S.d.addr.trim().length<4){liveHints();return 'stay';} lg('Address check: pincode valid, pin set. Pass.'); S.stage=4; },
+  ptype(el){ S.d.proofType=el.dataset.v; return 'rerender'; },
+  proofup(){ S.d.proofUp=!S.d.proofUp; return 'rerender'; },
+  proof(){ if(S.d.proofType==='gst'){ if(!GST.test((S.d.gst||'').toUpperCase())){liveHints();return 'stay';} lg('GST format valid. Duplicate scan: '+(S.scn==='dup'?'<b>match found on shop #214</b>':'none')+'.', S.scn==='dup'?'m':'a'); }
+    else { if(!S.d.proofUp){return 'stay';} lg('Proof uploaded, queued for a human look.','m'); } S.stage=5; },
+  idup(){ S.d.idUp=!S.d.idUp; return 'rerender'; },
+  selfie(){ S.d.selfie=!S.d.selfie; return 'rerender'; },
+  submit(){ if(!S.d.idUp)return 'stay'; lg('Submitted. All automatic checks ran in this request. Waiting in the admin queue.'); S.stage=6; },
+  approve(){ setStatus('approved',S.scn==='dup'?'Approved despite flag':'Quick approve'); lg('Admin approved once. Shop is live; no further phase.','m'); S.stage=7; },
+  changes(){ const msg=S.scn==='fix'?'The shop photo is too dark. Please upload a clear photo of the shop front.':'Please re-check your details.'; S.decision=msg; setStatus('needs_changes',msg); lg('Admin asked for changes. Retailer is told in the app.','m'); S.stage=7; },
+  reject(){ const msg=S.scn==='dup'?'The same GST number belongs to another shop.':'Verification rejected by administrator.'; S.decision=msg; setStatus('rejected',msg); lg('Admin rejected the shop. Reason stored.','m'); S.stage=7; },
+  fix(){ S.fixMode=true; S.stage=2; S.d.photo=false; }
+};
+document.addEventListener('click',e=>{
+  const g=e.target.closest('[data-go]'); if(g){ jump(+g.dataset.go); return; }
+  const el=e.target.closest('[data-act]'); if(!el||!act[el.dataset.act]) return;
+  if(el.closest('#tab-demo')){ const r=act[el.dataset.act](el,e); if(r==='stay')return; renderAll(); }
+});
+document.addEventListener('input',e=>{
+  const b=e.target.dataset&&e.target.dataset.b; if(!b||!e.target.closest('#tab-demo'))return;
+  S.d[b]=e.target.value; liveHints();
+});
+/* fast-forward helpers for Next / jump */
+function fill(){
+  const d=S.d;
+  d.otp='123456';d.otpOk=true;d.photo=true;d.pin=d.pin||[52,48];d.idUp=true;d.proofUp=true;
+  if(S.scn==='dup'&&!d.gst) d.gst='08AAAAA0000A1Z5'; if(!d.gst&&d.proofType==='gst') d.gst='08AAAAA0000A1Z5';
+}
+function ensureAccount(){ if(S.status==='none') setStatus('pending','Signed up'); }
+function jump(i){
+  if(i>S.stage){ fill(); ensureAccount(); S.log=S.log.length?S.log:[]; if(i>=6&&S.stage<6){ lg('Skipped ahead with sample data: all steps filled in.','c'); } if(i>=7&&S.status==='pending'){ act.approve(); } }
+  if(i<6&&S.status==='approved'){ /* going back after approval: reset status view */ }
+  S.stage=i; renderAll();
+}
+$('#next').onclick=()=>{
+  if(S.stage<6){ fill(); ensureAccount(); S.stage++; if(S.stage===1)lg('Shop created: pending, hidden, POS allowed.'); if(S.stage===6)lg('Submitted with sample data.'); renderAll(); return; }
+  if(S.stage===6){ // scenario decides
+    if(S.scn==='clean') act.approve(); else if(S.scn==='fix'&&S.round===0) act.changes(); else if(S.scn==='dup') act.reject(); else act.approve();
+    renderAll(); return; }
+  if(S.stage===7){ if(S.status==='needs_changes'){ act.fix(); renderAll(); } else { stopPlay(); } }
+};
+$('#back').onclick=()=>{ if(S.stage>0){ if(S.stage===7){S.status='pending';S.audit.pop();} S.stage--; if(S.stage===0)S.status='none'; renderAll(); } };
+$('#reset').onclick=()=>{ stopPlay(); S=fresh(); renderAll(); };
+$('#scn').onchange=()=>{ stopPlay(); S=fresh(); renderAll(); };
+let timer=null;
+function stopPlay(){ if(timer){clearInterval(timer);timer=null;$('#play').textContent='▶ Autoplay';} }
+$('#play').onclick=()=>{ if(timer){stopPlay();return;} $('#play').textContent='⏸ Pause';
+  if(S.stage===7&&S.status!=='needs_changes'){S=fresh();renderAll();}
+  timer=setInterval(()=>{ if(S.stage===7&&S.status!=='needs_changes'){stopPlay();return;} $('#next').click(); },2200); };
+S=fresh(); renderAll();
+
+/* ================= TAB 2: products ================= */
+const P={list:[{n:'Parle-G 800g',st:'ok',why:'Master catalog',src:'master'}],hits:[]};
+$('#p-src').onchange=()=>{const m=$('#p-src').value==='master';$('#p-custom').style.display=m?'none':'';$('#p-master').style.display=m?'':'none';};
+function addProduct(){
+  const now=Date.now(); P.hits=P.hits.filter(t=>now-t<10000); P.hits.push(now);
+  const res=$('#p-result'); let item;
+  if(P.hits.length>5){ res.innerHTML='<div class="notice n-red" style="border-color:var(--red);padding:8px;border-radius:10px;border:1px solid var(--red);background:var(--red-bg)"><b>Slow down.</b> More than 5 product saves in 10 seconds is blocked (rate limit). Nothing was saved.</div>'; return; }
+  if($('#p-src').value==='master'){
+    const o=$('#p-bar').selectedOptions[0].textContent.split('·')[1].trim();
+    item={n:o,st:'ok',why:'Master catalog item: name, image and category are curated, text checks skipped.',src:'master'};
+    res.innerHTML=box('p-leaf','Live','Master catalog item. No review needed.',[['Barcode found in master catalog','pass']]);
+  } else {
+    const n=$('#p-name').value, price=+$('#p-price').value, cat=$('#p-cat').value;
+    const nc=nameCheck(n), steps=[];
+    steps.push(['Name and description text',nc.r==='pass'?'pass':'fail']);
+    let state='ok',why='Looks fine.',kind='p-leaf',head='Live';
+    if(nc.r==='ban'){state='hidden';why=nc.why+' This category cannot be listed.';kind='p-red';head='Hidden';}
+    else if(nc.r==='fail'){state='hidden';why=nc.why;kind='p-red';head='Not saved: fix the name';}
+    else { const rs=RESTRICT.find(([k,re])=>re.test(n)); if(rs){state='pending_review';why='Restricted category ('+rs[0]+'): needs admin approval.';kind='p-amber';head='Under review';} }
+    steps.push(['Category fit ('+cat+')',state==='ok'?'pass':state==='pending_review'?'manual':'fail']);
+    steps.push(['Price is sane',price>0?'pass':'flag']);
+    steps.push(['Rate limit ('+P.hits.length+'/5 in 10 s)','pass']);
+    if(!(price>0)&&state==='ok'){why='Live, but price 0 is flagged for the retailer to confirm.';}
+    if(nc.r==='fail'){ res.innerHTML=box(kind,head,why,steps); return; }
+    item={n:n,st:state,why:why,src:'custom'};
+    res.innerHTML=box(kind,head,why,steps);
+  }
+  P.list.unshift(item); renderPL();
+}
+function box(kind,head,why,steps){
+  return `<div class="card" style="margin-top:10px"><span class="pill ${kind}">${head}</span> <span class="sub">${esc(why)}</span>
+   <table style="margin-top:6px">${steps.map(s=>`<tr><td>${esc(s[0])}</td><td>${pill(s[1])}</td></tr>`).join('')}</table></div>`;
+}
+function renderPL(){
+  const badge=s=>s==='ok'?'<span class="pill p-leaf">Live</span>':s==='pending_review'?'<span class="pill p-amber">Under review</span>':'<span class="pill p-red">Hidden</span>';
+  $('#p-list').innerHTML='<table>'+P.list.map(i=>`<tr><td>${esc(i.n)}</td><td>${badge(i.st)}</td></tr>`).join('')+'</table>';
+  const live=P.list.filter(i=>i.st==='ok');
+  $('#p-cust').innerHTML=live.length?'<table>'+live.map(i=>`<tr><td>${esc(i.n)}</td><td class="sub">visible</td></tr>`).join('')+'</table>':'<p class="sub">No products visible.</p>';
+}
+$('#p-add').onclick=addProduct; renderPL();
+
+/* ================= TAB 3: reports ================= */
+let R;
+function freshR(){ return {mine:false,others:0,reasons:[],hidden:false,removed:false,strikes:0,suspended:false,appeal:false,dismissed:false,msgs:[]}; }
+R=freshR();
+function renderR(){
+  const rep=R.mine?R.others+1:R.others;
+  // customer
+  let c='<div class="top">Super Herbal Gold</div><div class="meta">Sold by Sharma Kirana Store</div>';
+  if(R.suspended) c='<div class="top">Shop unavailable</div><div class="hint mut">This shop is currently paused. It is no longer listed.</div>';
+  else if(R.hidden||R.removed) c+='<div class="notice n-amber" style="margin-top:12px">This product is no longer available.</div>';
+  else {
+    c+=`<div class="photo" style="height:90px;margin:8px 0">Product photo</div><div><b>Rs 499</b> · "Cures everything in 3 days"</div>
+    <button class="sbtn" disabled style="opacity:.5">Add to cart</button>`;
+    if(!R.mine) c+=`<div style="margin-top:10px"><select class="field" id="r-reason"><option>Misleading product</option><option>Offensive content</option><option>Illegal or restricted item</option><option>Wrong price</option></select>
+      <button class="sbtn alt" data-ract="report">⚑ Report this product</button></div>`;
+    else c+='<div class="hint ok" style="margin-top:10px">✓ Thanks. You already reported this. One report per customer.</div>';
+  }
+  c+=`<div class="hint mut" style="margin-top:12px">Distinct reporters: <b>${rep}</b> of 3 needed to auto-hide.</div>`;
+  if(!R.hidden&&!R.removed&&!R.suspended) c+=`<button class="sbtn alt" data-ract="other">Simulate another customer reporting</button>`;
+  $('#r-cu').innerHTML=c;
+  // admin
+  let a='';
+  if(R.hidden&&!R.removed&&!R.dismissed&&!R.suspended){
+    a+=`<div class="card"><span class="pill p-amber">Auto-hidden</span> Product "Super Herbal Gold": ${rep} reports from different customers.<br><span class="sub">Reasons: ${esc([...new Set(R.reasons)].join(', ')||'Misleading product')}</span>
+    <div class="bar" style="margin-top:8px"><button class="btn alt" data-ract="dismiss">Dismiss (restore)</button><button class="btn" data-ract="remove">Remove product</button><button class="btn red" data-ract="strike">Remove + strike shop</button></div></div>`;
+  } else if(R.dismissed) a+='<p class="sub">Dismissed. Product restored; reporters are not penalised unless they repeat bogus reports.</p>';
+  else if(R.removed&&!R.suspended) a+='<p class="sub">Product removed. Strike count: '+R.strikes+'.</p>';
+  else if(!R.hidden) a+='<p class="sub">No open reports need action yet.</p>';
+  if(R.suspended&&R.appeal) a+=`<div class="card" style="margin-top:8px"><span class="pill p-blue">Appeal</span> Sharma Kirana Store appeals the suspension.<div class="bar" style="margin-top:8px"><button class="btn green" data-ract="accept">Accept appeal</button><button class="btn alt" data-ract="deny">Deny</button></div></div>`;
+  a+=`<h3 style="margin-top:12px">Shop strikes: ${R.strikes} / 3 (90 days)</h3><div class="statusbar">${[1,2,3].map(i=>`<span class="pill ${R.strikes>=i?'p-red':'p-grey'}" style="opacity:1">Strike ${i}</span>`).join('')}<span class="pill ${R.suspended?'p-red':'p-leaf'}" style="opacity:1">Shop: ${R.suspended?'suspended':'approved'}</span></div>
+   <button class="btn alt" data-ract="strike2" style="margin-top:6px" ${R.suspended?'disabled':''}>Add a strike from another violation</button>
+   <button class="btn alt" data-ract="rst" style="margin-top:6px">Reset demo</button>`;
+  $('#r-adm').innerHTML=a;
+  // retailer
+  let t='';
+  R.msgs.forEach(m=>t+=`<div class="notice ${m[1]}" style="margin:6px 0;border:1px solid var(--line);padding:8px;border-radius:10px;background:var(--grey-bg)">${m[0]}</div>`);
+  if(R.suspended&&!R.appeal) t+='<button class="btn" data-ract="appeal">Appeal suspension</button>';
+  $('#r-ret').innerHTML=t||'<p class="sub">No notices.</p>';
+}
+function checkAuto(){ const rep=R.mine?R.others+1:R.others; if(rep>=3&&!R.hidden&&!R.removed&&!R.dismissed){R.hidden=true;R.msgs.push(['Your product "Super Herbal Gold" was hidden after reports from 3 customers. It is being reviewed.','n-amber']);} }
+function addStrike(why){ R.strikes++; R.msgs.push(['Strike '+R.strikes+' of 3: '+why,'n-red']); if(R.strikes>=3){R.suspended=true;R.msgs.push(['Your shop is suspended: 3 strikes in 90 days. You can appeal below.','n-red']);} }
+document.addEventListener('click',e=>{
+  const el=e.target.closest('[data-ract]'); if(!el)return; const k=el.dataset.ract;
+  if(k==='report'){R.mine=true;R.reasons.push($('#r-reason').value);checkAuto();}
+  else if(k==='other'){R.others++;R.reasons.push(['Misleading product','Offensive content'][R.others%2]);checkAuto();}
+  else if(k==='dismiss'){R.dismissed=true;R.hidden=false;R.msgs.push(['Reports on your product were dismissed. It is live again.','n-green']);}
+  else if(k==='remove'){R.removed=true;R.msgs.push(['Product removed for misleading claims. Edit the listing and add it again.','n-amber']);}
+  else if(k==='strike'){R.removed=true;addStrike('misleading product removed.');}
+  else if(k==='strike2'){addStrike('another violation found by the admin.');}
+  else if(k==='appeal'){R.appeal=true;R.msgs.push(['Appeal sent. We will reply in 2 days.','n-amber']);}
+  else if(k==='accept'){R.suspended=false;R.appeal=false;R.strikes=0;R.msgs.push(['Appeal accepted. Your shop is live again and strikes are cleared.','n-green']);}
+  else if(k==='deny'){R.appeal=false;R.msgs.push(['Appeal denied. Contact support for next steps.','n-red']);}
+  else if(k==='rst'){R=freshR();}
+  renderR();
+});
+renderR();
+})();
+</script>
+</body>
+</html>
