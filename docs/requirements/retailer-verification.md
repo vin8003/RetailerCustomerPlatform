@@ -36,19 +36,17 @@ Read from `main` on 2026-10-31.
 
 ### 3.1 Statuses
 
-Replace `pending|approved|rejected` with a single `verification_status`, keeping `is_verified` as a derived field so existing code and `public()` keep working.
+Decided: one-time approval, no limited phase. Keep `verification_status` and `is_verified` working as today and add only what is needed.
 
 | Status | Meaning | Customers see shop? | Can sell via POS? |
 |---|---|---|---|
-| `draft` | Signed up, profile incomplete | No | Yes |
-| `submitted` | All required checks passed, waiting for admin | No | Yes |
+| `pending` | Signed up or submitted, waiting for admin (as today) | No | Yes |
 | `needs_changes` | Admin asked for a fix (reason shown) | No | Yes |
-| `approved` | Admin approved | Yes | Yes |
-| `limited` | Approved with limits (see 3.4); the default after first approval | Yes, with limits | Yes |
+| `approved` | Admin approved once; full access | Yes | Yes |
 | `suspended` | Taken down by admin (reason, appealable) | No | Read-only |
 | `rejected` | Final no (fraud, fake shop) | No | No |
 
-The POS and the retailer dashboard must keep working in every state except `rejected`, because the retailer's own billing is not a customer-safety risk.
+The retailer can use the POS and dashboard in every state except `rejected`. `public()` keeps working unchanged: suspended and needs_changes are simply not `approved`.
 
 ### 3.2 Checks
 
@@ -69,25 +67,13 @@ Auto results are stored per check as `pass | flag | fail | manual`, so the admin
 
 ### 3.3 What can be automated
 
-- Auto-pass: phone OTP, address completeness, pincode validity, GST/PAN format, duplicate scan, text screen.
-- Auto-route: a shop where every check is `pass` and there is no duplicate flag goes to a fast lane ("quick approve", one tap). A shop with any `flag` goes to a normal queue with the reasons on top.
-- Do not auto-approve in v1. The cost of one fake shop reaching customers outweighs the saved admin minute. Revisit after we have 100 decisions to measure false positives.
+- Auto-pass: phone OTP, address completeness, pincode validity, GST/PAN format, duplicate scan, text screen. All are cheap string/DB checks that run in the signup request.
+- The admin sees a checks panel and a **Quick approve** button when everything is pass. Budget: 10 shops/week at ~30 min today is 5 hours/week. With the panel the target is under 10 minutes for a clean shop.
+- No auto-approval in v1.
 
-### 3.4 Limited status (recommendation: yes, use it)
+### 3.4 Re-verification triggers
 
-After first approval a shop is `limited` for its first 30 days or first 25 orders, whichever comes later:
-
-- Visible to customers, labelled nothing special.
-- COD only, no online payment until UPI/bank is verified.
-- Max 200 live products, max order value Rs 5,000, 20 orders/day.
-- Product edits to name, image and category go through the post-publish review queue (section 4).
-- Auto-promoted to `approved` with no admin action once the window passes with no open reports. Admin can promote earlier or demote.
-
-This gives a new shop real traffic while capping damage.
-
-### 3.5 Re-verification triggers
-
-Moving back to `needs_changes` (shop hidden until fixed) when the retailer changes: shop name, address or pin, GSTIN/PAN, owner phone. Changing the logo, description, hours, delivery settings does not trigger it. Only shops that are already live get a grace flow: the change is held as pending and the old values stay live until approved.
+Moving back to `needs_changes` (shop hidden until fixed) when the retailer changes: shop name, address or pin, GSTIN/PAN, owner phone. Changing the logo, description, hours, delivery settings does not trigger it. To keep admin work small, only shop name, address/pin and GSTIN/PAN changes re-trigger it, and an approved shop keeps its old values live until the admin approves the change.
 
 ## 4. Product handling
 
@@ -100,26 +86,30 @@ Moving back to `needs_changes` (shop hidden until fixed) when the retailer chang
 | Admin load | Every product, does not scale | Only reported/flagged | Only flagged and new-shop items |
 | Fit for kirana bulk uploads | Poor | Good | Good |
 
-### 4.2 Recommendation: C, tiered
+### 4.2 Recommendation: tiered, no per-product approval queue
 
-1. **Master catalog items are live immediately.** A product linked to a `MasterProduct` (barcode match) inherits the curated name, image and category. Retailers only set price and stock. This should be the main path, it removes most abuse by construction and also fixes duplicate and messy catalog data.
-2. **Custom products from an `approved` shop go live immediately** but pass automated checks first (4.3). Anything that fails the checks is held as `pending_review`, invisible to customers, and the retailer sees why.
-3. **Custom products from a `limited` shop**: name, image and category pass through automated checks, and the first 20 products are sampled by an admin after going live (post-publish review). Anything the admin rejects is hidden and the shop gets a strike.
-4. **Banned categories** (decided): alcohol, tobacco, adult, weapons. These cannot be listed; the automated checks reject them. **Restricted categories** (medicines, pesticides) need admin approval before they go live.
+Decided direction: no extra friction or load, only quick automated checks and one-time approval.
 
-Add `Product.moderation_status` with `ok | pending_review | hidden | removed`, `moderation_reason`, `moderated_by`, `moderated_at`. Customer queries add `moderation_status='ok'` next to the existing out-of-stock filter (`hide_oos_for_customer` is the natural place), so the filter lives in one spot.
+1. **Master catalog items are live immediately** (inherit curated name, image, category).
+2. **Custom products from an approved shop go live immediately** after the cheap automated text checks in 4.3. A product that fails is held as `pending_review` and the retailer sees why. There is no routine admin review of products.
+3. **Banned categories** (decided): alcohol, tobacco, adult, weapons are rejected by the text checks. **Restricted** (medicines, pesticides) are held for admin approval; expect few.
+4. Safety net after publish is customer reports (section 5), not a queue.
 
-### 4.3 Automated checks
+Add `Product.moderation_status` with `ok | pending_review | hidden | removed`, `moderation_reason`, `moderated_at`. Customer queries add `moderation_status='ok'` beside the existing out-of-stock filter (`hide_oos_for_customer`).
+
+### 4.3 Automated checks (sized for one small VM and one database)
+
+All checks run in-process on product create/update, are pure string or single-row checks and add no new service.
 
 | Field | Check |
 |---|---|
-| Name and description | Blocklist (Hindi, Hinglish, English profanity and restricted items), phone numbers/URLs/WhatsApp links in the name, all-caps or symbol spam, length limits, repeated characters |
-| Image | Format and size limits (exists), NSFW/violence classifier (a hosted moderation API; roughly Rs 0.1 to 0.2 per image), perceptual hash against a banned-image list, text-in-image phone number detection (later) |
-| Category | Name keywords vs chosen category (e.g. "whiskey" in Grocery), restricted-category list |
-| Price | Warn if price is 0, far above MRP of the linked master product, or changes by more than 10x |
-| Volume | Rate-limit new products per hour per shop to stop scripted floods |
+| Name and description | Keyword blocklist (English, Hindi, Hinglish) for banned categories and abuse, phone numbers/URLs in the name, length limits, symbol/caps spam |
+| Category | Banned/restricted keywords vs chosen category |
+| Image | Existing size limit and resize only. **No image classifier in v1**: it costs money and CPU/latency. Images are covered by reports and the admin "hide / ban image" action. Revisit when volume or abuse justifies an external moderation API |
+| Price | Warn if price is 0 or wildly above the master MRP |
+| Volume | Rate-limit product writes per shop (e.g. 60/min) to stop scripted floods |
 
-Failures are `pending_review` (soft) or `hidden` (hard, such as a banned hash). Classifier cost applies only to custom uploads, not master-catalog items.
+Keep the blocklist in a small DB table or settings file the admin can edit without a deploy. Do not scan the existing catalog in the web process; if a backfill is wanted, run it as a one-off management command at night in small batches.
 
 ### 4.4 Admin controls on products
 
@@ -129,7 +119,7 @@ Hide, remove, require edit with a reason, bulk hide all products of a shop, and 
 
 - **Report button** on shop and on product pages in the customer app: reasons (fake or misleading, offensive, illegal or restricted item, wrong price, never delivered, other), optional text and photo. Logged-in customers only, rate-limited, one open report per customer per target.
 - **Report model**: `Report(target_type shop|product, target_id, reporter, reason, text, status open|actioned|dismissed, handled_by, handled_at)`.
-- **Auto-hide threshold**: a product with 3 reports from different customers is auto-hidden (`pending_review`) until an admin looks, a shop with 5 reports from different customers in 7 days is auto-set to `limited` and flagged. This is protection against abuse of the report button too, so repeated bogus reporters are down-weighted.
+- **Auto-hide threshold**: a product with 3 reports from different customers is auto-hidden (`pending_review`) until an admin looks, a shop with 5 reports from different customers in 7 days is flagged to the admin report inbox for review. This is protection against abuse of the report button too, so repeated bogus reporters are down-weighted.
 - **Admin actions**: dismiss, hide product, remove product, warn shop (message in app), strike, suspend shop, reject shop. Three strikes in 90 days suspends the shop automatically.
 - **Suspension**: shop disappears from customer lists and search immediately (via `public()`), open orders can still be completed or cancelled with refund, retailer sees reason and an appeal button that creates a review task.
 - **Audit**: every status change writes `VerificationEvent(shop, actor, from, to, reason, created_at)`. Admins never edit status without a reason.
@@ -151,39 +141,44 @@ Each step shows a status chip: Done, Needs fix (with reason), Checking. UPI is a
 
 ### 6.2 Status the retailer sees
 
-A persistent status card on the dashboard top: Draft ("Finish 2 steps to go live"), Submitted ("We are checking, usually within 24 hours"), Needs changes (reason plus a Fix button that opens the exact step), Live (Limited: "You can sell up to Rs 5,000 per order until <date>"), Suspended (reason plus Appeal). Products list shows a badge per product: Live, Under review (with reason), Hidden.
+A persistent status card on the dashboard top: Pending ("Finish 2 steps to go live" while steps are missing, then "We are checking, usually within 24 hours"), Needs changes (reason plus a Fix button that opens the exact step), Live, Suspended (reason plus Appeal). Products list shows a badge per product: Live, Under review (with reason), Hidden.
 
 ### 6.3 Admin review screens
 
-- **Queue** (extends the current verifications page): tabs Submitted, Flagged, Needs changes, Limited, Suspended, with counts and sort by oldest first. Reports tab and Products tab next to it.
+- **Queue** (extends the current verifications page): tabs Pending, Flagged, Needs changes, Suspended, with counts and sort by oldest first. Reports tab and Products tab next to it.
 - **Shop review page**: left, the retailer's data and photos; right, a **checks panel** with each check as a row (Pass, Flag, Manual) and a one-line reason, for example "Phone OTP verified: pass", "GSTIN valid format; name match: manual", "Same UPI on shop #214: flag". Duplicates link to the other shop. Below: product sample (first 20 products with images and automated results) and report history.
-- **Actions**: Approve (limited by default), Approve fully, Ask for changes (pick a step plus message), Reject, Suspend. A reason is required except for plain approve. History timeline at the bottom.
+- **Actions**: Approve (quick approve when all checks pass), Ask for changes (pick a step plus message), Reject, Suspend. A reason is required except for plain approve. History timeline at the bottom.
 - **Product review**: grid of images, name, category, shop and the check that fired; one-click Approve, Hide, Remove, "Ban image".
 - **Report inbox**: report text, target preview, reporter history, one-click actions.
 
 ## 7. Rollout plan
 
-1. **Foundation (small)**: statuses, `VerificationEvent` audit log, per-check results, derive `is_verified` and keep `public()` unchanged, existing approved shops migrate to `approved`.
-2. **Onboarding checklist + admin checks panel** in the retailer app.
-3. **Reports and suspension**, then **product moderation status** with the customer filter.
-4. **Automated product checks** (blocklist first, image classifier second).
-5. **Limited status rules** and auto-promotion.
+1. **Foundation**: new statuses (`needs_changes`, `suspended`), `VerificationEvent` audit table, per-check results on the profile. Existing approved shops stay `approved`.
+2. **Onboarding checklist + admin checks panel with Quick approve** in the retailer app.
+3. **Reports, strikes and suspension**, then `Product.moderation_status` and the customer filter.
+4. **Text checks** for products.
+5. Image moderation only if needed later.
 
-Existing live shops stay live; run the new checks over them in the background and only flag, never hide, on the first pass.
+Infra notes: Oracle free tier, one VM, one DB. Add indexes only on columns used by the queues (`verification_status`, `moderation_status`, report `status`); paginate admin lists as the current verifications API already does; keep ID and shop photos in the existing media storage with admin-only access; avoid background workers (do checks inline, they are cheap). Existing live shops stay live; no mass re-scan.
 
-## 8. Decisions needed from Vineet
+## 8. Decisions
 
-Decided 2026-10-31: #1 GST optional (recommendation accepted), #2 owner ID photos yes, #5 banned categories as below. Open: #3/#4 limited-first approval and the tiered product model, to be discussed.
+Decided by Vineet on 2026-10-31:
 
-| # | Question | Recommendation |
+| # | Question | Decision |
 |---|---|---|
-| 1 | Is GST required? | No. One of GST, FSSAI, shop licence or shop-board photo. |
-| 2 | Collect owner ID photo? | Yes, privately stored, admin-only; required for full approval. Tell me if you want to avoid holding ID images and rely on phone + shop photo + GST instead. |
-| 3 | Approve as `limited` first? | Yes, 30 days or 25 orders. |
-| 4 | Product approval model | Tiered (section 4.2). |
-| 5 | Which categories are banned vs admin-approved? | **Decided:** ban alcohol, tobacco, adult, weapons; admin-approve medicines, pesticides. |
-| 6 | Auto-approve for clean shops? | Not in v1, revisit after 100 decisions. |
-| 7 | Image moderation vendor and budget | Hosted moderation API; confirm a monthly cap. |
-| 8 | Who reviews? | Just you for now, with a second admin role later (the code already has `ADMIN_EMAILS`). |
-| 9 | Existing live shops | Keep live, flag silently, no forced re-verification. |
-| 10 | Strike policy | 3 strikes in 90 days suspends. |
+| 1 | GST required? | No. One of GST, FSSAI, shop licence or shop-board photo. |
+| 2 | Owner ID photo? | Yes, stored privately, admin-only. |
+| 3 | Limited-first approval? | No. One-time full approval. |
+| 4 | Product model | No extra friction: quick automated checks only, no per-product approval queue. |
+| 5 | Banned categories | Alcohol, tobacco, adult, weapons. Medicines and pesticides need admin approval. |
+| 6 | Auto-approve clean shops | Not in v1. |
+| 7 | Review capacity | About 10 shops a week at 30 min each; the checks panel and Quick approve should cut that. |
+| 8 | Infra | Thin: one Oracle free-tier VM and one DB, so no image classifier or workers in v1. |
+
+Still open (small, defaults in the doc apply unless changed):
+
+- Image moderation later: external API vs none. Default none.
+- Strike policy: 3 strikes in 90 days suspends. Default as written.
+- Report auto-hide: 3 distinct reporters hides a product. Default as written.
+- Second admin: later.
