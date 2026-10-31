@@ -22,6 +22,9 @@ ALLOWED_DOCUMENT_TYPES = {
 
 
 class DocumentUploadThrottle(UserRateThrottle):
+    # Own scope, so the cache key is not shared with the global per-user
+    # throttle (which records every request the user makes).
+    scope = 'verification_documents'
     rate = '30/hour'
 
 

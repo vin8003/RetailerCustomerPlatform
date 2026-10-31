@@ -192,6 +192,22 @@ class RetailerEndpointTests(_Base):
         self.assertEqual(res['Content-Type'], 'image/png')
         self.assertIn('no-store', res['Cache-Control'])
 
+    def test_upload_limit_does_not_share_the_global_user_throttle_key(self):
+        # The global per-user throttle records every request under its key;
+        # sharing it made uploads fail after ~30 ordinary page loads.
+        from rest_framework.test import APIRequestFactory, force_authenticate
+        from rest_framework.request import Request
+        from rest_framework.throttling import UserRateThrottle
+        from retailers.verification_views import DocumentUploadThrottle
+        raw = APIRequestFactory().post('/x')
+        force_authenticate(raw, user=self.user)
+        request = Request(raw)
+        request.user = self.user
+        self.assertNotEqual(
+            DocumentUploadThrottle().get_cache_key(request, None),
+            UserRateThrottle().get_cache_key(request, None),
+        )
+
     def test_customer_user_has_no_checklist(self):
         customer = User.objects.create_user(username='cust', password='x', user_type='customer')
         self.client.force_authenticate(customer)
