@@ -1783,6 +1783,7 @@ def get_retailer_categories(request, retailer_id):
             retailer=retailer,
             is_active=True,
             is_available=True,
+            moderation_status='ok',
             category__isnull=False
         ).values('category_id').annotate(count=Count('id'))
         
@@ -1865,6 +1866,7 @@ def get_retailer_product_groups_by_category(request, retailer_id, category_id):
             category_id__in=category_ids,
             is_active=True,
             is_available=True,
+            moderation_status='ok',
             product_group__isnull=False
         ).exclude(product_group='').values_list('product_group', flat=True).distinct()
         

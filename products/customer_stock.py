@@ -54,8 +54,8 @@ class ProductManager(models.Manager):
 
 
 def filter_in_stock_for_customer(queryset):
-    """Exclude tracked out-of-stock rows from a product queryset."""
-    return queryset.filter(customer_in_stock_q())
+    """Exclude tracked out-of-stock rows and moderation holds from a product queryset."""
+    return queryset.filter(customer_in_stock_q(), moderation_status='ok')
 
 
 def hide_oos_for_customer(view_func):

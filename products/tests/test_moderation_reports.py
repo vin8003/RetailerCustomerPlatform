@@ -120,16 +120,19 @@ class CustomerVisibilityAndReportTests(TestCase):
         res = self.client.post('/api/cart/add/', {'product_id': self.product.id, 'quantity': 1}, format='json')
         self.assertEqual(res.status_code, 400)
 
-    def test_three_distinct_reporters_hide_the_product(self):
+    def test_three_distinct_reporters_flag_but_do_not_hide_the_product(self):
         self.assertEqual(self.report(self.customers[0]).status_code, 201)
         self.assertEqual(self.report(self.customers[0]).status_code, 200)  # duplicate ignored
         self.report(self.customers[1])
-        self.product.refresh_from_db()
-        self.assertEqual(self.product.moderation_status, 'ok')
+        self.assertFalse(VerificationEvent.objects.filter(action='product_reports_threshold').exists())
         self.report(self.customers[2])
+        self.report(self.customers[3])
         self.product.refresh_from_db()
-        self.assertEqual(self.product.moderation_status, 'pending_review')
-        self.assertIn('reported by 3 customers', self.product.moderation_reason)
+        self.assertEqual(self.product.moderation_status, 'ok')  # still live for customers
+        self.assertEqual(VerificationEvent.objects.filter(action='product_reports_threshold').count(), 1)
+        self.client.force_authenticate(self.admin)
+        group = self.client.get('/api/retailer/admin/reports/').data['results'][0]
+        self.assertEqual((group['product_id'], group['reporters'], group['needs_review']), (self.product.id, 4, True))
 
     def test_owner_cannot_report_own_shop_and_bad_input_is_refused(self):
         self.client.force_authenticate(self.owner)
@@ -144,7 +147,7 @@ class CustomerVisibilityAndReportTests(TestCase):
         RetailerProfile.objects.filter(pk=self.shop.pk).update(verification_status='pending', is_verified=False)
         self.assertEqual(self.report(self.customers[0]).status_code, 404)
 
-    def test_dismiss_restores_a_report_hold(self):
+    def test_dismiss_closes_reports(self):
         for c in self.customers[:3]:
             self.report(c)
         self.client.force_authenticate(self.admin)
@@ -152,6 +155,7 @@ class CustomerVisibilityAndReportTests(TestCase):
         self.assertEqual(res.status_code, 200)
         group = res.data['results'][0]
         self.assertEqual((group['product_id'], group['reporters']), (self.product.id, 3))
+        self.assertTrue(group['needs_review'])
         res = self.client.post('/api/retailer/admin/reports/action/', {
             'retailer_id': self.shop.id, 'product_id': self.product.id, 'action': 'dismiss'}, format='json')
         self.assertEqual(res.status_code, 200)
@@ -160,7 +164,7 @@ class CustomerVisibilityAndReportTests(TestCase):
         self.assertEqual(self.product.moderation_status, 'ok')
         self.assertFalse(CustomerReport.objects.filter(status='open').exists())
 
-    def test_three_strikes_suspend_the_shop(self):
+    def test_three_strikes_flag_the_shop_but_do_not_suspend(self):
         self.client.force_authenticate(self.admin)
         self.report(self.customers[0])
         self.client.force_authenticate(self.admin)
@@ -174,12 +178,20 @@ class CustomerVisibilityAndReportTests(TestCase):
         self.assertEqual(self.product.moderation_status, 'removed')
         for i in range(2):
             res = self.client.post(url, {'retailer_id': self.shop.id, 'action': 'strike', 'reason': f'Violation {i}'}, format='json')
-        self.assertTrue(res.data['suspended'])
+        self.assertTrue(res.data['flagged_for_review'])
+        self.shop.refresh_from_db()
+        self.assertEqual(self.shop.verification_status, 'approved')
+        self.assertTrue(self.shop.verification_review_needed)
+        self.assertTrue(RetailerProfile.objects.public().filter(pk=self.shop.pk).exists())
+        self.assertEqual(RetailerStrike.objects.filter(retailer=self.shop).count(), 3)
+        self.assertTrue(VerificationEvent.objects.filter(retailer=self.shop, action='strikes_threshold').exists())
+        self.assertFalse(VerificationEvent.objects.filter(retailer=self.shop, action='suspend').exists())
+        # Suspension stays a manual admin decision.
+        res = self.client.post(f'/api/retailer/admin/verifications/{self.shop.id}/action/',
+                               {'action': 'suspend', 'reason': '3 strikes'}, format='json')
+        self.assertEqual(res.status_code, 200, res.data)
         self.shop.refresh_from_db()
         self.assertEqual(self.shop.verification_status, 'suspended')
-        self.assertFalse(RetailerProfile.objects.public().filter(pk=self.shop.pk).exists())
-        self.assertEqual(RetailerStrike.objects.filter(retailer=self.shop).count(), 3)
-        self.assertTrue(VerificationEvent.objects.filter(retailer=self.shop, action='suspend').exists())
 
     def test_five_shop_reporters_flag_the_shop(self):
         extra = [User.objects.create_user(username=f'x{i}', password='x', user_type='customer') for i in range(5)]
@@ -187,6 +199,7 @@ class CustomerVisibilityAndReportTests(TestCase):
             self.report(user, product=False, reason='not_delivered')
         self.shop.refresh_from_db()
         self.assertTrue(self.shop.verification_review_needed)
+        self.assertEqual(self.shop.verification_status, 'approved')  # still listed
         self.assertTrue(VerificationEvent.objects.filter(retailer=self.shop, action='reports_threshold').exists())
 
     def test_admin_product_review_queue_and_approve(self):

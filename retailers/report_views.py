@@ -11,7 +11,7 @@ from rest_framework.throttling import UserRateThrottle
 
 from .admin_views import IsPlatformAdmin
 from .models import CustomerReport, RetailerProfile
-from .reports import file_report, handle_reports, strikes_in_window
+from .reports import PRODUCT_FLAG_REPORTERS, SHOP_FLAG_REPORTERS, file_report, handle_reports, strikes_in_window
 from .verification import TransitionError
 
 logger = logging.getLogger(__name__)
@@ -108,6 +108,7 @@ def admin_report_inbox(request):
             'product_moderation_status': product.moderation_status if product else None,
             'reports': g['reports'],
             'reporters': g['reporters'],
+            'needs_review': g['reporters'] >= (PRODUCT_FLAG_REPORTERS if g['product_id'] else SHOP_FLAG_REPORTERS),
             'latest': g['latest'],
             'recent': [
                 {'reason': r.get_reason_display(), 'text': r.text, 'created_at': r.created_at}
