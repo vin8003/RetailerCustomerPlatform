@@ -156,6 +156,12 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
+# Private verification documents (owner ID, business proof). Never public.
+# Default is a folder next to the checkout so `git reset --hard` on deploy
+# leaves it alone. Set PRIVATE_DOCS_BUCKET to use a private S3 bucket instead.
+PRIVATE_MEDIA_ROOT = os.getenv('PRIVATE_MEDIA_ROOT', str(BASE_DIR.parent / 'ordereasy-private'))
+PRIVATE_DOCS_BUCKET = os.getenv('PRIVATE_DOCS_BUCKET', '')
+
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 

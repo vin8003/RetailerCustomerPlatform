@@ -627,8 +627,16 @@ class RetailerProfile(models.Model):
     # Status and ratings
     VERIFICATION_STATUS_CHOICES = [
         ('pending', 'Pending Verification'),
+        ('needs_changes', 'Needs Changes'),
         ('approved', 'Approved'),
+        ('suspended', 'Suspended'),
         ('rejected', 'Rejected'),
+    ]
+    PROOF_TYPE_CHOICES = [
+        ('gst', 'GST number'),
+        ('fssai', 'FSSAI licence'),
+        ('licence', 'Shop / trade licence'),
+        ('board', 'Shop board photo'),
     ]
     verification_status = models.CharField(
         max_length=20,
@@ -637,6 +645,24 @@ class RetailerProfile(models.Model):
     )
     rejection_reason = models.TextField(blank=True, null=True)
     is_verified = models.BooleanField(default=False)
+    # Verification (docs/requirements/retailer-verification.md)
+    verification_submitted_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text='When the retailer last submitted the onboarding checklist for review.',
+    )
+    verification_checks = models.JSONField(
+        default=dict, blank=True,
+        help_text='Last automated check results ({"checks": [...], "ran_at": ...}).',
+    )
+    verification_review_needed = models.BooleanField(
+        default=False,
+        help_text='Set when an approved shop changes name, address, GSTIN or PAN.',
+    )
+    proof_type = models.CharField(max_length=10, choices=PROOF_TYPE_CHOICES, blank=True)
+    proof_number = models.CharField(
+        max_length=30, blank=True,
+        help_text='FSSAI or licence number. A GSTIN lives in gst_number.',
+    )
     is_active = models.BooleanField(default=True)
     average_rating = models.DecimalField(max_digits=3, decimal_places=2, default=0)
     total_ratings = models.PositiveIntegerField(default=0)
@@ -1133,3 +1159,68 @@ class CustomerLedger(models.Model):
 
     def __str__(self):
         return f"{self.mapping.customer.username} - {self.transaction_type} - {self.amount}"
+
+
+def _private_document_storage():
+    from retailers.private_storage import private_document_storage
+    return private_document_storage()
+
+
+def _private_document_path(instance, filename):
+    import os
+    import uuid
+    ext = (os.path.splitext(filename)[1] or '.bin').lower()[:10]
+    return f"verification/{instance.retailer_id}/{instance.kind}-{uuid.uuid4().hex}{ext}"
+
+
+class RetailerVerificationDocument(models.Model):
+    """Private onboarding upload (business proof, owner ID, selfie). Admin-only."""
+
+    KIND_CHOICES = [
+        ('proof', 'Business proof'),
+        ('owner_id', 'Owner ID'),
+        ('selfie', 'Selfie at shop'),
+    ]
+    retailer = models.ForeignKey(
+        RetailerProfile, on_delete=models.CASCADE, related_name='verification_documents',
+    )
+    kind = models.CharField(max_length=10, choices=KIND_CHOICES)
+    file = models.FileField(
+        upload_to=_private_document_path, storage=_private_document_storage, max_length=255,
+    )
+    content_type = models.CharField(max_length=100, blank=True)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'retailer_verification_document'
+        ordering = ['-uploaded_at']
+        indexes = [models.Index(fields=['retailer', 'kind'])]
+
+    def __str__(self):
+        return f"{self.kind} for retailer {self.retailer_id}"
+
+
+class VerificationEvent(models.Model):
+    """Audit log for every verification status change or review note."""
+
+    retailer = models.ForeignKey(
+        RetailerProfile, on_delete=models.CASCADE, related_name='verification_events',
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='verification_events',
+    )
+    action = models.CharField(max_length=30)
+    from_status = models.CharField(max_length=20, blank=True)
+    to_status = models.CharField(max_length=20, blank=True)
+    reason = models.TextField(blank=True)
+    details = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'retailer_verification_event'
+        ordering = ['-created_at', '-id']
+        indexes = [models.Index(fields=['retailer', 'created_at'])]
+
+    def __str__(self):
+        return f"{self.action} {self.from_status}->{self.to_status} (retailer {self.retailer_id})"
