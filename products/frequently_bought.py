@@ -77,6 +77,7 @@ def get_frequently_bought_together(request, retailer_id):
             retailer=retailer,
             is_active=True,
             is_available=True,
+            moderation_status='ok',
         ).exclude(id__in=seed_ids)
         catalog = catalog.filter(customer_in_stock_q())
 

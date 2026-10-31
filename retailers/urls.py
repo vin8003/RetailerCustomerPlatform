@@ -1,5 +1,5 @@
 from django.urls import path
-from . import views, admin_views, verification_views
+from . import views, admin_views, verification_views, report_views
 
 urlpatterns = [
     # Platform Admin endpoints
@@ -7,6 +7,11 @@ urlpatterns = [
     path('admin/verifications/<int:profile_id>/action/', admin_views.verify_retailer_action, name='admin_verify_retailer_action'),
     path('admin/verifications/<int:profile_id>/', admin_views.retailer_verification_detail, name='admin_retailer_verification_detail'),
     path('admin/verifications/<int:profile_id>/documents/<int:doc_id>/', admin_views.retailer_verification_document, name='admin_retailer_verification_document'),
+
+    path('admin/reports/', report_views.admin_report_inbox, name='admin_report_inbox'),
+    path('admin/reports/action/', report_views.admin_report_action, name='admin_report_action'),
+    path('admin/products/review/', report_views.admin_product_review_list, name='admin_product_review_list'),
+    path('admin/products/<int:product_id>/moderate/', report_views.admin_product_moderate, name='admin_product_moderate'),
 
     # Retailer onboarding checklist (owner only)
     path('verification/', verification_views.verification_status, name='retailer_verification_status'),
@@ -133,5 +138,6 @@ urlpatterns = [
 
     # Reviews
     path('<int:retailer_id>/reviews/', views.get_retailer_reviews, name='get_retailer_reviews'),
+    path('<int:retailer_id>/report/', report_views.report_retailer, name='report_retailer'),
     path('<int:retailer_id>/reviews/create/', views.create_retailer_review, name='create_retailer_review'),
 ]
