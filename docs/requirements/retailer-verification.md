@@ -105,7 +105,7 @@ Moving back to `needs_changes` (shop hidden until fixed) when the retailer chang
 1. **Master catalog items are live immediately.** A product linked to a `MasterProduct` (barcode match) inherits the curated name, image and category. Retailers only set price and stock. This should be the main path, it removes most abuse by construction and also fixes duplicate and messy catalog data.
 2. **Custom products from an `approved` shop go live immediately** but pass automated checks first (4.3). Anything that fails the checks is held as `pending_review`, invisible to customers, and the retailer sees why.
 3. **Custom products from a `limited` shop**: name, image and category pass through automated checks, and the first 20 products are sampled by an admin after going live (post-publish review). Anything the admin rejects is hidden and the shop gets a strike.
-4. **Restricted categories** (alcohol, tobacco, medicines, adult, weapons, pesticides) always need admin approval before they go live, and in v1 the recommendation is to block alcohol, adult and weapons outright.
+4. **Banned categories** (decided): alcohol, tobacco, adult, weapons. These cannot be listed; the automated checks reject them. **Restricted categories** (medicines, pesticides) need admin approval before they go live.
 
 Add `Product.moderation_status` with `ok | pending_review | hidden | removed`, `moderation_reason`, `moderated_by`, `moderated_at`. Customer queries add `moderation_status='ok'` next to the existing out-of-stock filter (`hide_oos_for_customer` is the natural place), so the filter lives in one spot.
 
@@ -173,13 +173,15 @@ Existing live shops stay live; run the new checks over them in the background an
 
 ## 8. Decisions needed from Vineet
 
+Decided 2026-10-31: #1 GST optional (recommendation accepted), #2 owner ID photos yes, #5 banned categories as below. Open: #3/#4 limited-first approval and the tiered product model, to be discussed.
+
 | # | Question | Recommendation |
 |---|---|---|
 | 1 | Is GST required? | No. One of GST, FSSAI, shop licence or shop-board photo. |
 | 2 | Collect owner ID photo? | Yes, privately stored, admin-only; required for full approval. Tell me if you want to avoid holding ID images and rely on phone + shop photo + GST instead. |
 | 3 | Approve as `limited` first? | Yes, 30 days or 25 orders. |
 | 4 | Product approval model | Tiered (section 4.2). |
-| 5 | Which categories are banned vs admin-approved? | Ban alcohol, adult, weapons; admin-approve tobacco, medicines, pesticides. |
+| 5 | Which categories are banned vs admin-approved? | **Decided:** ban alcohol, tobacco, adult, weapons; admin-approve medicines, pesticides. |
 | 6 | Auto-approve for clean shops? | Not in v1, revisit after 100 decisions. |
 | 7 | Image moderation vendor and budget | Hosted moderation API; confirm a monthly cap. |
 | 8 | Who reviews? | Just you for now, with a second admin role later (the code already has `ADMIN_EMAILS`). |
