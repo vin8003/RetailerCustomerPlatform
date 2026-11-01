@@ -21,7 +21,7 @@ RESTRICTED_PATTERNS = {
 # Light abuse list; extend as real cases show up.
 ABUSE_PATTERNS = r'\b(fuck|shit|bitch|bastard|chutiya|madarchod|behenchod|bhenchod|randi|gandu)\b'
 
-_PHONE_RE = re.compile(r'(?:\+?91[\s-]?)?[6-9]\d{9}')
+_PHONE_RE = re.compile(r'(?<!\d)(?:\+?91[\s-]?)?[6-9]\d{9}(?!\d)')
 _URL_RE = re.compile(r'https?://|www\.|\.(?:com|in|net|org)\b|wa\.me', re.I)
 _SPAM_RE = re.compile(r'[!@#$%^&*~]{3,}|(.)\1{5,}')
 

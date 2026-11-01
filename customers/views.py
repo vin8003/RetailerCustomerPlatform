@@ -327,7 +327,7 @@ def get_customer_wishlist(request):
             )
         
         wishlist = CustomerWishlist.objects.filter(
-            customer=request.user
+            customer=request.user, product__moderation_status='ok',
         ).select_related('product', 'product__retailer', 'product__brand').order_by('-created_at')
         
         paginator = CustomerPagination()

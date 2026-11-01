@@ -31,6 +31,7 @@ RETAILER_LIST_KEYS = {
     "created_at", "product_group", "active_offer_text", "is_wishlisted",
     "barcode", "has_batches", "batches", "is_parent_bulk", "parent_bulk_product",
     "conversion_factor", "fractional_children", "hsn_code", "gst_rate",
+    "moderation_status", "moderation_reason",
 }
 
 

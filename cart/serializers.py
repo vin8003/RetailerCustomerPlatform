@@ -101,7 +101,7 @@ class CartItemSerializer(serializers.ModelSerializer):
         
         if product:
             # Check if product is available
-            if not product.is_available or not product.is_active:
+            if not product.customer_visible:
                 raise serializers.ValidationError("Product is not available")
             
             # Check stock availability
@@ -171,7 +171,7 @@ class AddToCartSerializer(serializers.Serializer):
     def validate_product_id(self, value):
         """Validate product exists and is available"""
         try:
-            product = Product.objects.get(id=value, is_active=True, is_available=True)
+            product = Product.objects.get(id=value, is_active=True, is_available=True, moderation_status='ok')
             return value
         except Product.DoesNotExist:
             raise serializers.ValidationError("Product not found or not available")

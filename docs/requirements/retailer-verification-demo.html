@@ -172,7 +172,7 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--mute
 <!-- ================= TAB 3 ================= -->
 <section class="panel" id="tab-rep">
   <h2>Reports, strikes and suspension</h2>
-  <p class="sub">A product "Super Herbal Gold" is live. Be the customer, then the admin. Three different customers hide a product; three strikes suspend the shop.</p>
+  <p class="sub">A product "Super Herbal Gold" is live. Be the customer, then the admin. Reports and strikes never hide anything by themselves: they put the product or shop in front of the admin, who decides.</p>
   <div class="two">
     <div>
       <div class="colhead">Customer app</div>
@@ -198,10 +198,10 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--mute
     <div class="step manual"><div class="n">4</div><h3>Admin review</h3><p class="sub">About 10 minutes. Quick approve if all pass.</p></div>
     <div class="step manual"><div class="n">5</div><h3>Decision</h3><p class="sub">Approve, ask for changes, or reject, with reason.</p></div>
     <div class="step auto"><div class="n">6</div><h3>Live</h3><p class="sub">Visible to customers. Product text checks on every save.</p></div>
-    <div class="step cust"><div class="n">7</div><h3>Reports</h3><p class="sub">Auto-hide, strikes, suspension, appeal.</p></div>
+    <div class="step cust"><div class="n">7</div><h3>Reports</h3><p class="sub">Review flags, strikes, admin suspension, appeal.</p></div>
   </div>
   <h2 style="margin-top:22px">Shop status</h2>
-  <div class="statusbar" style="margin:8px 0"><span class="pill p-amber" style="opacity:1">pending</span> → admin approves → <span class="pill p-leaf" style="opacity:1">approved</span> → 3 strikes → <span class="pill p-red" style="opacity:1">suspended</span> → appeal accepted → <span class="pill p-leaf" style="opacity:1">approved</span></div>
+  <div class="statusbar" style="margin:8px 0"><span class="pill p-amber" style="opacity:1">pending</span> → admin approves → <span class="pill p-leaf" style="opacity:1">approved</span> → 3 strikes flag it → admin suspends → <span class="pill p-red" style="opacity:1">suspended</span> → appeal accepted → <span class="pill p-leaf" style="opacity:1">approved</span></div>
   <div class="statusbar" style="margin:8px 0"><span class="pill p-amber" style="opacity:1">pending</span> → asks for fix → <span class="pill p-blue" style="opacity:1">needs changes</span> → retailer fixes → <span class="pill p-amber" style="opacity:1">pending</span>; fake or fraud → <span class="pill p-red" style="opacity:1">rejected</span> (final)</div>
   <h2 style="margin-top:22px">Which check runs where</h2>
   <div class="scroll"><table>
@@ -457,8 +457,8 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--mute
 <ul>
 <li><strong>Report button</strong> on shop and on product pages in the customer app: reasons (fake or misleading, offensive, illegal or restricted item, wrong price, never delivered, other), optional text and photo. Logged-in customers only, rate-limited, one open report per customer per target.</li>
 <li><strong>Report model</strong>: <code>Report(target_type shop|product, target_id, reporter, reason, text, status open|actioned|dismissed, handled_by, handled_at)</code>.</li>
-<li><strong>Auto-hide threshold</strong>: a product with 3 reports from different customers is auto-hidden (<code>pending_review</code>) until an admin looks, a shop with 5 reports from different customers in 7 days is flagged to the admin report inbox for review. This is protection against abuse of the report button too, so repeated bogus reporters are down-weighted.</li>
-<li><strong>Admin actions</strong>: dismiss, hide product, remove product, warn shop (message in app), strike, suspend shop, reject shop. Three strikes in 90 days suspends the shop automatically.</li>
+<li><strong>Report thresholds (review only)</strong>: reports never hide anything by themselves, so the report button cannot be used to take down a competitor. A product with 3 reports from different customers is marked "needs review" at the top of the admin report inbox and stays live. A shop with 5 reports from different customers in 7 days is flagged for review (<code>review_needed</code>) and stays listed. Only an admin action hides a product or suspends a shop.</li>
+<li><strong>Admin actions</strong>: dismiss, hide product, remove product, warn shop (message in app), strike, suspend shop, reject shop. Three strikes in 90 days flag the shop for an admin suspend decision; there is no automatic suspension.</li>
 <li><strong>Suspension</strong>: shop disappears from customer lists and search immediately (via <code>public()</code>), open orders can still be completed or cancelled with refund, retailer sees reason and an appeal button that creates a review task.</li>
 <li><strong>Audit</strong>: every status change writes <code>VerificationEvent(shop, actor, from, to, reason, created_at)</code>. Admins never edit status without a reason.</li>
 <li><strong>Retailer-visible notices</strong>: push/WhatsApp and in-app message for every hide, strike and suspension, with the policy line broken and how to fix it.</li>
@@ -549,8 +549,8 @@ th{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--mute
 <p>Still open (small, defaults in the doc apply unless changed):</p>
 <ul>
 <li>Image moderation later: external API vs none. Default none.</li>
-<li>Strike policy: 3 strikes in 90 days suspends. Default as written.</li>
-<li>Report auto-hide: 3 distinct reporters hides a product. Default as written.</li>
+<li>Strike policy: 3 strikes in 90 days flag the shop for an admin decision. Decided by Vineet on 2026-10-31: no automatic hiding or suspension from reports or strikes.</li>
+<li>Report threshold: 3 distinct reporters put a product in front of the admin; it stays live until the admin acts.</li>
 <li>Second admin: later.</li>
 </ul></div></section>
 </div>
@@ -839,14 +839,14 @@ $('#p-add').onclick=addProduct; renderPL();
 
 /* ================= TAB 3: reports ================= */
 let R;
-function freshR(){ return {mine:false,others:0,reasons:[],hidden:false,removed:false,strikes:0,suspended:false,appeal:false,dismissed:false,msgs:[]}; }
+function freshR(){ return {mine:false,others:0,reasons:[],flagged:false,shopFlag:false,removed:false,strikes:0,suspended:false,appeal:false,dismissed:false,msgs:[]}; }
 R=freshR();
 function renderR(){
   const rep=R.mine?R.others+1:R.others;
   // customer
   let c='<div class="top">Super Herbal Gold</div><div class="meta">Sold by Sharma Kirana Store</div>';
   if(R.suspended) c='<div class="top">Shop unavailable</div><div class="hint mut">This shop is currently paused. It is no longer listed.</div>';
-  else if(R.hidden||R.removed) c+='<div class="notice n-amber" style="margin-top:12px">This product is no longer available.</div>';
+  else if(R.removed) c+='<div class="notice n-amber" style="margin-top:12px">This product is no longer available.</div>';
   else {
     c+=`<div class="photo" style="height:90px;margin:8px 0">Product photo</div><div><b>Rs 499</b> · "Cures everything in 3 days"</div>
     <button class="sbtn" disabled style="opacity:.5">Add to cart</button>`;
@@ -854,17 +854,18 @@ function renderR(){
       <button class="sbtn alt" data-ract="report">⚑ Report this product</button></div>`;
     else c+='<div class="hint ok" style="margin-top:10px">✓ Thanks. You already reported this. One report per customer.</div>';
   }
-  c+=`<div class="hint mut" style="margin-top:12px">Distinct reporters: <b>${rep}</b> of 3 needed to auto-hide.</div>`;
-  if(!R.hidden&&!R.removed&&!R.suspended) c+=`<button class="sbtn alt" data-ract="other">Simulate another customer reporting</button>`;
+  c+=`<div class="hint mut" style="margin-top:12px">Distinct reporters: <b>${rep}</b> of 3 needed to flag it for admin review. The product stays live meanwhile.</div>`;
+  if(!R.removed&&!R.suspended) c+=`<button class="sbtn alt" data-ract="other">Simulate another customer reporting</button>`;
   $('#r-cu').innerHTML=c;
   // admin
   let a='';
-  if(R.hidden&&!R.removed&&!R.dismissed&&!R.suspended){
-    a+=`<div class="card"><span class="pill p-amber">Auto-hidden</span> Product "Super Herbal Gold": ${rep} reports from different customers.<br><span class="sub">Reasons: ${esc([...new Set(R.reasons)].join(', ')||'Misleading product')}</span>
-    <div class="bar" style="margin-top:8px"><button class="btn alt" data-ract="dismiss">Dismiss (restore)</button><button class="btn" data-ract="remove">Remove product</button><button class="btn red" data-ract="strike">Remove + strike shop</button></div></div>`;
-  } else if(R.dismissed) a+='<p class="sub">Dismissed. Product restored; reporters are not penalised unless they repeat bogus reports.</p>';
+  if(R.flagged&&!R.removed&&!R.dismissed&&!R.suspended){
+    a+=`<div class="card"><span class="pill p-amber">Needs review</span> <span class="pill p-leaf">Still live</span> Product "Super Herbal Gold": ${rep} reports from different customers.<br><span class="sub">Reasons: ${esc([...new Set(R.reasons)].join(', ')||'Misleading product')}</span>
+    <div class="bar" style="margin-top:8px"><button class="btn alt" data-ract="dismiss">Dismiss</button><button class="btn" data-ract="remove">Remove product</button><button class="btn red" data-ract="strike">Remove + strike shop</button></div></div>`;
+  } else if(R.dismissed) a+='<p class="sub">Dismissed. The product was never hidden; reporters are not penalised unless they repeat bogus reports.</p>';
   else if(R.removed&&!R.suspended) a+='<p class="sub">Product removed. Strike count: '+R.strikes+'.</p>';
-  else if(!R.hidden) a+='<p class="sub">No open reports need action yet.</p>';
+  else if(!R.flagged) a+='<p class="sub">No open reports need action yet.</p>';
+  if(R.shopFlag&&!R.suspended) a+=`<div class="card" style="margin-top:8px"><span class="pill p-amber">Needs review</span> Sharma Kirana Store has 3 strikes in 90 days. The shop is still listed.<div class="bar" style="margin-top:8px"><button class="btn red" data-ract="suspend">Suspend shop</button><button class="btn alt" data-ract="keep">Keep live (mark reviewed)</button></div></div>`;
   if(R.suspended&&R.appeal) a+=`<div class="card" style="margin-top:8px"><span class="pill p-blue">Appeal</span> Sharma Kirana Store appeals the suspension.<div class="bar" style="margin-top:8px"><button class="btn green" data-ract="accept">Accept appeal</button><button class="btn alt" data-ract="deny">Deny</button></div></div>`;
   a+=`<h3 style="margin-top:12px">Shop strikes: ${R.strikes} / 3 (90 days)</h3><div class="statusbar">${[1,2,3].map(i=>`<span class="pill ${R.strikes>=i?'p-red':'p-grey'}" style="opacity:1">Strike ${i}</span>`).join('')}<span class="pill ${R.suspended?'p-red':'p-leaf'}" style="opacity:1">Shop: ${R.suspended?'suspended':'approved'}</span></div>
    <button class="btn alt" data-ract="strike2" style="margin-top:6px" ${R.suspended?'disabled':''}>Add a strike from another violation</button>
@@ -876,13 +877,15 @@ function renderR(){
   if(R.suspended&&!R.appeal) t+='<button class="btn" data-ract="appeal">Appeal suspension</button>';
   $('#r-ret').innerHTML=t||'<p class="sub">No notices.</p>';
 }
-function checkAuto(){ const rep=R.mine?R.others+1:R.others; if(rep>=3&&!R.hidden&&!R.removed&&!R.dismissed){R.hidden=true;R.msgs.push(['Your product "Super Herbal Gold" was hidden after reports from 3 customers. It is being reviewed.','n-amber']);} }
-function addStrike(why){ R.strikes++; R.msgs.push(['Strike '+R.strikes+' of 3: '+why,'n-red']); if(R.strikes>=3){R.suspended=true;R.msgs.push(['Your shop is suspended: 3 strikes in 90 days. You can appeal below.','n-red']);} }
+function checkAuto(){ const rep=R.mine?R.others+1:R.others; if(rep>=3&&!R.flagged&&!R.removed&&!R.dismissed){R.flagged=true;} }
+function addStrike(why){ R.strikes++; R.msgs.push(['Strike '+R.strikes+' of 3: '+why,'n-red']); if(R.strikes>=3&&!R.suspended){R.shopFlag=true;} }
 document.addEventListener('click',e=>{
   const el=e.target.closest('[data-ract]'); if(!el)return; const k=el.dataset.ract;
   if(k==='report'){R.mine=true;R.reasons.push($('#r-reason').value);checkAuto();}
   else if(k==='other'){R.others++;R.reasons.push(['Misleading product','Offensive content'][R.others%2]);checkAuto();}
-  else if(k==='dismiss'){R.dismissed=true;R.hidden=false;R.msgs.push(['Reports on your product were dismissed. It is live again.','n-green']);}
+  else if(k==='dismiss'){R.dismissed=true;R.flagged=false;}
+  else if(k==='suspend'){R.suspended=true;R.shopFlag=false;R.msgs.push(['Your shop is suspended after review: 3 strikes in 90 days. You can appeal below.','n-red']);}
+  else if(k==='keep'){R.shopFlag=false;}
   else if(k==='remove'){R.removed=true;R.msgs.push(['Product removed for misleading claims. Edit the listing and add it again.','n-amber']);}
   else if(k==='strike'){R.removed=true;addStrike('misleading product removed.');}
   else if(k==='strike2'){addStrike('another violation found by the admin.');}

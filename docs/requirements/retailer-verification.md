@@ -119,8 +119,8 @@ Hide, remove, require edit with a reason, bulk hide all products of a shop, and 
 
 - **Report button** on shop and on product pages in the customer app: reasons (fake or misleading, offensive, illegal or restricted item, wrong price, never delivered, other), optional text and photo. Logged-in customers only, rate-limited, one open report per customer per target.
 - **Report model**: `Report(target_type shop|product, target_id, reporter, reason, text, status open|actioned|dismissed, handled_by, handled_at)`.
-- **Auto-hide threshold**: a product with 3 reports from different customers is auto-hidden (`pending_review`) until an admin looks, a shop with 5 reports from different customers in 7 days is flagged to the admin report inbox for review. This is protection against abuse of the report button too, so repeated bogus reporters are down-weighted.
-- **Admin actions**: dismiss, hide product, remove product, warn shop (message in app), strike, suspend shop, reject shop. Three strikes in 90 days suspends the shop automatically.
+- **Report thresholds (review only)**: reports never hide anything by themselves, so the report button cannot be used to take down a competitor. A product with 3 reports from different customers is marked "needs review" at the top of the admin report inbox and stays live. A shop with 5 reports from different customers in 7 days is flagged for review (`review_needed`) and stays listed. Only an admin action hides a product or suspends a shop.
+- **Admin actions**: dismiss, hide product, remove product, warn shop (message in app), strike, suspend shop, reject shop. Three strikes in 90 days flag the shop for an admin suspend decision; there is no automatic suspension.
 - **Suspension**: shop disappears from customer lists and search immediately (via `public()`), open orders can still be completed or cancelled with refund, retailer sees reason and an appeal button that creates a review task.
 - **Audit**: every status change writes `VerificationEvent(shop, actor, from, to, reason, created_at)`. Admins never edit status without a reason.
 - **Retailer-visible notices**: push/WhatsApp and in-app message for every hide, strike and suspension, with the policy line broken and how to fix it.
@@ -179,8 +179,8 @@ Decided by Vineet on 2026-10-31:
 Still open (small, defaults in the doc apply unless changed):
 
 - Image moderation later: external API vs none. Default none.
-- Strike policy: 3 strikes in 90 days suspends. Default as written.
-- Report auto-hide: 3 distinct reporters hides a product. Default as written.
+- Strike policy: 3 strikes in 90 days flag the shop for an admin decision. Decided by Vineet on 2026-10-31: no automatic hiding or suspension from reports or strikes.
+- Report threshold: 3 distinct reporters put a product in front of the admin; it stays live until the admin acts.
 - Second admin: later.
 
 ## 9. Implementation status
@@ -205,3 +205,12 @@ Endpoints (all under `/api/retailer/`):
 | GET | `admin/verifications/<id>/` | Admin | Review page: profile, fresh checks, documents, audit log |
 | GET | `admin/verifications/<id>/documents/<doc_id>/` | Admin | Streams a private document |
 | POST | `admin/verifications/<id>/action/` | Admin | `approve`, `request_changes` (reason), `reject`, `suspend` (reason), `reinstate`, `mark_reviewed` |
+
+- **Shop name edits**: the retailer's profile edit refuses a new shop name that is banned, abusive, or carries a phone number or link (restricted words are allowed and flag the shop for review like any other name change). An unchanged legacy name is not rechecked, so old shops can still save other fields.
+
+### Step 2: product moderation, reports, strikes (shipped in `claude/product-moderation-reports`)
+
+- **`Product.moderation_status`**: `ok`, `pending_review`, `hidden` or `removed`, plus a reason the retailer sees. Customers only see `ok` products. That covers the customer listings (through the existing `hide_oos_for_customer` manager), the public product detail page and its size variants, frequently bought together, category counts and product groups, the wishlist, adding to the cart, cart checks and placing an order. The retailer's own POS and product list ignore it.
+- **Text checks on save** (`products/moderation.py`): they run only when the name or description changes. A product is hidden for a banned category (alcohol, tobacco, adult, weapons), abuse, a phone number, a link or spam, and goes to review for a restricted category (medicines, pesticides). If the name is fixed, a hold set by these checks is cleared. A hold from reports or from an admin is never cleared by an edit. A master-catalog item that keeps its curated name is trusted. When an admin approves a flagged name, that exact text stays allowed, so word-list false positives such as "Rum Balls" stay fixed. Existing products are not rescanned. The only bulk insert (`bulk_create` in the barcode upload) creates master-catalog items, which are trusted anyway; queryset `.update()` calls skip the checks and are only used for stock and price.
+- **Reports**: `POST /api/retailer/<shop_id>/report/` takes `reason` (`misleading`, `offensive`, `illegal`, `wrong_price`, `not_delivered`, `other`), optional `text` and optional `product_id`. A customer can have one open report per target, the limit is 20 a day, the shop must be listed, and the owner cannot report their own shop. Three different customers reporting a product flag it for admin review and it stays live. Five different customers reporting a shop within 7 days flag the shop for review and it stays listed.
+- **Admin**: `GET admin/reports/` lists open reports grouped by target, most reporters first. `POST admin/reports/action/` takes `dismiss`, `hide_product`, `remove_product` or `strike` (reason required). It closes all open reports on that target, and a strike also removes the reported product. Three strikes in 90 days set `review_needed` on the shop and log a `strikes_threshold` event; the admin then decides whether to suspend. Report thresholds work the same way: 3 reporters on a product mark the inbox group `needs_review` and log `product_reports_threshold`, 5 reporters on a shop in 7 days set `review_needed`. Nothing is hidden or suspended without an admin action. `GET admin/products/review/?status=pending_review|hidden|removed` and `POST admin/products/<id>/moderate/` (`approve`, `hide`, `remove`) work the product queue.

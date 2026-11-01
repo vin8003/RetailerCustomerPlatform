@@ -120,6 +120,11 @@ class CustomerWishlistSerializer(serializers.ModelSerializer):
             data['product_price'] = format_money(selling)
         return data
     
+    def validate_product(self, product):
+        if product.moderation_status != 'ok':
+            raise serializers.ValidationError('Product not found or not available')
+        return product
+
     def create(self, validated_data):
         """Create wishlist item with customer from context"""
         customer = self.context['customer']

@@ -621,6 +621,22 @@ class RetailerProfileUpdateSerializer(serializers.ModelSerializer):
         }
     )
 
+    def validate_shop_name(self, value):
+        """Block offensive, banned or contact-spam shop names (verification design 3.2).
+
+        Only a changed name is checked, so an existing shop can still save
+        other fields. Restricted words are allowed; the edit flags the shop
+        for admin review anyway.
+        """
+        from common.content_rules import check_text
+        current = getattr(self.instance, 'shop_name', None)
+        if value is None or (current is not None and value.strip() == (current or '').strip()):
+            return value
+        result, reason, _ = check_text(value, min_len=3, max_len=60)
+        if result in ('fail', 'banned'):
+            raise serializers.ValidationError(reason)
+        return value.strip()
+
     def validate_gst_number(self, value):
         import re
         if value and len(value) > 0:
