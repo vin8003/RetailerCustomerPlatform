@@ -532,13 +532,14 @@ class RetailerProfileSerializer(serializers.ModelSerializer):
             'delivery_charge', 'free_delivery_threshold',
             'delivery_fee_mode', 'delivery_fee_tiers', 'delivery_fee_per_km',
             'is_verified', 'verification_status', 'rejection_reason', 'is_active', 'average_rating', 'total_ratings',
+            'proof_type', 'proof_number', 'verification_submitted_at',
             'is_reward_active', 'is_referral_enabled', 'referral_reward_points', 'min_referral_order_amount', 
             'cashback_percentage', 'loyalty_earning_type', 'loyalty_earning_value', 'loyalty_min_order_value',
             'operating_hours', 'is_currently_open', 'next_open_time', 'categories', 'created_at', 'updated_at',
             'receipt_footer', 'show_gst_on_receipt', 'print_upi_qr_on_receipt', 'printer_size',
             'organization_id', 'organization_name', 'organization_is_active',
         ]
-        read_only_fields = ['id', 'is_verified', 'verification_status', 'rejection_reason', 'average_rating', 'total_ratings', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'is_verified', 'verification_status', 'rejection_reason', 'verification_submitted_at', 'average_rating', 'total_ratings', 'created_at', 'updated_at']
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -620,6 +621,22 @@ class RetailerProfileUpdateSerializer(serializers.ModelSerializer):
         }
     )
 
+    def validate_shop_name(self, value):
+        """Block offensive, banned or contact-spam shop names (verification design 3.2).
+
+        Only a changed name is checked, so an existing shop can still save
+        other fields. Restricted words are allowed; the edit flags the shop
+        for admin review anyway.
+        """
+        from common.content_rules import check_text
+        current = getattr(self.instance, 'shop_name', None)
+        if value is None or (current is not None and value.strip() == (current or '').strip()):
+            return value
+        result, reason, _ = check_text(value, min_len=3, max_len=60)
+        if result in ('fail', 'banned'):
+            raise serializers.ValidationError(reason)
+        return value.strip()
+
     def validate_gst_number(self, value):
         import re
         if value and len(value) > 0:
@@ -686,6 +703,7 @@ class RetailerProfileUpdateSerializer(serializers.ModelSerializer):
             'delivery_charge', 'free_delivery_threshold',
             'delivery_fee_mode', 'delivery_fee_tiers', 'delivery_fee_per_km',
             'receipt_footer', 'show_gst_on_receipt', 'print_upi_qr_on_receipt', 'printer_size',
+            'proof_type', 'proof_number',
             'categories'
         ]
         
