@@ -326,7 +326,10 @@ def update_retailer_profile(request):
         )
         
         if serializer.is_valid():
+            from retailers.verification import note_profile_change, snapshot_sensitive
+            before = snapshot_sensitive(profile)
             profile = serializer.save()
+            note_profile_change(profile, before, request.user)
             response_serializer = RetailerProfileSerializer(profile)
             logger.info(f"Retailer profile updated: {profile.shop_name}")
             return Response(response_serializer.data, status=status.HTTP_200_OK)

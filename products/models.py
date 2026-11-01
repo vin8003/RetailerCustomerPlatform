@@ -361,6 +361,20 @@ class Product(models.Model):
     is_featured = models.BooleanField(default=False)
     is_available = models.BooleanField(default=True)
     is_draft = models.BooleanField(default=False)  # For incomplete products
+    # Content moderation (docs/requirements/retailer-verification.md section 4).
+    # Only 'ok' products reach customers; the retailer's own POS ignores it.
+    MODERATION_CHOICES = [
+        ('ok', 'OK'),
+        ('pending_review', 'Under review'),
+        ('hidden', 'Hidden'),
+        ('removed', 'Removed by admin'),
+    ]
+    moderation_status = models.CharField(max_length=20, choices=MODERATION_CHOICES, default='ok', db_index=True)
+    moderation_reason = models.CharField(max_length=255, blank=True)
+    moderated_at = models.DateTimeField(null=True, blank=True)
+    # Set when an admin approves a flagged name, so later saves of the same
+    # text are not flagged again.
+    moderation_cleared_text = models.CharField(max_length=64, blank=True)
     is_seasonal = models.BooleanField(default=False) # For Seasonal Picks lane
     has_batches = models.BooleanField(default=False)
     
@@ -407,7 +421,16 @@ class Product(models.Model):
     def __str__(self):
         return f"{self.name} - {self.retailer.shop_name}"
 
+    @property
+    def customer_visible(self):
+        return self.is_active and self.is_available and self.moderation_status == 'ok'
+
     def save(self, *args, **kwargs):
+        from products.moderation import apply_text_moderation
+        if kwargs.get('update_fields') is not None:
+            kwargs['update_fields'] = apply_text_moderation(self, kwargs['update_fields'])
+        else:
+            apply_text_moderation(self)
         # Calculate discount percentage if original_price is set
         if self.original_price and self.original_price > self.price:
             self.discount_percentage = ((self.original_price - self.price) / self.original_price) * 100
