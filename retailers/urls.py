@@ -1,10 +1,17 @@
 from django.urls import path
-from . import views, admin_views
+from . import views, admin_views, verification_views
 
 urlpatterns = [
     # Platform Admin endpoints
     path('admin/verifications/', admin_views.list_retailer_verifications, name='admin_list_retailer_verifications'),
     path('admin/verifications/<int:profile_id>/action/', admin_views.verify_retailer_action, name='admin_verify_retailer_action'),
+    path('admin/verifications/<int:profile_id>/', admin_views.retailer_verification_detail, name='admin_retailer_verification_detail'),
+    path('admin/verifications/<int:profile_id>/documents/<int:doc_id>/', admin_views.retailer_verification_document, name='admin_retailer_verification_document'),
+
+    # Retailer onboarding checklist (owner only)
+    path('verification/', verification_views.verification_status, name='retailer_verification_status'),
+    path('verification/submit/', verification_views.submit_verification, name='retailer_verification_submit'),
+    path('verification/documents/', verification_views.upload_verification_document, name='retailer_verification_documents'),
 
     # Retailer profile management
     path('profile/', views.get_retailer_profile, name='get_retailer_profile'),

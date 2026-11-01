@@ -182,3 +182,26 @@ Still open (small, defaults in the doc apply unless changed):
 - Strike policy: 3 strikes in 90 days suspends. Default as written.
 - Report auto-hide: 3 distinct reporters hides a product. Default as written.
 - Second admin: later.
+
+## 9. Implementation status
+
+### Step 1: backend foundation (shipped in `claude/verification-foundation`)
+
+- **Statuses:** `pending`, `needs_changes`, `approved`, `suspended`, `rejected`. `is_verified` is true only for `approved`, and `public()` is unchanged, so every status except approved is hidden from customers.
+- **Automated checks** (`retailers/verification.py`, text rules in `common/content_rules.py`): phone OTP, shop name (placeholder, length, banned or abusive words, phone numbers or links), storefront photo present, address plus valid pincode plus map pin, business proof (GSTIN format and checksum, PAN inside the GSTIN, or FSSAI/licence number plus photo, or a board photo), owner ID uploaded, and duplicate GSTIN/PAN/UPI/phone across shops. Each result is `pass`, `fail`, `flag` or `manual`. Only `fail` blocks submission.
+- **Private documents:** `RetailerVerificationDocument` (proof, owner_id, selfie) is stored outside the public media bucket: `PRIVATE_MEDIA_ROOT` on disk (default `../ordereasy-private` next to the checkout), or a private S3 bucket when `PRIVATE_DOCS_BUCKET` is set. Files are checked by their bytes (JPG, PNG, WEBP, PDF, 5 MB max), and only the latest file of each kind is kept. Admins read them through an authenticated endpoint with `Cache-Control: no-store`. These files are not in the daily database backup.
+- **Audit log:** `VerificationEvent` records every submit, admin action and post-approval profile change, with who, when, why and details.
+- **Changes after approval:** editing shop name, address, city, state, pincode, GSTIN or PAN on an approved shop keeps it live, sets `verification_review_needed`, and logs the old and new values. The admin clears it with `mark_reviewed`.
+
+Endpoints (all under `/api/retailer/`):
+
+| Method | Path | Who | Purpose |
+|---|---|---|---|
+| GET | `verification/` | Shop owner | Status, reason, five steps with done/needs fix, every check result, uploaded documents |
+| POST | `verification/submit/` | Shop owner | Re-runs checks; 400 with the failing steps, or moves to `pending` with a submitted time |
+| POST | `verification/documents/` | Shop owner | Multipart `kind` + `file`; 30 uploads/hour |
+| PATCH | `profile/update/` | Shop owner | Existing; now also takes `proof_type`, `proof_number` |
+| GET | `admin/verifications/?status=` | Admin | Adds `needs_changes`, `suspended`, `review_needed`; pending lists submitted shops first; rows carry the stored check counts |
+| GET | `admin/verifications/<id>/` | Admin | Review page: profile, fresh checks, documents, audit log |
+| GET | `admin/verifications/<id>/documents/<doc_id>/` | Admin | Streams a private document |
+| POST | `admin/verifications/<id>/action/` | Admin | `approve`, `request_changes` (reason), `reject`, `suspend` (reason), `reinstate`, `mark_reviewed` |

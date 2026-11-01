@@ -532,13 +532,14 @@ class RetailerProfileSerializer(serializers.ModelSerializer):
             'delivery_charge', 'free_delivery_threshold',
             'delivery_fee_mode', 'delivery_fee_tiers', 'delivery_fee_per_km',
             'is_verified', 'verification_status', 'rejection_reason', 'is_active', 'average_rating', 'total_ratings',
+            'proof_type', 'proof_number', 'verification_submitted_at',
             'is_reward_active', 'is_referral_enabled', 'referral_reward_points', 'min_referral_order_amount', 
             'cashback_percentage', 'loyalty_earning_type', 'loyalty_earning_value', 'loyalty_min_order_value',
             'operating_hours', 'is_currently_open', 'next_open_time', 'categories', 'created_at', 'updated_at',
             'receipt_footer', 'show_gst_on_receipt', 'print_upi_qr_on_receipt', 'printer_size',
             'organization_id', 'organization_name', 'organization_is_active',
         ]
-        read_only_fields = ['id', 'is_verified', 'verification_status', 'rejection_reason', 'average_rating', 'total_ratings', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'is_verified', 'verification_status', 'rejection_reason', 'verification_submitted_at', 'average_rating', 'total_ratings', 'created_at', 'updated_at']
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -686,6 +687,7 @@ class RetailerProfileUpdateSerializer(serializers.ModelSerializer):
             'delivery_charge', 'free_delivery_threshold',
             'delivery_fee_mode', 'delivery_fee_tiers', 'delivery_fee_per_km',
             'receipt_footer', 'show_gst_on_receipt', 'print_upi_qr_on_receipt', 'printer_size',
+            'proof_type', 'proof_number',
             'categories'
         ]
         
