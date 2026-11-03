@@ -65,7 +65,7 @@ async function expectRetailerView(page: Page, orderId: number) {
   await expect(page.getByText(PRODUCT.P4.name).filter({ visible: true }).first()).toBeVisible();
 }
 
-test('B1–B4 customer order walks pending → confirmed → packed → out for delivery → delivered @B1 @B2 @B3 @B4 @customer @retailer @orders', async ({ context, seed, api, retailerToken }) => {
+test('B1–B4 customer order walks pending → confirmed → packed → out for delivery → delivered @B1 @B2 @B3 @B4 @smoke @customer @retailer @orders', async ({ context, seed, api, retailerToken }) => {
   const customer = await context.newPage();
   const retailer = await context.newPage();
   const token = await retailerToken(R1.username);

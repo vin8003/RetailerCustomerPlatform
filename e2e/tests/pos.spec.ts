@@ -10,7 +10,7 @@ test.describe('Journey A - retailer POS bill (R1)', { tag: ['@retailer', '@pos',
     await openPos(page);
   });
 
-  test('A1 UPI bill: rescans increment qty, total 620, stock decremented, no khata', async ({ page, api, seed, retailerToken }) => {
+  test('A1 UPI bill: rescans increment qty, total 620, stock decremented, no khata', { tag: '@smoke' }, async ({ page, api, seed, retailerToken }) => {
     await scanCommonCart(page);
     await page.getByTestId('pos-pay-upi').click();
     const checkout = posCheckoutResponse(page);

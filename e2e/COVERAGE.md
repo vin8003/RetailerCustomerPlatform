@@ -4,6 +4,10 @@ One row per feature. Status: *covered* = at least one spec asserts the outcome (
 Update the row in the PR that adds or removes a spec. Phases: 2 auth & account · 3 POS camera, delivery fee, bundles · 4 catalog, offers, inventory · 5 everything else.
 Phase 3–5 rows are owned by their phase slice (separate PRs); each slice updates its rows' coverage.
 
+## Smoke subset (`@smoke`, runs on every PR with `@core`)
+
+R-AUTH3 retailer login refusal · A1 POS UPI bill · B1–B4 customer COD checkout → retailer accepts → delivered · O1 out-of-stock at checkout · C1 khata payment. Keep it under ~5 minutes; tag a test `@smoke` only if it guards a money or order path.
+
 ## Totals
 
 | phase | scope | covered | slice PR pending | not started | not in FE (API-only) | total |
@@ -11,8 +15,8 @@ Phase 3–5 rows are owned by their phase slice (separate PRs); each slice updat
 | 2 | auth & account | 10 | 0 | 4 | 0 | 14 |
 | 3 | POS camera scan, distance delivery fee, bundles | 2 | 3 | 0 | 0 | 5 |
 | 4 | catalog, offers/coupons, inventory | 4 | 5 | 3 | 0 | 12 |
-| 5 | orders edge cases, khata, reports, settings, app pages | 5 | 7 | 24 | 3 | 39 |
-| **all** | | **21** | **15** | **31** | **3** | **70** |
+| 5 | orders edge cases, khata, reports, settings, app pages | 8 | 7 | 21 | 3 | 39 |
+| **all** | | **24** | **15** | **28** | **3** | **70** |
 
 ## Features
 
@@ -53,9 +57,9 @@ Phase 3–5 rows are owned by their phase slice (separate PRs); each slice updat
 | Orders | Cancel, modify/confirm modification | orders/<id>/cancel/, modify/, confirm_modification/ | none | slice PR pending (#213) | 5 (phase-5 slice) |
 | Orders | Online payment submit/verify | orders/<id>/submit_payment/, verify_payment/ | none | slice PR pending (#213) | 5 (phase-5 slice) |
 | Orders | Order chat, notes, feedback, ratings | orders/<id>/chat/…, notes/, feedback/, rate-customer/ | none | slice PR pending (#213) | 5 (phase-5 slice) |
-| Orders | Cancel at out-for-delivery and at delivered | orders/<id>/cancel/ | none | not started | 5 (phase-5 slice) |
-| Orders | Invalid order status transitions refused | orders/<id>/status/ | none | not started | 5 (phase-5 slice) |
-| Orders | Out-of-stock at checkout | orders/place/ · cart/ | none | not started | 5 (phase-5 slice) |
+| Orders | Cancel at out-for-delivery and at delivered | orders/<id>/cancel/ | order-gates.spec.ts › O3 (delivered; out-for-delivery still open) | covered | 5 (phase-5 slice) |
+| Orders | Invalid order status transitions refused | orders/<id>/status/ | order-gates.spec.ts › O2 | covered | 5 (phase-5 slice) |
+| Orders | Out-of-stock at checkout | orders/place/ · cart/ | order-gates.spec.ts › O1 (@smoke) | covered | 5 (phase-5 slice) |
 | Orders | UPI refund on cancel | orders/<id>/cancel/ | none | not started | 5 (phase-5 slice) |
 | Orders | Khata as payment for an online order | orders/place/ (khata payment) | none | not started | 5 (phase-5 slice) |
 | Returns | Return request | orders/<id>/return/, returns/ | none | slice PR pending (#213) | 5 (phase-5 slice) |

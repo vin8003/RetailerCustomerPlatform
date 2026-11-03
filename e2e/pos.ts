@@ -53,9 +53,15 @@ export async function scanCommonCart(page: Page) {
 }
 
 export async function attachCustomer(page: Page, mobile10: string) {
+  // fill() sets the value in one step, so even if the POS's 50 ms refocus to the scan box blurs the
+  // field early, the verify call still carries the full number. Wait on that call, not on focus.
+  // verify-pos-customer is a GET (?mobile_number=), so the number is matched in the URL.
   const mobile = page.getByTestId('pos-customer-mobile');
+  const req = page.waitForRequest(
+    (r) => r.url().includes('/erp/verify-pos-customer/') && r.url().includes(`mobile_number=${mobile10}`),
+  );
   await mobile.fill(mobile10);
-  const verified = page.waitForResponse((r) => r.url().includes('/erp/verify-pos-customer/'));
   await mobile.blur();
-  await verified;
+  await (await req).response();
+  await expect(mobile).toHaveValue(mobile10);
 }
