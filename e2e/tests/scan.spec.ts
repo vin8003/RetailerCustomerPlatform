@@ -90,9 +90,8 @@ test.describe('Slice scan - mobile POS camera scan', { tag: ['@slice-scan', '@re
   // BUG OE-386: BarcodeScanner sets firstCodeTaken before it checks `closing`, so a scanner that is shutting
   // down (StrictMode's first mount in next dev, or Switch camera) swallows the first code.
   fixme('SC2 first code in view is added without a tap @slice-scan',
-    known('OE-386', 'the first barcode in view is not added until the user taps'),
+    known('OE-386', 'first code swallowed by a closing scanner'),
     async ({ page }) => {
-    test.info().annotations.push({ type: 'bug', description: 'https://vin8003.atlassian.net/browse/OE-386 first code swallowed by a closing scanner' });
     await retailerLogin(page, SFB_RETAILER.username);
     await page.goto('/dashboard/pos');
     await expect(page.getByText(SFB_PRODUCT.RICE.name).first()).toBeVisible();
