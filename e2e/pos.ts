@@ -62,6 +62,7 @@ export async function attachCustomer(page: Page, mobile10: string) {
   );
   await mobile.fill(mobile10);
   await mobile.blur();
-  await (await req).response();
+  const verified = await (await req).response();
+  expect(verified?.ok(), 'verify-pos-customer ok').toBe(true);
   await expect(mobile).toHaveValue(mobile10);
 }

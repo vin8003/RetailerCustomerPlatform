@@ -92,3 +92,30 @@ R-AUTH3 retailer login refusal · A1 POS UPI bill · B1–B4 customer COD checko
 | Customer app | Retailers list | /retailers · retailer/search/ | none | not started | 5 (phase-5 slice) |
 | Customer app | Privacy policy page | /privacy-policy | none | not started | 5 (phase-5 slice) |
 | Platform | Seed idempotent; live-host guard | seed_e2e · fixtures.ts | seed.spec.ts › S1; guard.spec.ts › G1–G3 | covered | 5 (phase-5 slice) |
+
+## API negatives
+
+Exact error body plus a re-read proving nothing changed. Playwright: `e2e/tests/api-negatives.spec.ts` (`@api-neg`).
+Django: `orders/tests/test_negative_paths.py` (runs in the Tests workflow).
+
+| ID | What | Asserts |
+|---|---|---|
+| N1 @smoke | Retailer cancels a pending order | 200 cancelled; stock back; customer sees cancelled; 2nd cancel `{error:'Order cannot be cancelled'}` |
+| N2 | Two customers race for the last unit | exactly [201, 400]; loser gets the stock message; stock 0, never negative |
+| N3 | Retailer B on retailer A's order | read/update/cancel `{error:'Order not found'}` 404; not in B's list; still pending |
+| N4 | Customer token on status update | 403 `{error:'Only retailers can update order status'}`; still pending |
+| N5 | No token on place-order / cart add | 401 `{detail:'Authentication credentials were not provided.'}` |
+| N6 | Retailer token on place-order | 403 `{error:'Only customers can place orders'}` |
+| N7 | Cart qty 0 / -1 / 'abc' / unknown product | 400 field errors; cart count unchanged |
+| N8 | Empty cart; delivery without address | `{non_field_errors:['Cart is empty']}`, `['Address is required for delivery orders']`; no new order |
+| N9 | confirmed→delivered, packed→confirmed, cancel after delivered | `{status:["Cannot change status from 'x' to 'y'"]}`; still delivered |
+
+Django negatives (orders/cart): unauthenticated/role/unverified place-order, empty cart, unknown retailer, foreign address,
+payment mode vs delivery mode, unknown payment mode, shop without pickup/delivery, over stock, above max qty,
+hidden product, cart qty 0/-2/'abc', unknown/unavailable product, cart roles, per-retailer cart lines, clear-cart and
+coupon input checks, cross-retailer read/update/cancel/list, other customer read/cancel, customer status update,
+refused transitions (packed→confirmed, confirmed→delivered/out_for_delivery, cancelled→confirmed, delivered→cancelled),
+unknown status, retailer cancel at packed/delivered/cancelled, empty chat message.
+
+Known bugs (xfail strict, no OE ticket yet): feedback and return on an undelivered order answer 500, not 400
+(the serializer raises ValidationError inside create()).
