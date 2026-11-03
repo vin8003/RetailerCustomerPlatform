@@ -5,7 +5,7 @@
 import { test, expect, urls } from '../fixtures';
 import { addToCart, authed, customerLogin, customerToken, customerUseSeedCity, djangoShell, getJson, productStock, sl1 } from '../helpers';
 import { advance, placeOrder } from '../edge';
-import { C2_MOBILE } from '../seed';
+import { C2_MOBILE, R1 } from '../seed';
 
 const orderCount = () =>
   Number(djangoShell('from orders.models import Order\nprint(Order.objects.count())\n').trim().split('\n').pop());
@@ -19,6 +19,11 @@ test('O1 stock sold out while on the COD checkout page: place order refused, no 
 
   await customerUseSeedCity(page);
   await customerLogin(page, C2_MOBILE);
+  // The cart page needs a selected store; open R1's storefront first (the cart was filled via the API).
+  await page.goto(`${urls.customer}/retailers`);
+  await page.getByText(R1.shop_name).first().click();
+  await page.waitForURL('**/retailer?id=*');
+  await expect(page.getByTestId(`cart-qty-${P3}`).first()).toHaveText('2');
   await page.goto(`${urls.customer}/cart`);
   await page.getByTestId('cart-checkout').click();
   await page.waitForURL('**/checkout**');
