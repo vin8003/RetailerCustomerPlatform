@@ -239,6 +239,7 @@ jobs:
                 e2e/tests/auth-*.spec.ts|authentication/*) tags="$tags auth" ;;
                 e2e/tests/order-gates.spec.ts) tags="$tags orders" ;;
                 e2e/tests/api-negatives*.spec.ts) tags="$tags api-neg" ;;
+                e2e/tests/form-negatives*.spec.ts) tags="$tags form-neg" ;;
                 e2e/tests/guard.spec.ts|e2e/tests/seed.spec.ts|*.md|docs/*) ;;
                 *) tags=""; break ;; # full suite
               esac

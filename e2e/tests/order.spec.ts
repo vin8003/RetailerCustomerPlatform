@@ -16,10 +16,12 @@ async function placeOrder(page: Page, p3: number, p4: number, addressId: number)
   await page.getByText(R1.shop_name).first().click();
   await page.waitForURL('**/retailer?id=*');
 
-  await page.getByTestId(`add-to-cart-${p3}`).first().click();
-  await page.getByTestId(`cart-increment-${p3}`).first().click();
+  // The counters update before the server answers; wait for each cart write so /cart reads the final lines.
+  const cartWrite = () => page.waitForResponse((r) => /\/cart\/(add|items\/\d+)\/$/.test(new URL(r.url()).pathname) && r.ok());
+  await Promise.all([cartWrite(), page.getByTestId(`add-to-cart-${p3}`).first().click()]);
+  await Promise.all([cartWrite(), page.getByTestId(`cart-increment-${p3}`).first().click()]);
   await expect(page.getByTestId(`cart-qty-${p3}`).first()).toHaveText('2');
-  await page.getByTestId(`add-to-cart-${p4}`).first().click();
+  await Promise.all([cartWrite(), page.getByTestId(`add-to-cart-${p4}`).first().click()]);
   await expect(page.getByTestId(`cart-qty-${p4}`).first()).toHaveText('1');
 
   await page.goto(`${urls.customer}/cart`);

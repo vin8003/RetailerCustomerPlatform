@@ -117,5 +117,15 @@ coupon input checks, cross-retailer read/update/cancel/list, other customer read
 refused transitions (packed→confirmed, confirmed→delivered/out_for_delivery, cancelled→confirmed, delivered→cancelled),
 unknown status, retailer cancel at packed/delivered/cancelled, empty chat message.
 
+Form negatives (`e2e/tests/form-negatives.spec.ts`, `@form-neg`): F1 customer wrong password, F2 unknown phone (stay on /login,
+error shown, no token stored), F3 retailer wrong password (toast, no dashboard), F4 khata over-payment booked as an advance.
+
+More Django negatives: khata (`customers/tests/test_khata_negatives.py`: zero/negative/non-numeric amount, roles, other
+retailer's customer, bad credit limit), auth (`authentication/tests/test_auth_negatives.py`: wrong password, wrong role,
+inactive user, bad OTP, garbage/expired tokens, duplicate signup), catalog (`products/tests/test_product_negatives.py`:
+bad price/stock, duplicate barcode/name, other retailer's product, delete while in an open order), coupons
+(`cart/tests/test_coupon_negatives.py`: expired, not started, POS-only, used up, inactive, min order, other shop, no stacking).
+
 Known bugs (xfail strict, no OE ticket yet): feedback and return on an undelivered order answer 500, not 400
-(the serializer raises ValidationError inside create()).
+(the serializer raises ValidationError inside create()); recording a khata payment for another retailer's customer
+answers 500, not 404; create_product accepts negative opening stock; retailer signup accepts a duplicate email.
