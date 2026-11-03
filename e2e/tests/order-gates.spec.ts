@@ -10,14 +10,12 @@ import { C2_MOBILE } from '../seed';
 const orderCount = () =>
   Number(djangoShell('from orders.models import Order\nprint(Order.objects.count())\n').trim().split('\n').pop());
 
-test('O1 stock sold out between cart and COD checkout: place order refused, no order, stock untouched @smoke @customer @orders', async ({ page, api, seed, retailerToken }) => {
+test('O1 stock sold out while on the COD checkout page: place order refused, no order, stock untouched @smoke @customer @orders', async ({ page, api, seed, retailerToken }) => {
   const P3 = seed.products.P3;
   const ct = await customerToken(api, C2_MOBILE);
   const rt = await retailerToken();
   await addToCart(api, ct, P3, 2);
   const before = await orderCount();
-  // Someone else bought it in the meantime: only 1 left.
-  djangoShell(`from products.models import Product\nProduct.objects.filter(id=${P3}).update(quantity=1)\n`);
 
   await customerUseSeedCity(page);
   await customerLogin(page, C2_MOBILE);
@@ -30,6 +28,8 @@ test('O1 stock sold out between cart and COD checkout: place order refused, no o
   await page.getByTestId('slot-confirm').click();
   await page.getByTestId(`checkout-address-${seed.c2_address}`).click();
   await page.getByTestId('checkout-pay-cod').click();
+  // Someone else bought it while the customer was on the checkout page: only 1 left.
+  djangoShell(`from products.models import Product\nProduct.objects.filter(id=${P3}).update(quantity=1)\n`);
 
   const placed = page.waitForResponse((r) => r.url().includes('/orders/place/') && r.request().method() === 'POST');
   await page.getByTestId('checkout-place-order').click();

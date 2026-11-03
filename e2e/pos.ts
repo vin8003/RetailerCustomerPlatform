@@ -54,8 +54,13 @@ export async function scanCommonCart(page: Page) {
 
 export async function attachCustomer(page: Page, mobile10: string) {
   const mobile = page.getByTestId('pos-customer-mobile');
-  await mobile.fill(mobile10);
-  const verified = page.waitForResponse((r) => r.url().includes('/erp/verify-pos-customer/'));
-  await mobile.blur();
-  await verified;
+  // A late cart/session update after the last scan can wipe the field and pull focus back to the
+  // scan box (seen in CI on A3), so re-type until the blur really sends the verify call.
+  await expect(async () => {
+    await mobile.fill(mobile10);
+    await expect(mobile).toHaveValue(mobile10, { timeout: 1_000 });
+    const verified = page.waitForResponse((r) => r.url().includes('/erp/verify-pos-customer/'), { timeout: 5_000 });
+    await mobile.blur();
+    await verified;
+  }).toPass({ timeout: 30_000 });
 }
