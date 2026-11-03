@@ -53,14 +53,13 @@ export async function scanCommonCart(page: Page) {
 }
 
 export async function attachCustomer(page: Page, mobile10: string) {
+  // After each add the POS moves focus back to the scan box on a 50 ms timer. Filling the mobile
+  // before that lands lets the refocus blur the field early (the A3 flake), so wait for it first.
+  await expect(page.getByTestId('pos-search')).toBeFocused();
   const mobile = page.getByTestId('pos-customer-mobile');
-  // A late cart/session update after the last scan can wipe the field and pull focus back to the
-  // scan box (seen in CI on A3), so re-type until the blur really sends the verify call.
-  await expect(async () => {
-    await mobile.fill(mobile10);
-    await expect(mobile).toHaveValue(mobile10, { timeout: 1_000 });
-    const verified = page.waitForResponse((r) => r.url().includes('/erp/verify-pos-customer/'), { timeout: 5_000 });
-    await mobile.blur();
-    await verified;
-  }).toPass({ timeout: 30_000 });
+  const verified = page.waitForResponse((r) => r.url().includes('/erp/verify-pos-customer/'));
+  await mobile.fill(mobile10);
+  await expect(mobile).toHaveValue(mobile10);
+  await mobile.blur();
+  await verified;
 }
