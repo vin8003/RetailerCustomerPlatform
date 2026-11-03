@@ -3,8 +3,8 @@
  * and re-reads state to prove nothing changed. Seeded data only.
  */
 import { test, expect } from '../fixtures';
-import { authed, customerToken, djangoShell, getJson, productStock } from '../helpers';
-import { advance, placeOrder, tryPlaceOrder } from '../edge';
+import { authed, customerCart, customerToken, djangoShell, getJson, productStock } from '../helpers';
+import { advance, placeOrder, posBill, price, tryPlaceOrder } from '../edge';
 import { C1_MOBILE, C2_MOBILE, R2 } from '../seed';
 
 const setStock = (productId: number, qty: number) =>
@@ -142,5 +142,93 @@ test.describe('API negatives - orders', { tag: ['@api-neg', '@orders'] }, () => 
     expect(cancel.status()).toBe(400);
     expect(await cancel.json()).toEqual({ error: 'Order cannot be cancelled' });
     expect((await getJson(api, `orders/${order.id}/`, rt)).status).toBe('delivered');
+  });
+});
+
+test.describe('API negatives - double submit and stale state', { tag: ['@api-neg', '@orders'] }, () => {
+  test('N10 place-order submitted twice: one order, the repeat gets "Cart is empty", stock taken once', async ({ api, seed, retailerToken }) => {
+    const rt = await retailerToken();
+    const ct = await customerToken(api, C2_MOBILE);
+    const P4 = seed.products.P4;
+    const stockBefore = await productStock(api, rt, P4);
+    const ordersBefore = (await getJson(api, 'orders/current/', ct)).count;
+
+    await placeOrder(api, ct, seed.retailers.R1, [[P4, 2]], { mode: 'pickup' });
+    const again = await tryPlaceOrder(api, ct, seed.retailers.R1, [], { mode: 'pickup' });
+    expect(again.status()).toBe(400);
+    expect(await again.json()).toEqual({ non_field_errors: ['Cart is empty'] });
+
+    expect((await getJson(api, 'orders/current/', ct)).count).toBe(ordersBefore + 1);
+    expect(await productStock(api, rt, P4)).toBe(stockBefore - 2);
+  });
+
+  test('N11 two identical place-order requests at once: every 201 is a real order and stock matches', async ({ api, seed, retailerToken }) => {
+    const rt = await retailerToken();
+    const ct = await customerToken(api, C2_MOBILE);
+    const P4 = seed.products.P4;
+    const stockBefore = await productStock(api, rt, P4);
+    const ordersBefore = (await getJson(api, 'orders/current/', ct)).count;
+
+    // One cart, two submits in flight (double tap). The cart row is not locked, so we only pin the
+    // invariant: no 500, and orders created == 201s == stock taken / 2.
+    const add = await api.post('cart/add/', { ...authed(ct), data: { product_id: P4, quantity: 2 } });
+    expect(add.status(), await add.text()).toBeLessThan(300);
+    const [a, b] = await Promise.all([1, 2].map(() => tryPlaceOrder(api, ct, seed.retailers.R1, [], { mode: 'pickup' })));
+    const codes = [a.status(), b.status()];
+    expect(codes.every((c) => c === 201 || c === 400), codes.join(',')).toBe(true);
+    const created = codes.filter((c) => c === 201).length;
+    expect(created, 'at least one submit wins').toBeGreaterThanOrEqual(1);
+    test.info().annotations.push({ type: 'double-submit', description: `codes ${codes.join(',')}` });
+    expect((await getJson(api, 'orders/current/', ct)).count).toBe(ordersBefore + created);
+    expect(await productStock(api, rt, P4)).toBe(stockBefore - 2 * created);
+  });
+
+  test('N12 POS bill submitted twice for the last unit: one sale, the other "Not enough saleable stock"', async ({ api, seed, retailerToken }) => {
+    const rt = await retailerToken();
+    const P3 = seed.products.P3;
+    setStock(P3, 1);
+    const results = await Promise.all([1, 2].map(() => posBill(api, rt, [[P3, 1, 'P3']], { cash: price('P3') })));
+    const codes = results.map((r) => r.status()).sort();
+    expect(codes, await Promise.all(results.map((r) => r.text())).then((b) => b.join('\n'))).toEqual([201, 400]);
+    const loser = results.find((r) => r.status() === 400)!;
+    expect(JSON.stringify(await loser.json())).toMatch(/Not enough saleable stock for Sunflower Oil 1L/);
+    expect(await productStock(api, rt, P3)).toBe(0);
+  });
+
+  test('N13 price raised after add-to-cart: the order charges what the cart showed at checkout', async ({ api, seed }) => {
+    const ct = await customerToken(api, C2_MOBILE);
+    const P4 = seed.products.P4;
+    await customerCart(api, ct, seed.retailers.R1);
+    const add = await api.post('cart/add/', { ...authed(ct), data: { product_id: P4, quantity: 1 } });
+    expect(add.status(), await add.text()).toBeLessThan(300);
+    djangoShell(`from products.models import Product\nProduct.objects.filter(id=${P4}).update(price=${price('P4') + 50})\n`);
+
+    const shown = await customerCart(api, ct, seed.retailers.R1);
+    const order = await placeOrder(api, ct, seed.retailers.R1, [], { mode: 'pickup' });
+    expect(Number(order.total_amount)).toBe(Number(shown.discounted_total ?? shown.subtotal));
+  });
+
+  test('N14 an order the customer cancelled: still readable by them, hidden from others, frozen', async ({ api, seed, retailerToken }) => {
+    const ct = await customerToken(api, C2_MOBILE);
+    const other = await customerToken(api, C1_MOBILE);
+    const rt = await retailerToken();
+    const order = await placeOrder(api, ct, seed.retailers.R1, [[seed.products.P4, 1]], { mode: 'pickup' });
+    const cancel = await api.post(`orders/${order.id}/cancel/`, { ...authed(ct), data: { reason: 'changed my mind' } });
+    expect(cancel.status(), await cancel.text()).toBe(200);
+
+    expect(await getJson(api, `orders/${order.id}/`, ct)).toMatchObject({ id: order.id, status: 'cancelled' });
+    const peek = await api.get(`orders/${order.id}/`, authed(other));
+    expect(peek.status()).toBe(404);
+    expect(await peek.json()).toEqual({ error: 'Order not found' });
+    const strangerCancel = await api.post(`orders/${order.id}/cancel/`, { ...authed(other), data: {} });
+    expect(strangerCancel.status()).toBe(404);
+
+    const again = await api.post(`orders/${order.id}/cancel/`, { ...authed(ct), data: {} });
+    expect(again.status()).toBe(400);
+    expect(await again.json()).toEqual({ error: 'Order cannot be cancelled' });
+    const revive = await api.patch(`orders/${order.id}/status/`, { ...authed(rt), data: { status: 'confirmed' } });
+    expect(revive.status()).toBe(400);
+    expect(await revive.json()).toEqual({ status: ["Cannot change status from 'cancelled' to 'confirmed'"] });
+    expect((await getJson(api, `orders/${order.id}/`, rt)).status).toBe('cancelled');
   });
 });

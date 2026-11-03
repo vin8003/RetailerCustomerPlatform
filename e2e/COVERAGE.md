@@ -109,6 +109,11 @@ Django: `orders/tests/test_negative_paths.py` (runs in the Tests workflow).
 | N7 | Cart qty 0 / -1 / 'abc' / unknown product | 400 field errors; cart count unchanged |
 | N8 | Empty cart; delivery without address | `{non_field_errors:['Cart is empty']}`, `['Address is required for delivery orders']`; no new order |
 | N9 | confirmed→delivered, packed→confirmed, cancel after delivered | `{status:["Cannot change status from 'x' to 'y'"]}`; still delivered |
+| N10 | Place-order submitted twice in a row | 2nd `{non_field_errors:['Cart is empty']}`; one new order; stock taken once |
+| N11 | Two place-order requests from one cart at once | no 500; orders created == 201s; stock == 201s × qty (result in annotation) |
+| N12 | POS bill for the last unit submitted twice at once | exactly [201, 400] with the stock message; stock 0 |
+| N13 | Price raised after add-to-cart | order total == cart total shown at checkout |
+| N14 | Order the customer cancelled | still readable by them; other customer 404 `{error:'Order not found'}`; 2nd cancel 400; retailer cannot revive it |
 
 Django negatives (orders/cart): unauthenticated/role/unverified place-order, empty cart, unknown retailer, foreign address,
 payment mode vs delivery mode, unknown payment mode, shop without pickup/delivery, over stock, above max qty,
@@ -129,3 +134,18 @@ bad price/stock, duplicate barcode/name, other retailer's product, delete while 
 Known bugs (xfail strict, no OE ticket yet): feedback and return on an undelivered order answer 500, not 400
 (the serializer raises ValidationError inside create()); recording a khata payment for another retailer's customer
 answers 500, not 404; create_product accepts negative opening stock; retailer signup accepts a duplicate email.
+
+Batch 4 Django negatives: POS (`products/tests/test_pos_negatives.py`: empty items, qty 0/-2/'abc'/1e10, negative or
+tampered price, negative discount, discount > total capped, over stock, other shop's product, split mismatch, customer
+token), delivery quote (`retailers/tests/test_delivery_quote_negatives.py`: lat without lng, NaN/Infinity/'abc', bad
+order_total/address_id, unknown shop), chat/reports/paging (`orders/tests/test_chat_report_paging_negatives.py`:
+stranger/other retailer chat, inverted/huge/foreign stats ranges, inbox bad dates, page/page_size/ordering garbage,
+page_size cap 100), sales returns (`returns/tests/test_sales_return_negatives.py`: over-return, line mismatch, other
+shop/customer), settings (`retailers/tests/test_settings_negatives.py`: operating hours, profile money/radius, reward
+config). Staff roles and cross-shop scanner were already covered (`test_staff_roles`, `test_staff_escalation`,
+`test_barcode_scan_search`, `test_additional_barcodes_lookup_oe170`).
+
+Batch 4 bugs (xfail strict, no OE ticket): delivery quote at lat=999&lng=999 is "deliverable"; a whitespace-only chat
+message is saved; a retailer chat `{"message":123}` answers 500; a sales return refund can exceed the sale price
+(5000 on a line sold at 90); non-list operating_hours answers 500; an operating-hours batch with one bad day is not
+atomic; reward config accepts conversion_rate -1, max_reward_usage_percent 150/-5, cashback_percentage -2.
