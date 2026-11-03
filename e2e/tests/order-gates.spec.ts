@@ -12,7 +12,6 @@ const orderCount = () =>
 
 test('O1 stock sold out while on the COD checkout page: place order refused, no order, stock untouched @smoke @customer @orders', async ({ page, api, seed, retailerToken }) => {
   const P3 = seed.products.P3;
-  const ct = await customerToken(api, C2_MOBILE);
   const rt = await retailerToken();
   const before = await orderCount();
 
