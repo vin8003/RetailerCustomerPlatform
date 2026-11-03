@@ -4,7 +4,9 @@ name: e2e
 # Postgres service + Django runserver + both Next.js apps as production static builds
 # (API/media base from NEXT_PUBLIC_API_BASE_URL; "Bundle guard" fails the run if a build still names a live host).
 # Nothing here points at a live OrderEasy host; guard.spec.ts (G3) checks this file.
-# Full suite on push to main and nightly; PRs run only the areas they touch (see "Pick test areas").
+# Full suite on push to main and nightly; PRs run @core + @smoke (login, POS bill, COD checkout → delivered, khata)
+# plus the areas they touch (see "Pick test areas"), so the required check never passes on an empty run.
+# No path filters on purpose: the job must report on every PR for branch protection.
 on:
   pull_request:
   push:
@@ -180,11 +182,18 @@ jobs:
           nohup serve retailer/out -l tcp://127.0.0.1:4273 > retailer.log 2>&1 &
           nohup serve customer/out -l tcp://127.0.0.1:4276 > customer.log 2>&1 &
 
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: pw-${{ runner.os }}-${{ hashFiles('rcp/e2e/package-lock.json') }}
+
       - name: Install Playwright
         working-directory: rcp/e2e
         run: |
           npm ci
-          npx playwright install --with-deps chromium
+          if [ "${{ steps.pw-cache.outputs.cache-hit }}" = true ]; then npx playwright install-deps chromium; else npx playwright install --with-deps chromium; fi
 
       - name: Wait for the stack
         run: |
@@ -198,7 +207,7 @@ jobs:
           done
 
       # PR scope: FE callers pass `area`; RCP PRs map changed paths to tags. Anything else
-      # (seed, settings, workflow, shared helpers, unmapped): full suite. @core (guard + seed) always runs.
+      # (seed, settings, workflow, shared helpers, unmapped): full suite. @core (guard + seed) and @smoke always run.
       - name: Pick test areas
         id: areas
         working-directory: rcp
@@ -209,7 +218,7 @@ jobs:
           tags="$AREA_INPUT"
           if [ -z "$tags" ] && [ "$GITHUB_EVENT_NAME" = pull_request ] && [ "$GITHUB_REPOSITORY" = vin8003/RetailerCustomerPlatform ]; then
             git fetch --no-tags --depth=1 "https://github.com/$GITHUB_REPOSITORY.git" "$BASE_SHA"
-            tags=core
+            tags="core smoke"
             for path in $(git diff --name-only "$BASE_SHA" HEAD); do
               case "$path" in
                 e2e/tests/pos.spec.ts|e2e/pos.ts) tags="$tags pos" ;;
@@ -228,17 +237,19 @@ jobs:
                 e2e/tests/delivery-fee.spec.ts) tags="$tags slice-fee" ;;
                 e2e/tests/bundles.spec.ts) tags="$tags slice-bundles" ;;
                 e2e/tests/auth-*.spec.ts|authentication/*) tags="$tags auth" ;;
+                e2e/tests/order-gates.spec.ts) tags="$tags orders" ;;
                 e2e/tests/guard.spec.ts|e2e/tests/seed.spec.ts|*.md|docs/*) ;;
                 *) tags=""; break ;; # full suite
               esac
             done
           fi
           grep=""
-          for t in $tags; do grep="${grep:-@core}|@${t#@}"; done
+          for t in $tags; do grep="${grep:-@core|@smoke}|@${t#@}"; done
           echo "grep=$grep" | tee -a "$GITHUB_OUTPUT"
 
       - name: Playwright (chromium, headless)
         working-directory: rcp/e2e
+        timeout-minutes: 30
         env:
           CI: 'true'
           GREP: ${{ steps.areas.outputs.grep }}

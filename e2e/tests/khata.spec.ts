@@ -27,7 +27,7 @@ test.describe('Journey C - khata payments (C1 at R1, opening 500)', { tag: ['@re
     await expect.poll(() => balanceOnScreen(page)).toBe(500);
   });
 
-  test('C1 pay 200: outstanding 300, ledger credit 200, R2 stays 1000', async ({ page, api, seed, retailerToken }) => {
+  test('C1 pay 200: outstanding 300, ledger credit 200, R2 stays 1000', { tag: '@smoke' }, async ({ page, api, seed, retailerToken }) => {
     expect((await recordPayment(page, '200')).status()).toBeLessThan(300);
     await expect.poll(() => balanceOnScreen(page)).toBe(300);
 

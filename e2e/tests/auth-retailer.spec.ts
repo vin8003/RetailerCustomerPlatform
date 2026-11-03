@@ -69,7 +69,7 @@ test.describe('Phase 2 - retailer auth & account', { tag: ['@retailer', '@auth']
     await expect(page.getByTestId('verification-banner')).toHaveCount(0);
   });
 
-  test('R-AUTH3 wrong password is refused and leaves no session', async ({ page, api }) => {
+  test('R-AUTH3 wrong password is refused and leaves no session', { tag: '@smoke' }, async ({ page, api }) => {
     await fillLogin(page, R1.username, 'Wrong-Pass-000!');
     await expectStillLoggedOut(page);
     expect(await loginStatus(api, 'auth/retailer/login/', R1.username, 'Wrong-Pass-000!')).toBeGreaterThanOrEqual(400);
