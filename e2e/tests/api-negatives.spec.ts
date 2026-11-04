@@ -4,7 +4,7 @@
  */
 import { test, expect } from '../fixtures';
 import { authed, customerCart, customerToken, djangoShell, getJson, productStock } from '../helpers';
-import { advance, placeOrder, posBill, price, tryPlaceOrder } from '../edge';
+import { advance, fixme, known, placeOrder, posBill, price, tryPlaceOrder } from '../edge';
 import { C1_MOBILE, C2_MOBILE, R2 } from '../seed';
 
 const setStock = (productId: number, qty: number) =>
@@ -84,6 +84,7 @@ test.describe('API negatives - orders', { tag: ['@api-neg', '@orders'] }, () => 
     expect(await place.json()).toEqual({ detail: 'Authentication credentials were not provided.' });
     const add = await api.post('cart/add/', { data: { product_id: seed.products.P4, quantity: 1 } });
     expect(add.status()).toBe(401);
+    expect(await add.json()).toMatchObject({ detail: 'Authentication credentials were not provided.' });
   });
 
   test('N6 retailer token cannot place an order', async ({ api, seed, retailerToken }) => {
@@ -162,26 +163,29 @@ test.describe('API negatives - double submit and stale state', { tag: ['@api-neg
     expect(await productStock(api, rt, P4)).toBe(stockBefore - 2);
   });
 
-  test('N11 two identical place-order requests at once: every 201 is a real order and stock matches', async ({ api, seed, retailerToken }) => {
-    const rt = await retailerToken();
-    const ct = await customerToken(api, C2_MOBILE);
-    const P4 = seed.products.P4;
-    const stockBefore = await productStock(api, rt, P4);
-    const ordersBefore = (await getJson(api, 'orders/current/', ct)).count;
+  // TODO: open a Jira ticket and swap 'NEW' for the key. Repro: add P4 x2 to C2's R1 cart, then POST
+  // orders/place/ twice in parallel with the same body; the cart row is not locked (no select_for_update),
+  // so both submits can read the full cart and both return 201 (two orders, stock taken twice).
+  fixme('N11 two identical place-order requests at once: exactly one order, the repeat gets "Cart is empty"',
+    known('NEW', 'parallel POST orders/place/ on one cart can create two orders: the cart is not locked during checkout'),
+    async ({ api, seed, retailerToken }) => {
+      const rt = await retailerToken();
+      const ct = await customerToken(api, C2_MOBILE);
+      const P4 = seed.products.P4;
+      const stockBefore = await productStock(api, rt, P4);
+      const ordersBefore = (await getJson(api, 'orders/current/', ct)).count;
 
-    // One cart, two submits in flight (double tap). The cart row is not locked, so we only pin the
-    // invariant: no 500, and orders created == 201s == stock taken / 2.
-    const add = await api.post('cart/add/', { ...authed(ct), data: { product_id: P4, quantity: 2 } });
-    expect(add.status(), await add.text()).toBeLessThan(300);
-    const [a, b] = await Promise.all([1, 2].map(() => tryPlaceOrder(api, ct, seed.retailers.R1, [], { mode: 'pickup' })));
-    const codes = [a.status(), b.status()];
-    expect(codes.every((c) => c === 201 || c === 400), codes.join(',')).toBe(true);
-    const created = codes.filter((c) => c === 201).length;
-    expect(created, 'at least one submit wins').toBeGreaterThanOrEqual(1);
-    test.info().annotations.push({ type: 'double-submit', description: `codes ${codes.join(',')}` });
-    expect((await getJson(api, 'orders/current/', ct)).count).toBe(ordersBefore + created);
-    expect(await productStock(api, rt, P4)).toBe(stockBefore - 2 * created);
-  });
+      const add = await api.post('cart/add/', { ...authed(ct), data: { product_id: P4, quantity: 2 } });
+      expect(add.status(), await add.text()).toBeLessThan(300);
+      const results = await Promise.all([1, 2].map(() => tryPlaceOrder(api, ct, seed.retailers.R1, [], { mode: 'pickup' })));
+      const codes = results.map((r) => r.status()).sort();
+      expect(codes, await Promise.all(results.map((r) => r.text())).then((t) => t.join('\n'))).toEqual([201, 400]);
+      const loser = results.find((r) => r.status() === 400)!;
+      expect(await loser.json()).toMatchObject({ non_field_errors: ['Cart is empty'] });
+
+      expect((await getJson(api, 'orders/current/', ct)).count).toBe(ordersBefore + 1);
+      expect(await productStock(api, rt, P4)).toBe(stockBefore - 2);
+    });
 
   test('N12 POS bill submitted twice for the last unit: one sale, the other "Not enough saleable stock"', async ({ api, seed, retailerToken }) => {
     const rt = await retailerToken();
@@ -222,6 +226,7 @@ test.describe('API negatives - double submit and stale state', { tag: ['@api-neg
     expect(await peek.json()).toEqual({ error: 'Order not found' });
     const strangerCancel = await api.post(`orders/${order.id}/cancel/`, { ...authed(other), data: {} });
     expect(strangerCancel.status()).toBe(404);
+    expect(await strangerCancel.json()).toMatchObject({ error: 'Order not found' });
 
     const again = await api.post(`orders/${order.id}/cancel/`, { ...authed(ct), data: {} });
     expect(again.status()).toBe(400);

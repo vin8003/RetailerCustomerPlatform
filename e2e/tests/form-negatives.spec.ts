@@ -18,8 +18,11 @@ async function customerTry(page: Page, phone: string, password: string) {
 test.describe('Form negatives - login', { tag: ['@form-neg'] }, () => {
   test('F1 customer wrong password: stays on /login, error shown, no token stored', { tag: '@customer' }, async ({ page }) => {
     const res = await customerTry(page, C1_MOBILE, 'WrongPass999!');
-    expect(res.status()).toBeGreaterThanOrEqual(400);
-    await expect(page.getByTestId('customer-login-error')).toBeVisible();
+    // Backend: 400 {non_field_errors:['Invalid credentials']}; the customer FE shows `detail` or, on 401,
+    // its own text, so a 400 without `detail` falls through to the generic message.
+    expect(res.status()).toBe(400);
+    expect(await res.json()).toMatchObject({ non_field_errors: ['Invalid credentials'] });
+    await expect(page.getByTestId('customer-login-error')).toHaveText('An unexpected error occurred. Please try again.');
     await expect(page).toHaveURL(/\/login/);
     const stored = await page.evaluate(() => JSON.stringify(localStorage));
     expect(stored).not.toMatch(/eyJ[\w-]+\.eyJ/);
@@ -27,8 +30,11 @@ test.describe('Form negatives - login', { tag: ['@form-neg'] }, () => {
 
   test('F2 customer unknown phone: same error path, still on /login', { tag: '@customer' }, async ({ page }) => {
     const res = await customerTry(page, '9000000001', 'Whatever123!');
-    expect(res.status()).toBeGreaterThanOrEqual(400);
-    await expect(page.getByTestId('customer-login-error')).toBeVisible();
+    // Backend: 400 {non_field_errors:['Invalid credentials']}; the customer FE shows `detail` or, on 401,
+    // its own text, so a 400 without `detail` falls through to the generic message.
+    expect(res.status()).toBe(400);
+    expect(await res.json()).toMatchObject({ non_field_errors: ['Invalid credentials'] });
+    await expect(page.getByTestId('customer-login-error')).toHaveText('An unexpected error occurred. Please try again.');
     await expect(page).toHaveURL(/\/login/);
   });
 
@@ -38,8 +44,11 @@ test.describe('Form negatives - login', { tag: ['@form-neg'] }, () => {
     await page.getByTestId('login-password').fill('WrongPass999!');
     const answered = page.waitForResponse((r) => r.url().includes('/retailer/login/') && r.request().method() === 'POST');
     await page.getByTestId('login-submit').click();
-    expect((await answered).status()).toBeGreaterThanOrEqual(400);
-    await expect(page.getByTestId('login-error')).toBeVisible();
+    // Backend: 400 {non_field_errors:['Invalid credentials']}; no `detail`, so the retailer FE toasts its fallback.
+    const res = await answered;
+    expect(res.status()).toBe(400);
+    expect(await res.json()).toMatchObject({ non_field_errors: ['Invalid credentials'] });
+    await expect(page.getByTestId('login-error')).toHaveText('Invalid username or password');
     await expect(page).toHaveURL(/\/login/);
   });
 });
