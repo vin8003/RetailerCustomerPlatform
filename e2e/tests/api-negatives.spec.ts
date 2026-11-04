@@ -235,7 +235,7 @@ test.describe('API negatives - double submit and stale state', { tag: ['@api-neg
     expect(await peek.json()).toEqual({ error: 'Order not found' });
     const strangerCancel = await api.post(`orders/${order.id}/cancel/`, { ...authed(other), data: {} });
     expect(strangerCancel.status()).toBe(404);
-    expect(await strangerCancel.json()).toMatchObject({ error: 'Order not found' });
+    expect(await strangerCancel.json()).toMatchObject({ detail: 'No Order matches the given query.' });
 
     const again = await api.post(`orders/${order.id}/cancel/`, { ...authed(ct), data: {} });
     expect(again.status()).toBe(400);
