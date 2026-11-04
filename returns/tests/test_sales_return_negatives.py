@@ -70,10 +70,10 @@ class TestSalesReturnRefusals:
         assert product.quantity == stock_after_first
         assert SalesReturn.objects.count() == 1
 
-    # TODO(bug): the refund price is not capped at what the line sold for. Repro: delivered order,
+    # OE-401: the refund price is not capped at what the line sold for. Repro: delivered order,
     # line 10 x 90.00; POST /api/returns/sales/ {"order_id", "items": [{"product_id", "order_item_id",
     # "quantity": 1, "refund_unit_price": 5000}]} -> 201 with refund_amount "5000.00". Expect 400.
-    @pytest.mark.xfail(strict=True, reason='sales return refund can exceed the sale price')
+    @pytest.mark.xfail(strict=True, reason='OE-401: sales return refund can exceed the sale price')
     def test_refund_above_sale_price(self, api_client, retailer_user, retailer, sold, product):
         r = ret(api_client, retailer_user, *sold, product, price='5000')
         assert r.status_code == 400, r.content

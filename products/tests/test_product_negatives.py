@@ -34,7 +34,7 @@ class TestCreateRefusals:
         assert r.status_code == 400, r.content
         assert Product.objects.count() == before
 
-    @pytest.mark.xfail(strict=True, reason='TODO(no OE ticket): create_product accepts quantity=-5 (201), product starts with negative stock')
+    @pytest.mark.xfail(strict=True, reason='OE-395: create_product accepts quantity=-5 (201), product starts with negative stock')
     def test_negative_opening_stock_is_refused(self, api_client, retailer):
         before = Product.objects.count()
         r = create(api_client, retailer.user, quantity=-5)

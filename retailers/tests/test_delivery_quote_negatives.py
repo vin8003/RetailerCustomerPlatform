@@ -22,10 +22,10 @@ class TestDeliveryQuoteNegatives:
         assert r.status_code == 400
         assert r.json() == {'lat': ['Must be a number.']}
 
-    # TODO(bug): lat/lng outside the globe are treated like "no pin" and quoted as
+    # OE-405: lat/lng outside the globe are treated like "no pin" and quoted as
     # deliverable at the flat fee. Repro: GET /api/retailer/<id>/delivery-quote/?lat=999&lng=999
     # -> 200 {"deliverable": true, "delivery_fee": "25.00", "distance_km": null}. Expect 400.
-    @pytest.mark.xfail(strict=True, reason='out-of-range coordinates quoted as deliverable')
+    @pytest.mark.xfail(strict=True, reason='OE-405: out-of-range coordinates quoted as deliverable')
     def test_off_planet_coordinates_are_refused(self, api_client, pinned_shop):
         r = quote(api_client, pinned_shop, lat='999', lng='999')
         assert r.status_code == 400 or r.json()['deliverable'] is False, r.json()

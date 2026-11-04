@@ -113,7 +113,7 @@ class TestDuplicateSignup:
         assert r.status_code == 400
         assert User.objects.count() == before
 
-    @pytest.mark.xfail(strict=True, reason='TODO(no OE ticket): retailer signup accepts an email already used by another retailer (201); confirm whether intended')
+    @pytest.mark.xfail(strict=True, reason='OE-396: retailer signup accepts an email already used by another retailer (201); confirm whether intended')
     def test_retailer_signup_with_taken_email(self, api_client, shop_owner):
         before = User.objects.count()
         r = post(api_client, 'retailer_signup', {'username': 'fresh_one', 'email': 'neg_shop@t.com',

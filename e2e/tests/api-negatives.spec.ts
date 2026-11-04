@@ -168,11 +168,11 @@ test.describe('API negatives - double submit and stale state', { tag: ['@api-neg
     expect(await productStock(api, rt, P4)).toBe(stockBefore - 2);
   });
 
-  // TODO: open a Jira ticket and swap 'NEW' for the key. Repro: add P4 x2 to C2's R1 cart, then POST
+  // OE-391. Repro: add P4 x2 to C2's R1 cart, then POST
   // orders/place/ twice in parallel with the same body; the cart row is not locked (no select_for_update),
   // so both submits can read the full cart and both return 201 (two orders, stock taken twice).
   fixme('N11 two identical place-order requests at once: exactly one order, the repeat gets "Cart is empty"',
-    known('NEW', 'parallel POST orders/place/ on one cart can create two orders: the cart is not locked during checkout'),
+    known('OE-391', 'parallel POST orders/place/ on one cart can create two orders: the cart is not locked during checkout'),
     async ({ api, seed, retailerToken }) => {
       const rt = await retailerToken();
       const ct = await customerToken(api, C2_MOBILE);

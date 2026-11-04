@@ -48,18 +48,18 @@ def test_bad_time_format_is_400(api_client, retailer_user, retailer):
     assert 'opening_time' in r.json()
 
 
-# TODO(bug): a non-list body 500s. Repro: PUT /api/retailer/operating-hours/ {"operating_hours": "mon"}
+# OE-402: a non-list body 500s. Repro: PUT /api/retailer/operating-hours/ {"operating_hours": "mon"}
 # -> 500 ('str' object has no attribute 'get'). Expect 400.
-@pytest.mark.xfail(strict=True, reason='non-list operating_hours gives 500')
+@pytest.mark.xfail(strict=True, reason='OE-402: non-list operating_hours gives 500')
 def test_non_list_hours_is_400(api_client, retailer_user, retailer):
     r = put(api_client, retailer_user, 'update_operating_hours', {'operating_hours': 'mon'})
     assert r.status_code == 400
 
 
-# TODO(bug): a batch with one bad day is not atomic; earlier days are saved before the 400.
+# OE-403: a batch with one bad day is not atomic; earlier days are saved before the 400.
 # Repro: PUT {"operating_hours": [{monday 09:00-18:00}, {tuesday 18:00-09:00}]} -> 400 but monday
 # row exists. Expect nothing saved.
-@pytest.mark.xfail(strict=True, reason='operating hours batch is not atomic')
+@pytest.mark.xfail(strict=True, reason='OE-403: operating hours batch is not atomic')
 def test_bad_day_in_batch_saves_nothing(api_client, retailer_user, retailer):
     r = put(api_client, retailer_user, 'update_operating_hours', {'operating_hours': [
         {'day_of_week': 'monday', 'is_open': True, 'opening_time': '09:00', 'closing_time': '18:00'},
@@ -79,10 +79,10 @@ def reward(client, user, **body):
     return put(client, user, 'manage_reward_configuration', body)
 
 
-# TODO(bug): reward settings accept out-of-range values and save them. Repro: PUT
+# OE-404: reward settings accept out-of-range values and save them. Repro: PUT
 # /api/retailer/reward-config/ {"conversion_rate": "-1"} (or max_reward_usage_percent 150 / -5,
 # cashback_percentage -2) -> 200 and the value is stored. Expect 400 and no change.
-@pytest.mark.xfail(strict=True, reason='reward config accepts negative / >100% values')
+@pytest.mark.xfail(strict=True, reason='OE-404: reward config accepts negative / >100% values')
 @pytest.mark.parametrize('field, value', [
     ('conversion_rate', '-1'),
     ('max_reward_usage_percent', '150'),

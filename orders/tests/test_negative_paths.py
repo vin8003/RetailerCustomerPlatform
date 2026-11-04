@@ -205,7 +205,7 @@ def test_place_order_above_maximum_quantity(api_client, verified_customer, retai
     api_client.force_authenticate(verified_customer)
     res = place(api_client, retailer, address)
     assert res.status_code == 400
-    assert res.json() == {'non_field_errors': ["Product 'Order Product' - maximum order quantity is 10.000"]}
+    assert res.json() == {'non_field_errors': ["Product 'Order Product' - maximum order quantity is 10.000"]}  # OE-397: should read 10
     assert Order.objects.count() == 0
     assert stock(product) == 50
 
@@ -396,7 +396,7 @@ def test_retailer_cannot_cancel_late(api_client, retailer_user, retailer, order,
 
 
 @pytest.mark.xfail(strict=True, reason=(
-    'TODO(no OE ticket yet): OrderFeedbackSerializer.create raises ValidationError after is_valid(), '
+    'OE-398 (same cause as OE-392): OrderFeedbackSerializer.create raises ValidationError after is_valid(), '
     'so create_order_feedback answers 500 instead of 400.'
 ))
 def test_feedback_before_delivery(api_client, customer, order):
@@ -410,7 +410,7 @@ def test_feedback_before_delivery(api_client, customer, order):
 
 
 @pytest.mark.xfail(strict=True, reason=(
-    'TODO(no OE ticket yet): OrderReturnSerializer.create raises ValidationError after is_valid(), '
+    'OE-392 (same cause as OE-398): OrderReturnSerializer.create raises ValidationError after is_valid(), '
     'so create_return_request catches it as a generic Exception and answers 500 instead of 400.'
 ))
 def test_return_before_delivery(api_client, customer, order):

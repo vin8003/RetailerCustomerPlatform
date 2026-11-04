@@ -1,5 +1,6 @@
 import { type Page } from '@playwright/test';
 import { test, expect, urls } from '../fixtures';
+import { known } from '../edge';
 import { customerUseSeedCity, khataBalance, retailerLogin, rupees } from '../helpers';
 import { C1_MOBILE, R1 } from '../seed';
 
@@ -16,7 +17,7 @@ async function customerTry(page: Page, phone: string, password: string) {
 }
 
 test.describe('Form negatives - login', { tag: ['@form-neg'] }, () => {
-  test('F1 customer wrong password: stays on /login, error shown, no token stored', { tag: '@customer' }, async ({ page }) => {
+  test('F1 customer wrong password: stays on /login, error shown, no token stored', { tag: '@customer', ...known('OE-393', 'customer login shows the generic error on a 400 non_field_errors') }, async ({ page }) => {
     const res = await customerTry(page, C1_MOBILE, 'WrongPass999!');
     // Backend: 400 {non_field_errors:['Invalid credentials']}; the customer FE shows `detail` or, on 401,
     // its own text, so a 400 without `detail` falls through to the generic message.
@@ -28,7 +29,7 @@ test.describe('Form negatives - login', { tag: ['@form-neg'] }, () => {
     expect(stored).not.toMatch(/eyJ[\w-]+\.eyJ/);
   });
 
-  test('F2 customer unknown phone: same error path, still on /login', { tag: '@customer' }, async ({ page }) => {
+  test('F2 customer unknown phone: same error path, still on /login', { tag: '@customer', ...known('OE-393', 'customer login shows the generic error on a 400 non_field_errors') }, async ({ page }) => {
     const res = await customerTry(page, '9000000001', 'Whatever123!');
     // Backend: 400 {non_field_errors:['Invalid credentials']}; the customer FE shows `detail` or, on 401,
     // its own text, so a 400 without `detail` falls through to the generic message.

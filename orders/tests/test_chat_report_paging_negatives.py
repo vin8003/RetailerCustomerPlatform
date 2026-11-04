@@ -62,19 +62,19 @@ def test_missing_message_key_is_400(api_client, customer, order):
     assert OrderChatMessage.objects.count() == 0
 
 
-# TODO(bug): whitespace-only messages are stored. Repro: POST /api/orders/<id>/chat/send/
+# OE-399: whitespace-only messages are stored. Repro: POST /api/orders/<id>/chat/send/
 # {"message": "   "} -> 201 and a blank chat bubble. Expect 400 "Message cannot be empty".
-@pytest.mark.xfail(strict=True, reason='whitespace-only chat message is accepted')
+@pytest.mark.xfail(strict=True, reason='OE-399: whitespace-only chat message is accepted')
 def test_whitespace_only_message_is_refused(api_client, customer, order):
     r = send(api_client, customer, order.id, '   ')
     assert r.status_code == 400
     assert OrderChatMessage.objects.count() == 0
 
 
-# TODO(bug): a non-string message from the retailer 500s while building the customer
+# OE-400: a non-string message from the retailer 500s while building the customer
 # notification (message_text[:50] on an int). Repro: retailer POSTs {"message": 123}
 # to /api/orders/<id>/chat/send/ -> 500. Expect 400.
-@pytest.mark.xfail(strict=True, reason='non-string chat message from retailer gives 500')
+@pytest.mark.xfail(strict=True, reason='OE-400: non-string chat message from retailer gives 500')
 def test_retailer_non_string_message_is_400(api_client, retailer_user, retailer, order):
     r = send(api_client, retailer_user, order.id, 123)
     assert r.status_code == 400

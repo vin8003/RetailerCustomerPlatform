@@ -78,7 +78,7 @@ class TestRecordPaymentRefusals:
     def test_unauthenticated(self, api_client, buyer, mapping):
         assert api_client.post(reverse(PAY), {'customer_id': buyer.id, 'amount': '10'}, format='json').status_code == 401
 
-    @pytest.mark.xfail(strict=True, reason='TODO(no OE ticket): Http404 is swallowed by the generic except -> 500')
+    @pytest.mark.xfail(strict=True, reason='OE-394: Http404 is swallowed by the generic except -> 500')
     def test_other_retailers_customer_is_404(self, api_client, buyer, mapping):
         other = make_retailer('khata_other')
         r = pay(api_client, other.user, customer_id=buyer.id, amount='10')
