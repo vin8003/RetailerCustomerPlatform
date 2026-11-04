@@ -84,14 +84,19 @@ test.describe('API negatives - orders', { tag: ['@api-neg', '@orders'] }, () => 
     expect(await place.json()).toEqual({ detail: 'Authentication credentials were not provided.' });
     const add = await api.post('cart/add/', { data: { product_id: seed.products.P4, quantity: 1 } });
     expect(add.status()).toBe(401);
-    expect(await add.json()).toMatchObject({ detail: 'Authentication credentials were not provided.' });
+    expect(await add.json()).toEqual({ detail: 'Authentication credentials were not provided.' });
   });
 
   test('N6 retailer token cannot place an order', async ({ api, seed, retailerToken }) => {
     const rt = await retailerToken();
+    const ct = await customerToken(api, C2_MOBILE);
+    const ordersBefore = (await getJson(api, 'orders/current/', ct)).count;
+    const stockBefore = await productStock(api, rt, seed.products.P4);
     const r = await api.post('orders/place/', { ...authed(rt), data: { retailer_id: String(seed.retailers.R1), delivery_mode: 'pickup', payment_mode: 'cash_pickup' } });
     expect(r.status()).toBe(403);
     expect(await r.json()).toEqual({ error: 'Only customers can place orders' });
+    expect((await getJson(api, 'orders/current/', ct)).count).toBe(ordersBefore);
+    expect(await productStock(api, rt, seed.products.P4)).toBe(stockBefore);
   });
 
   test('N7 bad cart quantities and unknown products are refused and the cart stays empty', async ({ api, seed }) => {
@@ -205,11 +210,15 @@ test.describe('API negatives - double submit and stale state', { tag: ['@api-neg
     await customerCart(api, ct, seed.retailers.R1);
     const add = await api.post('cart/add/', { ...authed(ct), data: { product_id: P4, quantity: 1 } });
     expect(add.status(), await add.text()).toBeLessThan(300);
-    djangoShell(`from products.models import Product\nProduct.objects.filter(id=${P4}).update(price=${price('P4') + 50})\n`);
-
-    const shown = await customerCart(api, ct, seed.retailers.R1);
-    const order = await placeOrder(api, ct, seed.retailers.R1, [], { mode: 'pickup' });
-    expect(Number(order.total_amount)).toBe(Number(shown.discounted_total ?? shown.subtotal));
+    const setPrice = (p: number) => djangoShell(`from products.models import Product\nProduct.objects.filter(id=${P4}).update(price=${p})\n`);
+    setPrice(price('P4') + 50);
+    try {
+      const shown = await customerCart(api, ct, seed.retailers.R1);
+      const order = await placeOrder(api, ct, seed.retailers.R1, [], { mode: 'pickup' });
+      expect(Number(order.total_amount)).toBe(Number(shown.discounted_total ?? shown.subtotal));
+    } finally {
+      setPrice(price('P4')); // restore seed price for later tests
+    }
   });
 
   test('N14 an order the customer cancelled: still readable by them, hidden from others, frozen', async ({ api, seed, retailerToken }) => {
