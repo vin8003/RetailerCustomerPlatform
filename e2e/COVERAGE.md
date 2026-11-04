@@ -92,3 +92,60 @@ R-AUTH3 retailer login refusal · A1 POS UPI bill · B1–B4 customer COD checko
 | Customer app | Retailers list | /retailers · retailer/search/ | none | not started | 5 (phase-5 slice) |
 | Customer app | Privacy policy page | /privacy-policy | none | not started | 5 (phase-5 slice) |
 | Platform | Seed idempotent; live-host guard | seed_e2e · fixtures.ts | seed.spec.ts › S1; guard.spec.ts › G1–G3 | covered | 5 (phase-5 slice) |
+
+## API negatives
+
+Exact error body plus a re-read proving nothing changed. Playwright: `e2e/tests/api-negatives.spec.ts` (`@api-neg`).
+Django: `orders/tests/test_negative_paths.py` (runs in the Tests workflow).
+
+| ID | What | Asserts |
+|---|---|---|
+| N1 @smoke | Retailer cancels a pending order | 200 cancelled; stock back; customer sees cancelled; 2nd cancel `{error:'Order cannot be cancelled'}` |
+| N2 | Two customers race for the last unit | exactly [201, 400]; loser gets the stock message; stock 0, never negative |
+| N3 | Retailer B on retailer A's order | read/update/cancel `{error:'Order not found'}` 404; not in B's list; still pending |
+| N4 | Customer token on status update | 403 `{error:'Only retailers can update order status'}`; still pending |
+| N5 | No token on place-order / cart add | 401 `{detail:'Authentication credentials were not provided.'}` |
+| N6 | Retailer token on place-order | 403 `{error:'Only customers can place orders'}` |
+| N7 | Cart qty 0 / -1 / 'abc' / unknown product | 400 field errors; cart count unchanged |
+| N8 | Empty cart; delivery without address | `{non_field_errors:['Cart is empty']}`, `['Address is required for delivery orders']`; no new order |
+| N9 | confirmed→delivered, packed→confirmed, cancel after delivered | `{status:["Cannot change status from 'x' to 'y'"]}`; still delivered |
+| N10 | Place-order submitted twice in a row | 2nd `{non_field_errors:['Cart is empty']}`; one new order; stock taken once |
+| N11 | Two place-order requests from one cart at once | no 500; orders created == 201s; stock == 201s × qty (result in annotation) |
+| N12 | POS bill for the last unit submitted twice at once | exactly [201, 400] with the stock message; stock 0 |
+| N13 | Price raised after add-to-cart | order total == cart total shown at checkout |
+| N14 | Order the customer cancelled | still readable by them; other customer 404 `{error:'Order not found'}`; 2nd cancel 400; retailer cannot revive it |
+
+Django negatives (orders/cart): unauthenticated/role/unverified place-order, empty cart, unknown retailer, foreign address,
+payment mode vs delivery mode, unknown payment mode, shop without pickup/delivery, over stock, above max qty,
+hidden product, cart qty 0/-2/'abc', unknown/unavailable product, cart roles, per-retailer cart lines, clear-cart and
+coupon input checks, cross-retailer read/update/cancel/list, other customer read/cancel, customer status update,
+refused transitions (packed→confirmed, confirmed→delivered/out_for_delivery, cancelled→confirmed, delivered→cancelled),
+unknown status, retailer cancel at packed/delivered/cancelled, empty chat message.
+
+Form negatives (`e2e/tests/form-negatives.spec.ts`, `@form-neg`): F1 customer wrong password, F2 unknown phone (stay on /login,
+error shown, no token stored), F3 retailer wrong password (toast, no dashboard), F4 khata over-payment booked as an advance.
+
+More Django negatives: khata (`customers/tests/test_khata_negatives.py`: zero/negative/non-numeric amount, roles, other
+retailer's customer, bad credit limit), auth (`authentication/tests/test_auth_negatives.py`: wrong password, wrong role,
+inactive user, bad OTP, garbage/expired tokens, duplicate signup), catalog (`products/tests/test_product_negatives.py`:
+bad price/stock, duplicate barcode/name, other retailer's product, delete while in an open order), coupons
+(`cart/tests/test_coupon_negatives.py`: expired, not started, POS-only, used up, inactive, min order, other shop, no stacking).
+
+Known bugs (xfail strict, no OE ticket yet): feedback and return on an undelivered order answer 500, not 400
+(the serializer raises ValidationError inside create()); recording a khata payment for another retailer's customer
+answers 500, not 404; create_product accepts negative opening stock; retailer signup accepts a duplicate email.
+
+Batch 4 Django negatives: POS (`products/tests/test_pos_negatives.py`: empty items, qty 0/-2/'abc'/1e10, negative or
+tampered price, negative discount, discount > total capped, over stock, other shop's product, split mismatch, customer
+token), delivery quote (`retailers/tests/test_delivery_quote_negatives.py`: lat without lng, NaN/Infinity/'abc', bad
+order_total/address_id, unknown shop), chat/reports/paging (`orders/tests/test_chat_report_paging_negatives.py`:
+stranger/other retailer chat, inverted/huge/foreign stats ranges, inbox bad dates, page/page_size/ordering garbage,
+page_size cap 100), sales returns (`returns/tests/test_sales_return_negatives.py`: over-return, line mismatch, other
+shop/customer), settings (`retailers/tests/test_settings_negatives.py`: operating hours, profile money/radius, reward
+config). Staff roles and cross-shop scanner were already covered (`test_staff_roles`, `test_staff_escalation`,
+`test_barcode_scan_search`, `test_additional_barcodes_lookup_oe170`).
+
+Batch 4 bugs (xfail strict, no OE ticket): delivery quote at lat=999&lng=999 is "deliverable"; a whitespace-only chat
+message is saved; a retailer chat `{"message":123}` answers 500; a sales return refund can exceed the sale price
+(5000 on a line sold at 90); non-list operating_hours answers 500; an operating-hours batch with one bad day is not
+atomic; reward config accepts conversion_rate -1, max_reward_usage_percent 150/-5, cashback_percentage -2.

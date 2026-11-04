@@ -61,7 +61,11 @@ export async function attachCustomer(page: Page, mobile10: string) {
     (r) => r.url().includes('/erp/verify-pos-customer/') && r.url().includes(`mobile_number=${mobile10}`),
   );
   await mobile.fill(mobile10);
+  // The POS refocus can steal focus before fill() lands, leaving blur() a no-op. Focus the (already filled)
+  // field again so the blur that follows always runs onBlur with the full number. No retyping.
+  await mobile.focus();
   await mobile.blur();
-  await (await req).response();
+  const verified = await (await req).response();
+  expect(verified?.ok(), 'verify-pos-customer ok').toBe(true);
   await expect(mobile).toHaveValue(mobile10);
 }
